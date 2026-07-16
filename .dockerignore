@@ -1,0 +1,8 @@
+.git
+.github
+.beads
+docs
+delete-me
+*.md
+Dockerfile
+.dockerignore

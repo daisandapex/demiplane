@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>connect · demiplane</title>
+<style>:root{
+  color-scheme:light;
+  --bg:oklch(0.972 0.004 250); --panel:oklch(0.988 0.003 250); --ink:oklch(0.255 0.012 262);
+  --muted:oklch(0.495 0.012 258); --line:oklch(0.895 0.008 255); --line-soft:oklch(0.930 0.006 255);
+  --zebra:transparent;
+  --accent:oklch(0.485 0.135 27); --accent-hover:oklch(0.44 0.15 26); --accent-soft:oklch(0.952 0.020 28);
+  --code-bg:oklch(0.278 0.010 258); --code-ink:oklch(0.918 0.008 255);
+  --code-inline:oklch(0.455 0.130 27); --code-line:oklch(0.400 0.014 258);
+  --navy:oklch(0.420 0.085 245); --danger:oklch(0.520 0.165 28);
+  --info-bg:oklch(0.945 0.020 235); --info-line:oklch(0.895 0.030 235); --info-ink:oklch(0.420 0.080 245);
+  --shadow:oklch(0.280 0.010 262 / 0.14); --sel:oklch(0.912 0.045 28);
+  --tok-key:oklch(0.72 0.14 26); --tok-fn:oklch(0.76 0.09 245); --tok-str:oklch(0.76 0.10 150); --tok-com:oklch(0.67 0.02 258);
+  --serif:Iowan Old Style,Palatino,"Palatino Linotype",Georgia,"Times New Roman",serif;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --mono:"SFMono-Regular",Menlo,Consolas,"Liberation Mono",monospace;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-padding-top:6rem}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:1.0625rem/1.7 var(--sans);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+::selection{background:var(--sel)}
+.wrap{max-width:54rem;margin:0 auto;padding:0 1.3rem}
+main{padding:2.2rem 0 3.5rem}
+a{color:var(--accent);text-decoration:none;text-underline-offset:3px;
+  text-decoration-thickness:1px;transition:color .2s cubic-bezier(.22,1,.36,1)}
+a:hover,a:active{color:var(--accent-hover);text-decoration:underline}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+h1,h2,h3,h4,h5,h6{font-family:var(--serif);font-weight:600;color:var(--ink);
+  line-height:1.15;letter-spacing:-.016em}
+h1{font-size:2.55rem;margin:.3em 0 .35em}
+h2{font-size:1.7rem;margin:2.1em 0 .55em;padding-bottom:.3em;border-bottom:1px solid var(--line)}
+h3{font-size:1.32rem;margin:1.8em 0 .4em;letter-spacing:-.01em}
+h4{font-size:1.15rem;margin:1.5em 0 .3em;letter-spacing:0}
+h5{font-size:1.02rem;margin:1.5em 0 .3em;letter-spacing:0}
+h6{font-size:.86rem;margin:1.5em 0 .3em;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.heading-anchor{margin-left:.35em;color:var(--muted);font-weight:400;text-decoration:none;
+  opacity:0;user-select:none;transition:opacity .2s cubic-bezier(.22,1,.36,1)}
+.heading-anchor:hover,.heading-anchor:active{color:var(--accent);text-decoration:none}
+h1:hover .heading-anchor,h2:hover .heading-anchor,h3:hover .heading-anchor,
+h4:hover .heading-anchor,h5:hover .heading-anchor,h6:hover .heading-anchor,
+.heading-anchor:focus-visible{opacity:1}
+@media (hover:none){.heading-anchor{opacity:.45}}
+@media print{.heading-anchor{display:none}}
+@media (prefers-reduced-motion:reduce){.heading-anchor{transition:none}}
+p{margin:0 0 1.05em}
+ul,ol{margin:0 0 1.1em;padding-left:1.45em}
+li{margin:.32em 0}
+li::marker{color:var(--accent)}
+strong{font-weight:600}
+code{font-family:var(--mono);font-size:.86em;background:var(--accent-soft);
+  color:var(--code-inline);padding:.1em .38em;border-radius:4px}
+pre{background:var(--code-bg);color:var(--code-ink);padding:1rem 1.15rem;border-radius:8px;
+  overflow:auto;border:1px solid var(--code-line);font-size:.855rem;line-height:1.65;margin:1.4em 0}
+pre code{background:none;color:inherit;padding:0;font-size:1em}
+pre .k{color:var(--tok-key)}pre .fn{color:var(--tok-fn)}pre .s{color:var(--tok-str)}
+pre .c{color:var(--tok-com);font-style:italic}
+blockquote{margin:1.6em 0;padding:0 0 0 1.6em;border:none;background:none;
+  font-family:var(--serif);font-style:italic;color:var(--ink)}
+blockquote p:last-child{margin-bottom:0}
+.table-wrap{overflow-x:auto;margin:1.6em 0}
+.table-wrap>table{margin:0}
+table{border-collapse:collapse;width:100%;margin:1.6em 0;font-size:.94rem}
+thead th{border-bottom:1.5px solid var(--line);font-family:var(--sans);font-size:.72rem;
+  font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+th,td{text-align:left;padding:.55rem .8rem;border-bottom:1px solid var(--line-soft)}
+tbody tr:nth-child(2n) td{background:var(--zebra)}
+tbody tr:last-child td{border-bottom:none}
+hr{border:none;border-top:1px solid var(--line);margin:2.6rem 0}
+img{max-width:100%;height:auto}
+@media (prefers-reduced-motion:reduce){a{transition:none}}
+
+.kicker{font-family:var(--sans);font-size:.72rem;font-weight:700;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--accent)}
+.tagline{font-family:var(--serif);font-size:1.35rem;font-style:italic;color:var(--muted);
+  letter-spacing:-0.012em;margin:.15rem 0 .7rem}
+.scount{font-family:var(--mono);font-size:.82rem;color:var(--muted)}
+header.top{border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5}
+header.top .wrap{display:flex;align-items:center;gap:1.25rem;height:3.4rem}
+.brand{font-family:var(--serif);font-weight:700;font-size:1.15rem;color:var(--ink)}
+.brand .dot{color:var(--accent)}
+header.top nav{margin-left:auto;display:flex;gap:1.1rem;font-size:.9rem}
+header.top nav a{color:var(--muted)}
+header.top nav a.active,header.top nav a:hover{color:var(--accent)}
+.ethos{display:inline-block;font-size:.92rem;color:var(--info-ink);background:var(--info-bg);
+  border:1px solid var(--info-line);border-radius:999px;padding:.3rem .9rem;margin:.4rem 0 1rem}
+.badge{display:inline-block;font-family:var(--mono);font-size:.72rem;font-weight:700;
+  letter-spacing:.04em;padding:.15rem .5rem;border-radius:5px;color:oklch(0.985 0.004 250);vertical-align:middle}
+.badge.post{background:var(--accent)}
+.badge.get{background:var(--navy)}
+.badge.delete{background:var(--danger)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1rem 1.15rem;margin:.7rem 0}
+.card .path{font-family:var(--mono);font-size:.95rem;margin-left:.5rem}
+.card .desc{color:var(--muted);font-size:.92rem;margin:.4rem 0 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:.7rem;margin:1rem 0}
+.tile{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:.9rem 1rem}
+.tile:hover{border-color:var(--accent);text-decoration:none}
+.tile .t{font-family:var(--serif);font-size:1.05rem;color:var(--ink)}
+.tile .d{color:var(--muted);font-size:.85rem;margin-top:.2rem}
+.codeblock{margin:1rem 0;border-radius:10px;overflow:hidden;border:1px solid var(--code-line)}
+.codeblock .cbhead{display:flex;align-items:center;justify-content:space-between;
+  background:var(--code-bg);color:var(--code-ink);font-family:var(--mono);font-size:.7rem;
+  letter-spacing:.12em;text-transform:uppercase;padding:.45rem .9rem}
+.codeblock .cbhead button{font:inherit;letter-spacing:.08em;background:transparent;
+  color:var(--code-ink);border:1px solid var(--code-line);border-radius:5px;padding:.1rem .55rem;cursor:pointer}
+.codeblock .cbhead button:hover{background:var(--code-line);color:var(--code-ink)}
+.codeblock pre{margin:0;border:none;border-radius:0}
+footer{border-top:1px solid var(--line);color:var(--muted);font-size:.85rem;padding:1.5rem 0}
+footer .mark{font-family:var(--serif);color:var(--ink)}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap"><a class="brand" href="/">demiplane<span class="dot">.</span></a><nav><a href="/">Home</a><a href="/docs">Docs</a><a href="/docs/api">API</a><a href="/connect" class="active">Connect</a><a href="/gallery">Gallery</a><a href="/help">Help</a><a href="/llms.txt">llms.txt</a></nav></div></header>
+<main><div class="wrap"><span class="kicker">Works with your harness</span><h1>Connect demiplane</h1><p>demiplane publishes from any coding harness, agent, or shell. Pick your tool below and copy the block. Every snippet targets this instance (<code>https://demiplane.example</code>) and each publish returns a URL only your network can reach.</p><span class="ethos">This instance is open (no bearer token configured). The snippets below work as-is; if the operator later enables auth, save your token to <code>~/.config/demiplane/token</code> and the same blocks keep working.</span><h2>Compatibility</h2><table><tr><th>Harness</th><th>How it connects</th></tr><tr><td>Claude Code</td><td>MCP (native tools) or capture hook</td></tr><tr><td>Cursor</td><td>MCP</td></tr><tr><td>Cline</td><td>MCP</td></tr><tr><td>Windsurf</td><td>MCP</td></tr><tr><td>Zed</td><td>MCP</td></tr><tr><td>Continue</td><td>MCP</td></tr><tr><td>Aider</td><td>shell /run + curl</td></tr><tr><td>Any shell / CI</td><td>curl or demiplane publish</td></tr></table><h2 id="mcp">MCP harnesses</h2><p>Claude Code, Cursor, Cline, Windsurf, Zed, and Continue all speak the Model Context Protocol. Register demiplane once and <code>publish</code>, <code>list</code>, <code>get</code>, and <code>delete</code> become native tools. The stanza is the same everywhere; only the config file location differs.</p><div class="codeblock"><div class="cbhead"><span>mcp.json (mcpServers stanza)</span><button data-copy>Copy</button></div><pre><code>{
+  &#34;mcpServers&#34;: {
+    &#34;demiplane&#34;: {
+      &#34;command&#34;: &#34;demiplane&#34;,
+      &#34;args&#34;: [
+        &#34;mcp&#34;,
+        &#34;--url&#34;, &#34;https://demiplane.example&#34;,
+        &#34;--token-file&#34;, &#34;~/.config/demiplane/token&#34;
+      ]
+    }
+  }
+}</code></pre></div><div class="grid"><div class="tile"><div class="t">Claude Code</div><div class="d">claude mcp add, or ~/.claude.json → mcpServers</div></div><div class="tile"><div class="t">Cursor</div><div class="d">~/.cursor/mcp.json (or .cursor/mcp.json in a project)</div></div><div class="tile"><div class="t">Cline</div><div class="d">VS Code settings → Cline MCP Servers</div></div><div class="tile"><div class="t">Windsurf</div><div class="d">~/.codeium/windsurf/mcp_config.json</div></div><div class="tile"><div class="t">Zed</div><div class="d">settings.json → context_servers</div></div><div class="tile"><div class="t">Continue</div><div class="d">~/.continue/config.json → mcpServers</div></div></div><p class="desc">Claude Code one-liner (adds the stanza above for you):</p><div class="codeblock"><div class="cbhead"><span>Claude Code</span><button data-copy>Copy</button></div><pre><code>claude mcp add demiplane -- demiplane mcp --url https://demiplane.example --token-file ~/.config/demiplane/token</code></pre></div><h2 id="hook">Claude Code capture hook</h2><p>Prefer a hook over MCP? The companion Stop-hook publishes the transcript or a named artifact automatically. See <code>companion/README.md</code> in the repo; the hook targets this instance with:</p><div class="codeblock"><div class="cbhead"><span>companion hook env</span><button data-copy>Copy</button></div><pre><code>export DEMIPLANE_URL=https://demiplane.example
+export DEMIPLANE_TOKEN_FILE=~/.config/demiplane/token</code></pre></div><h2 id="curl">Bare curl</h2><p>The universal fallback. Any harness, script, or terminal that can run <code>curl</code> can publish:</p><div class="codeblock"><div class="cbhead"><span>Publish a page</span><button data-copy>Copy</button></div><pre><code>curl --data-binary @index.html https://demiplane.example/publish</code></pre></div><p>Add query parameters to control the result:</p><div class="codeblock"><div class="cbhead"><span>Variations</span><button data-copy>Copy</button></div><pre><code># stable slug that overwrites in place
+curl --data-binary @report.html &#34;https://demiplane.example/publish?slug=reports&#34;
+
+# private, unguessable URL that expires in a day
+curl --data-binary @secret.html &#34;https://demiplane.example/publish?private=true&amp;ttl=24h&#34;
+
+# render markdown to a styled page
+curl --data-binary @notes.md &#34;https://demiplane.example/publish?render=md&#34;
+
+# set a view password (header, never the URL)
+curl -H &#34;X-Demiplane-Password: hunter2&#34; --data-binary @q.html &#34;https://demiplane.example/publish?slug=q&#34;</code></pre></div><h2 id="cli">Command-line client</h2><p>The <code>demiplane publish</code> subcommand wraps the same call, copies the URL to your clipboard, and can watch a file for live-reload:</p><div class="codeblock"><div class="cbhead"><span>demiplane publish</span><button data-copy>Copy</button></div><pre><code># publish a file; the URL is printed and copied to your clipboard
+demiplane publish --url https://demiplane.example --token-file ~/.config/demiplane/token index.html
+
+# watch a file and re-publish on every save (pairs with ?live for auto-reload)
+demiplane publish --url https://demiplane.example --token-file ~/.config/demiplane/token --watch --slug draft notes.md
+
+# or set the environment once and drop the flags
+export DEMIPLANE_URL=https://demiplane.example
+export DEMIPLANE_TOKEN_FILE=~/.config/demiplane/token
+demiplane publish index.html</code></pre></div><h2 id="aider">Aider and shell-command harnesses</h2><p>Harnesses that expose a shell command (Aider's <code>/run</code>, for example) publish through the same curl. Run it and paste the returned URL back:</p><div class="codeblock"><div class="cbhead"><span>Aider /run</span><button data-copy>Copy</button></div><pre><code>/run curl --data-binary @index.html https://demiplane.example/publish</code></pre></div><h2>Fetch it back</h2><p>Every publish returns a URL. Fetch it from anything on your network:</p><div class="codeblock"><div class="cbhead"><span>Read</span><button data-copy>Copy</button></div><pre><code>curl https://demiplane.example/shadow-specter</code></pre></div><h2>Learn more</h2><div class="grid"><a class="tile" href="/docs"><div class="t">Docs</div><div class="d">Full guide, served by demiplane itself.</div></a><a class="tile" href="/docs/api"><div class="t">API reference</div><div class="d">Full REST surface with per-language examples.</div></a><a class="tile" href="/llms.txt"><div class="t">llms.txt</div><div class="d">One-fetch reference for agents.</div></a></div></div></main>
+<footer><div class="wrap"><span class="mark">demiplane</span> · your private publishing plane.</div></footer>
+<script>
+document.addEventListener('click',function(e){
+  var b=e.target.closest('button[data-copy]'); if(!b)return;
+  var pre=b.closest('.codeblock').querySelector('code,pre');
+  navigator.clipboard.writeText(pre.innerText).then(function(){
+    var o=b.textContent; b.textContent='Copied'; setTimeout(function(){b.textContent=o},1200);
+  });
+});
+</script>
+</body></html>

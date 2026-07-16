@@ -1,0 +1,25 @@
+.DS_Store
+*.swp
+*.swo
+.env
+.env.local
+.env.*.local
+.venv/
+venv/
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.idea/
+.vscode/
+dist/
+build/
+
+# Built binary (go build -o demiplane ./cmd/demiplane)
+/demiplane
+
+# Beads / Dolt files (added by bd init)
+.beads/
+.dolt/
+*.db
+.beads-credential-key

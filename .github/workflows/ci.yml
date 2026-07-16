@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Force bash for every run step. Inside the golang:bookworm container the default
+# shell resolves to dash (/bin/sh), which lacks `set -o pipefail` — the gofmt
+# step's `set -euo pipefail` aborts with "Illegal option -o pipefail" before it
+# ever runs gofmt. Pinning bash fixes that and keeps all steps on one shell.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    # Run inside the official Go image so no setup-go action is needed; the only
+    # pinned action is checkout. Image pinned by digest (tag golang:1.26-bookworm);
+    # bump as new Go releases clear the supply-chain quarantine.
+    container: golang:1.26-bookworm@sha256:5f68ec6805843bd3981a951ffada82a26a0bd2631045c8f7dba483fa868f5ec5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      # The golang container runs as root over a checkout owned by another uid, so
+      # git reports "dubious ownership" — which makes `go build` abort VCS stamping
+      # with "error obtaining VCS status: exit status 128". Trust the workspace.
+      - name: mark workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: gofmt
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go vet (modules)
+        run: go vet -tags reply ./...
+
+      - name: build
+        run: go build ./...
+
+      - name: build (modules)
+        run: go build -tags reply ./...
+
+      - name: test (race)
+        run: go test -race ./...
+
+      - name: test (race, modules)
+        run: go test -race -tags reply ./...
