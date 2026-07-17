@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	demiplane "github.com/daisandapex/demiplane"
 	"github.com/daisandapex/demiplane/internal/theme"
 )
 
@@ -782,6 +783,7 @@ func docHead(css, titleText, themeName string, toggle bool) string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="` + theme.MetaColor(initial) + `">
 <title>` + titleText + `</title>
+<link rel="icon" type="image/svg+xml" href="` + demiplane.FaviconDataURI + `">
 <style>` + css + `</style>
 `
 	if toggle {

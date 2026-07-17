@@ -7,6 +7,7 @@ import (
 	"html"
 	"net/http"
 
+	demiplane "github.com/daisandapex/demiplane"
 	"github.com/daisandapex/demiplane/internal/theme"
 )
 
@@ -51,6 +52,7 @@ func (s *Server) notFoundHTML() string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Not found · demiplane</title>
+<link rel="icon" type="image/svg+xml" href="` + demiplane.FaviconDataURI + `">
 <style>` + css + `
 main.wrap{max-width:40rem;padding-top:4rem}
 .nf-kicker{font-family:var(--sans);font-size:.72rem;font-weight:700;letter-spacing:.2em;

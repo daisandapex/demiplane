@@ -104,7 +104,8 @@ List your artifacts as JSON:
 
 ## Reserved slugs
 These names collide with built-in routes and are rejected (400) as ?slug=:
-publish, list, docs, help, llms.txt.
+publish, list, docs, help, help.json, llms.txt, favicon.svg, favicon.ico,
+apple-touch-icon.png.
 `
 
 // --- /help : self-describing JSON ---

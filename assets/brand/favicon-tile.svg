@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="demiplane">
+  <rect width="64" height="64" rx="12" fill="#14171c"/>
+  <g fill="none" stroke="#e7e9ec" stroke-width="5" stroke-linejoin="miter" stroke-linecap="butt">
+    <path d="M37 54 H54 V10 H10 V54 H27"/>
+    <rect x="24" y="24" width="16" height="16"/>
+  </g>
+</svg>

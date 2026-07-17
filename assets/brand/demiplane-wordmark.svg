@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 64" fill="none" role="img" aria-label="demiplane">
+  <!-- mark -->
+  <g stroke="currentColor" stroke-width="5" stroke-linejoin="miter" stroke-linecap="butt">
+    <path d="M37 54 H54 V10 H10 V54 H27"/>
+    <rect x="24" y="24" width="16" height="16"/>
+  </g>
+  <!-- wordmark: set in a monospace stack; outline the text if a font-locked
+       lockup is needed (see assets/brand/README.md) -->
+  <text x="78" y="43" fill="currentColor" stroke="none"
+        font-family="ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace"
+        font-size="30" font-weight="600" letter-spacing="0.5">demiplane</text>
+</svg>

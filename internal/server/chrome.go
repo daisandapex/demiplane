@@ -106,6 +106,7 @@ func (s *Server) pageHTML(title string, nav []navLink, inner string) string {
 	b.WriteString("<meta charset=\"utf-8\">\n")
 	b.WriteString("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
 	fmt.Fprintf(&b, "<title>%s</title>\n", html.EscapeString(title))
+	b.WriteString(faviconChromeLinks)
 	b.WriteString("<style>" + s.chromeStyle() + "</style>\n</head>\n<body>\n")
 	b.WriteString("<header class=\"top\"><div class=\"wrap\">")
 	b.WriteString("<a class=\"brand\" href=\"/\">demiplane<span class=\"dot\">.</span></a><nav>")

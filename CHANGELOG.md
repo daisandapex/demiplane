@@ -38,6 +38,11 @@ milestone or work item that delivered them.
 - **Licensing** — relicensed to AGPL-3.0-only with a CLA and a commercial-license
   path; SPDX headers on all first-party Go source.
 - **Packaging** — static binary on distroless (`Dockerfile`) + CI.
+- **Brand** — project mark and favicon. The control plane serves `/favicon.svg`,
+  `/favicon.ico`, and `/apple-touch-icon.png`; every rendered page (published
+  artifacts, control chrome, and the 404) carries a self-contained data-URI
+  favicon so a saved page keeps its tab icon offline. Full icon suite and usage
+  in `assets/brand/`.
 
 ### Added — design-audit renderer additions (`demiplane-rwj`)
 
