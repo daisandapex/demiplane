@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/mark-dark.png">
+    <img src="assets/brand/mark-light.png" alt="demiplane" width="88" height="88">
+  </picture>
+</p>
+
 # demiplane
 
 **Your private publishing plane.**

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Benjamin Connelly
+// SPDX-FileCopyrightText: 2026 Dais & Apex
 // SPDX-License-Identifier: AGPL-3.0-only
 
 package render
