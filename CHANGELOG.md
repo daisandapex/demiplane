@@ -170,8 +170,8 @@ shell you already use — native where a protocol exists, one shell command
 everywhere else — and adds the iterate-in-place loop.
 
 - **`demiplane mcp` — stdio MCP server.** A Model Context Protocol server over
-  JSON-RPC 2.0 on stdin/stdout, so Claude Code, Cursor, Cline, Windsurf, Zed, and
-  Continue get native `publish` / `list` / `delete` / `get` tools. It is a thin
+  JSON-RPC 2.0 on stdin/stdout, so any MCP-capable client gets native `publish` /
+  `list` / `delete` / `get` tools — Claude Code is the one we test. It is a thin
   HTTP client of a running instance's control plane (no store/filesystem
   coupling), stdlib-only, and ships in the core build. Config: `demiplane mcp
   --url <control> --content-url <content> --token-file <path>` (or

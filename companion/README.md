@@ -11,23 +11,34 @@ tool.
 
 ## Pick your connection
 
-| Harness | How it connects | Where to configure |
-|---|---|---|
-| Claude Code | MCP native tools, **or** the capture hook | `claude mcp add …` / `capture-hook/` |
-| Cursor | MCP | `~/.cursor/mcp.json` |
-| Cline | MCP | VS Code settings → Cline MCP Servers |
-| Windsurf | MCP | `~/.codeium/windsurf/mcp_config.json` |
-| Zed | MCP | `settings.json` → `context_servers` |
-| Continue | MCP | `~/.continue/config.json` → `mcpServers` |
-| Aider | shell `/run` + curl | run the curl below |
-| Any shell / CI | `curl` or `demiplane publish` | environment or flags |
+| Harness | How it connects | Where to configure | Verified |
+|---|---|---|---|
+| Claude Code | MCP native tools, **or** the capture hook | `claude mcp add …` / `capture-hook/` | Yes — tested and used daily |
+| Any MCP client | MCP | wherever that client keeps its `mcpServers` config | Not yet verified |
+| Aider | shell `/run` + curl | run the curl below | Yes — the curl path is tested |
+| Any shell / CI | `curl` or `demiplane publish` | environment or flags | Yes — REST and CLI tests |
 
-## MCP (most agentic harnesses)
+### What "verified" means
 
-`demiplane mcp` is a thin JSON-RPC client of the control plane, so it works
-against a remote or local instance with no filesystem coupling. Register it once
-and `publish`, `list`, `get`, and `delete` become native tools. The stanza is the
-same across harnesses; only the config file path differs (table above):
+The **Verified** column is deliberately narrow: it marks the paths demiplane's own
+test suite exercises or that we run every day.
+
+- **Claude Code** — MCP tools and the capture hook, dogfooded daily.
+- **curl / any shell / CI** — covered by the REST handler tests.
+- **`demiplane publish`** — covered by the CLI tests.
+
+Everything else is "should work, not yet confirmed." demiplane's MCP server is a
+standard stdio JSON-RPC implementation with no client-specific behaviour, so
+MCP-capable editors are expected to work; we simply have not run them ourselves.
+Get one working and open an issue — we will add it to the table with a test.
+
+## MCP (any MCP-capable client)
+
+`demiplane mcp` is a standard stdio JSON-RPC MCP server and a thin client of the
+control plane, so it works against a remote or local instance with no filesystem
+coupling. Register it once and `publish`, `list`, `get`, and `delete` become
+native tools. The stanza is the same everywhere; only the config file path
+differs, and your client's own docs name that path:
 
 ```json
 {
