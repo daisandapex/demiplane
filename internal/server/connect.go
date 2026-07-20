@@ -67,21 +67,21 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// --- Compatibility matrix ---
 	b.WriteString(`<h2>Compatibility</h2>`)
 	b.WriteString(harnessMatrix())
+	b.WriteString(`<p class="desc">demiplane speaks plain MCP and plain HTTP, so the list of ` +
+		`clients it works with is longer than the list we verify. The table says which is ` +
+		`which. Got it running in another MCP client? Open an issue and we will add it.</p>`)
 
-	// --- MCP: the native path for most agentic harnesses ---
-	b.WriteString(`<h2 id="mcp">MCP harnesses</h2>`)
-	b.WriteString(`<p>Claude Code, Cursor, Cline, Windsurf, Zed, and Continue all speak the ` +
-		`Model Context Protocol. Register demiplane once and <code>publish</code>, ` +
+	// --- MCP: the native path for any MCP-capable client ---
+	b.WriteString(`<h2 id="mcp">MCP clients</h2>`)
+	b.WriteString(`<p><code>demiplane mcp</code> is a standard stdio JSON-RPC MCP server, so any ` +
+		`MCP-capable client can drive it. Register demiplane once and <code>publish</code>, ` +
 		`<code>list</code>, <code>get</code>, and <code>delete</code> become native tools. ` +
-		`The stanza is the same everywhere; only the config file location differs.</p>`)
+		`The stanza below is the same everywhere; only the config file location differs, and ` +
+		`your client's own docs name that path.</p>`)
 	b.WriteString(codeBlock("mcp.json (mcpServers stanza)", mcpStanza(base)))
 	b.WriteString(`<div class="grid">` +
 		mcpTile("Claude Code", "claude mcp add, or ~/.claude.json → mcpServers") +
-		mcpTile("Cursor", "~/.cursor/mcp.json (or .cursor/mcp.json in a project)") +
-		mcpTile("Cline", "VS Code settings → Cline MCP Servers") +
-		mcpTile("Windsurf", "~/.codeium/windsurf/mcp_config.json") +
-		mcpTile("Zed", "settings.json → context_servers") +
-		mcpTile("Continue", "~/.continue/config.json → mcpServers") +
+		mcpTile("Any MCP client", "wherever that client keeps its mcpServers config") +
 		`</div>`)
 	b.WriteString(`<p class="desc">Claude Code one-liner (adds the stanza above for you):</p>`)
 	b.WriteString(codeBlock("Claude Code",
@@ -162,22 +162,23 @@ func mcpTile(name, where string) string {
 }
 
 // harnessMatrix renders the "works with" table. Static content, escaped.
+//
+// The "Verified" column is the honest one: it says what demiplane's own tests and
+// daily use actually exercise. Only move a row to "Yes" when there is a test or a
+// dogfooding path behind it — not because the protocol says it ought to work.
 func harnessMatrix() string {
-	rows := []struct{ harness, method string }{
-		{"Claude Code", "MCP (native tools) or capture hook"},
-		{"Cursor", "MCP"},
-		{"Cline", "MCP"},
-		{"Windsurf", "MCP"},
-		{"Zed", "MCP"},
-		{"Continue", "MCP"},
-		{"Aider", "shell /run + curl"},
-		{"Any shell / CI", "curl or demiplane publish"},
+	rows := []struct{ harness, method, verified string }{
+		{"Claude Code", "MCP (native tools) or capture hook", "Yes — tested and used daily"},
+		{"Any MCP client", "MCP (standard stdio JSON-RPC server)", "Not yet verified"},
+		{"Aider", "shell /run + curl", "Yes — the curl path is tested"},
+		{"Any shell / CI", "curl or demiplane publish", "Yes — REST and CLI tests"},
 	}
 	var b strings.Builder
-	b.WriteString(`<table><tr><th>Harness</th><th>How it connects</th></tr>`)
+	b.WriteString(`<table><tr><th>Harness</th><th>How it connects</th><th>Verified</th></tr>`)
 	for _, r := range rows {
-		fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td></tr>`,
-			html.EscapeString(r.harness), html.EscapeString(r.method))
+		fmt.Fprintf(&b, `<tr><td>%s</td><td>%s</td><td>%s</td></tr>`,
+			html.EscapeString(r.harness), html.EscapeString(r.method),
+			html.EscapeString(r.verified))
 	}
 	b.WriteString(`</table>`)
 	return b.String()

@@ -45,13 +45,24 @@ func TestConnectStatusAndType(t *testing.T) {
 func TestConnectContainsHarnessBlocks(t *testing.T) {
 	_, body, _ := getConnect(t, "https://demiplane.example", "")
 
-	// Every advertised harness must be named on the page.
+	// Every advertised harness must be named on the page. This list is limited to
+	// paths we actually exercise (Claude Code via MCP and the hook, curl/CLI via
+	// the REST and publish tests, Aider because it is only curl) plus the generic
+	// MCP entry. Naming a harness here is a claim of support, so do not add one
+	// without a test or a dogfooding path behind it.
 	harnesses := []string{
-		"Claude Code", "Cursor", "Cline", "Windsurf", "Zed", "Continue", "Aider",
+		"Claude Code", "Any MCP client", "Aider", "Any shell / CI",
 	}
 	for _, h := range harnesses {
 		if !strings.Contains(body, h) {
 			t.Errorf("connect page missing harness %q", h)
+		}
+	}
+
+	// Guard against the unverified per-harness claims creeping back in.
+	for _, h := range []string{"Cursor", "Cline", "Windsurf", "Zed", "Continue"} {
+		if strings.Contains(body, h) {
+			t.Errorf("connect page names unverified harness %q; see the Verified column", h)
 		}
 	}
 
@@ -142,7 +153,9 @@ func TestConnectNoReflectedInput(t *testing.T) {
 }
 
 // TestConnectGolden pins the full rendered HTML for a fixed base + open instance.
-// Run `go test -run TestConnectGolden -update ./internal/server` to refresh.
+// Run `go test ./internal/server -run TestConnectGolden -update` to refresh. The
+// package must come before -update: `go` does not know that flag, so it treats the
+// next argument as its value and silently tests the current directory instead.
 func TestConnectGolden(t *testing.T) {
 	_, body, _ := getConnect(t, "https://demiplane.example", "")
 	golden := filepath.Join("testdata", "connect_open.html")

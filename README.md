@@ -52,15 +52,19 @@ open it and grab the block for your tool. The snippets below are the same ones,
 templated with the instance's own base URL and a token *file path* (never the
 token itself).
 
-| Harness | How it connects |
-|---|---|
-| Claude Code | MCP (native `publish`/`list`/`get`/`delete` tools) or the capture hook |
-| Cursor, Cline, Windsurf, Zed, Continue | MCP |
-| Aider | shell `/run` + curl |
-| Any shell / CI | `curl` or `demiplane publish` |
+| Harness | How it connects | Verified |
+|---|---|---|
+| Claude Code | MCP (native `publish`/`list`/`get`/`delete` tools) or the capture hook | Yes — tested and used daily |
+| Any MCP client | MCP (standard stdio JSON-RPC server) | Not yet verified |
+| Aider | shell `/run` + curl | Yes — the curl path is tested |
+| Any shell / CI | `curl` or `demiplane publish` | Yes — REST and CLI tests |
 
-**MCP (Claude Code, Cursor, Cline, Windsurf, Zed, Continue).** One stanza; only the
-config file location differs per harness (see `/connect` for each path):
+demiplane speaks plain MCP and plain HTTP, so the set of clients it works with is
+larger than the set we verify; the table says which is which. If you get it running
+in another MCP client, open an issue and we will add it.
+
+**MCP.** `demiplane mcp` is a standard stdio JSON-RPC MCP server — one stanza, and
+only the config file location differs per client (its own docs name that path):
 
 ```json
 {

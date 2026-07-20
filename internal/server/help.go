@@ -87,11 +87,11 @@ func (s *Server) handleHelpPage(w http.ResponseWriter, r *http.Request) {
 		`or a bare shell. The <a href="/connect">Connect</a> page has copy-paste config ` +
 		`for each tool; the essentials:</p>`)
 	b.WriteString(`<h3>MCP</h3>`)
-	b.WriteString(`<p>Claude Code, Cursor, Cline, Windsurf, Zed, and Continue speak the Model ` +
-		`Context Protocol. Register demiplane once and <code>publish</code>, ` +
-		`<code>list</code>, <code>get</code>, and <code>delete</code> become native tools. ` +
-		`See <a href="/connect#mcp">Connect</a> for the exact stanza and per-tool config ` +
-		`paths.</p>`)
+	b.WriteString(`<p><code>demiplane mcp</code> is a standard stdio JSON-RPC MCP server, so ` +
+		`any MCP-capable client can register it and get <code>publish</code>, ` +
+		`<code>list</code>, <code>get</code>, and <code>delete</code> as native tools. ` +
+		`Claude Code is the client we test against. See <a href="/connect#mcp">Connect</a> ` +
+		`for the exact stanza.</p>`)
 	b.WriteString(`<h3>Bare curl</h3>`)
 	b.WriteString(`<p>The universal fallback: anything that can run <code>curl</code> can publish.</p>`)
 	b.WriteString(codeBlock("Publish with curl", curlHelpPublish(base, authConfigured)))
