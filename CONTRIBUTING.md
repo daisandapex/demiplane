@@ -75,6 +75,19 @@ go test -race -tags "reply tls" ./...
 - Describe *what* changed and *why* in the body.
 - One logical change per PR where practical.
 
+## Branching and releases
+
+- `main` is protected and always releasable; it is never committed to directly.
+- Work on a short-lived branch off `main` and open a pull request. The CI gates
+  above must pass and commits must be signed before a pull request can merge;
+  merges preserve commit authorship (no squash).
+- demiplane follows one line of development. Features and fixes both merge to
+  `main`; a release is a tag on `main`, not a separate branch.
+- Releases follow [Semantic Versioning](https://semver.org): a breaking change is
+  a major bump, a backward-compatible feature is a minor bump, and a fix-only
+  release is a patch. Releases are cut deliberately (version bump +
+  `CHANGELOG.md` entry + `vX.Y.Z` tag), not on every merge.
+
 ## Architecture quick reference
 
 | Package | Responsibility |

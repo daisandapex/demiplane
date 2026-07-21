@@ -63,6 +63,26 @@ Optional features are compiled in via the module-extension pattern (see
 - **Security-sensitive code** (auth, rendering, slug handling, anything touching
   the store path) gets extra scrutiny — explain the threat you considered.
 
+## Branching & releases
+
+- `main` is protected and always releasable. Do not commit to it directly.
+- Each unit of work gets its own short-lived branch off `main`; open a pull
+  request back to `main`. The full gate matrix above and a verified commit
+  signature are required to merge. Merges use a merge commit or rebase, never
+  squash (squash rewrites authorship).
+- There is one line of development. Features and fixes both land on `main`; a
+  release is a tag on `main`, not a separate branch. You do not work "on" a
+  version, you tag one when you ship.
+- **Versioning is [SemVer](https://semver.org).** The number describes the change
+  since the last release: a breaking change is a **major** bump, a
+  backward-compatible feature is a **minor** bump, and a fix-only release is a
+  **patch**.
+- Landing work and cutting a release are separate decisions. `main` accumulates
+  merges; a release is cut deliberately when there is user-meaningful value,
+  bumping the version, updating `CHANGELOG.md`, and tagging `vX.Y.Z`. A
+  maintenance branch (`release/N.x`) is created only if an already-released major
+  needs a backport after `main` has moved on.
+
 ## Issues
 
 Bugs, feature requests, and questions go to
