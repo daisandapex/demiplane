@@ -4,8 +4,10 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"html"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -139,19 +141,36 @@ func connectNav() []navLink {
 
 // mcpStanza is the mcpServers JSON block a user pastes into their harness config.
 // The token is referenced by FILE PATH (--token-file), never inlined.
+//
+// This marshals rather than concatenating strings. base is not always filtered:
+// a request-derived host passes through sanitizeHost, but an explicit
+// --base-url is operator input and reaches here verbatim. Interpolating it into
+// hand-built JSON let a single quote emit a stanza no MCP client can parse —
+// and the resulting error names the USER's config file, not demiplane. Marshal
+// escapes it correctly by construction. Covered by e2e/connect_config_test.go.
 func mcpStanza(base string) string {
-	return "{\n" +
-		"  \"mcpServers\": {\n" +
-		"    \"demiplane\": {\n" +
-		"      \"command\": \"demiplane\",\n" +
-		"      \"args\": [\n" +
-		"        \"mcp\",\n" +
-		"        \"--url\", \"" + base + "\",\n" +
-		"        \"--token-file\", \"" + tokenPath + "\"\n" +
-		"      ]\n" +
-		"    }\n" +
-		"  }\n" +
-		"}"
+	type serverEntry struct {
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+	}
+	stanza := struct {
+		MCPServers map[string]serverEntry `json:"mcpServers"`
+	}{
+		MCPServers: map[string]serverEntry{
+			"demiplane": {
+				Command: "demiplane",
+				Args:    []string{"mcp", "--url", base, "--token-file", tokenPath},
+			},
+		},
+	}
+	out, err := json.MarshalIndent(stanza, "", "  ")
+	if err != nil {
+		// Unreachable: the value is plain strings and a string map. Fall back to
+		// an empty object rather than serving a half-written block.
+		log.Printf("demiplane: mcp stanza marshal: %v", err)
+		return "{}"
+	}
+	return string(out)
 }
 
 // mcpTile renders a compatibility tile naming where a harness keeps its MCP config.

@@ -70,3 +70,29 @@ jobs:
 
       - name: test (race)
         run: go test -race -tags "${{ matrix.tags }}" ./...
+
+  # The e2e suite is gated behind its own build tag, so the matrix above never
+  # compiles it: `go test -tags "reply tls" ./...` does not select files tagged
+  # `e2e`. Without this job the process-level tests — the only ones that run the
+  # real binary, drive `demiplane mcp` over stdio pipes, and validate the
+  # /connect config artifact — are dead code in CI. One leg with every module
+  # tag is enough; the suite builds its own binary with `-tags "reply tls"`
+  # regardless (see e2e/main_test.go), so splitting it per tag would test the
+  # same binary four times.
+  e2e:
+    name: e2e (process-level)
+    runs-on: ubuntu-latest
+    container: golang:1.26-bookworm@sha256:5f68ec6805843bd3981a951ffada82a26a0bd2631045c8f7dba483fa868f5ec5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: mark workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # The suite spawns subprocesses and binds ephemeral loopback ports, so it
+      # is slower and flakier-by-nature than the unit legs. Bound it rather than
+      # letting a hung child burn the job's full 6-hour default.
+      - name: test (e2e, race)
+        run: go test -race -tags "e2e reply tls" -timeout 10m ./e2e/...
