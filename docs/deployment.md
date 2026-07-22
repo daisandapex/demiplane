@@ -138,7 +138,7 @@ you map the ports. Pass extra flags by overriding the command, e.g.
 
 ## See also
 
-- [HTTP API](./api.md) — endpoints, publish parameters, auth model
+- [HTTP API](../API.md) — endpoints, publish parameters, auth model
 - [Rendering](./rendering.md) — themes and `?render=md` chrome the config file controls
 - [Native TLS](./tls.md) — terminating TLS in the binary instead of a proxy
 - [SSH transport](./receive.md) — the second ingest path into the same store

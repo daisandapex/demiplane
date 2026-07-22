@@ -41,7 +41,7 @@ the entry, or a wrapper), never an argument. Nested tar paths flatten to hyphena
 
 ## See also
 
-- [HTTP API](./api.md) — the other transport, and the auth model the store shares
+- [HTTP API](../API.md) — the other transport, and the auth model the store shares
 - [Deployment](./deployment.md) — the store directory and `serve` flags
 - [Native TLS](./tls.md) — not needed for SSH ingest; sshd already encrypts it
 - [Architecture](./architecture.md) — `internal/transport/` and the shared store

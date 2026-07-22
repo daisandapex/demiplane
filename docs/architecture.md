@@ -43,7 +43,7 @@ posture — and a map of what lives where in the repository.
 ## See also
 
 - [Modules — developer guide](./MODULES.md) — writing a build-tagged module
-- [HTTP API](./api.md) — the surface `internal/server/` exposes
+- [HTTP API](../API.md) — the surface `internal/server/` exposes
 - [Rendering](./rendering.md) — `internal/render/` and the reply module
 - [SSH transport](./receive.md) — `internal/transport/`
 - [Deployment](./deployment.md) — running the binary and the Docker image

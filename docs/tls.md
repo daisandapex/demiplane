@@ -56,7 +56,7 @@ deliberately out — in [ADR 0004](./adr/0004-native-tls-module.md).
 ## See also
 
 - [Deployment](./deployment.md) — reachability tiers, the two-origin topology, the config file
-- [HTTP API](./api.md) — why per-artifact passwords are only meaningful over TLS
+- [HTTP API](../API.md) — why per-artifact passwords are only meaningful over TLS
 - [SSH transport](./receive.md) — the ingest path that needs no certificate
 - [Modules — developer guide](./MODULES.md) — how build-tagged modules work
 - [ADR 0004 — native TLS module](./adr/0004-native-tls-module.md)

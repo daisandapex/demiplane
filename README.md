@@ -5,18 +5,14 @@
   </picture>
 </p>
 
-<h1 align="center">demiplane</h1>
+# demiplane
 
-<p align="center"><strong>Your private publishing plane.</strong></p>
+**Your private publishing plane.**
 
-<p align="center">
 Publish an HTML file from your shell or your coding agent and get a link back —
 to a box you own, reachable only from your own network.
-</p>
 
-<p align="center">
-  <code>single Go binary</code> · <code>no database server</code> · <code>AGPL-3.0-only</code>
-</p>
+`single Go binary` · `no database server` · `AGPL-3.0-only`
 
 > **🔒 Loopback by default.** A fresh instance binds `127.0.0.1` and is reachable
 > from nowhere else. Nothing you publish is exposed until *you* bind a LAN or mesh
@@ -155,7 +151,7 @@ The README is the map; the full reference lives in [`docs/`](docs/):
 
 | | |
 |---|---|
-| [`docs/api.md`](docs/api.md) | Every endpoint, query parameter, and the two-layer auth model |
+| [`API.md`](API.md) | Full REST reference — every endpoint and parameter, with curl, Python, JavaScript, and Go examples |
 | [`docs/deployment.md`](docs/deployment.md) | Binding, reachability tiers, config file, Docker |
 | [`docs/harness.md`](docs/harness.md) | MCP, Claude Code, Aider, CI, and the capture hook |
 | [`docs/rendering.md`](docs/rendering.md) | `?render=md`, themes, live-reload, inline replies |

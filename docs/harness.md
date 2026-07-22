@@ -82,7 +82,7 @@ CLI, curl, capture hook) or the running instance's `GET /connect` page.
 
 ## See also
 
-- [HTTP API](./api.md) — what these clients call, and the bearer-token auth model
+- [HTTP API](../API.md) — what these clients call, and the bearer-token auth model
 - [Deployment](./deployment.md) — the control-plane / content-origin ports these URLs point at
 - [Rendering](./rendering.md) — `?render=md` for markdown artifacts
 - [Architecture](./architecture.md) — where `companion/` sits in the repo

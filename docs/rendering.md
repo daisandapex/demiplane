@@ -120,7 +120,7 @@ of hook or forward-flow fate.
 
 ## See also
 
-- [HTTP API](./api.md) — `?render=md`, `?reply=`, and `?next=` publish parameters
+- [HTTP API](../API.md) — `?render=md`, `?reply=`, and `?next=` publish parameters
 - [Deployment](./deployment.md) — `--theme` / `--css` / `--header` flags and the config file
 - [Modules — developer guide](./MODULES.md) — how build-tagged modules work
 - [Architecture](./architecture.md) — where the render engine lives
