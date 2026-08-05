@@ -23,3 +23,6 @@ build/
 .dolt/
 *.db
 .beads-credential-key
+
+# Local leak-audit patterns (see scripts/pre-push-leak-audit.sh)
+.leakpatterns

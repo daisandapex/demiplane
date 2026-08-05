@@ -20,11 +20,42 @@ import (
 // not the primary control (a plain-HTTP password is only meaningful behind TLS —
 // the README states this), so PBKDF2 is an appropriate fit.
 const (
-	pbkdf2Iter    = 600_000 // OWASP-recommended floor for PBKDF2-HMAC-SHA256
-	pbkdf2SaltLen = 16
-	pbkdf2KeyLen  = 32
-	pbkdf2Scheme  = "pbkdf2-sha256"
+	// DefaultPBKDF2Iter is the OWASP-recommended floor for PBKDF2-HMAC-SHA256
+	// and is what production uses. It is deliberately expensive: that cost is
+	// the entire defence an offline attacker faces.
+	DefaultPBKDF2Iter = 600_000
+	pbkdf2SaltLen     = 16
+	pbkdf2KeyLen      = 32
+	pbkdf2Scheme      = "pbkdf2-sha256"
 )
+
+// pbkdf2Iter is a variable only so tests can lower it. At the production value
+// a single hash costs roughly a third of a second, which is correct for a
+// credential and ruinous for a suite that hashes in most of its cases -- it was
+// the single largest cost in a twelve-minute test run.
+//
+// Nothing outside a test may change it, and TestProductionIterationCount
+// asserts the default still meets the OWASP floor, so lowering it for speed
+// cannot quietly become the shipped value. Verification reads the iteration
+// count from the stored hash, so hashes written at any setting keep verifying.
+var pbkdf2Iter = DefaultPBKDF2Iter
+
+// SetPBKDF2IterForTest lowers the work factor from another package's tests.
+//
+// internal/server exercises the full publish path, so it hashes at production
+// cost through store.Open even though it is not testing the KDF. Exported
+// rather than duplicated because the alternative is every downstream test
+// package paying a third of a second per hash, which is what made the suite
+// take twelve minutes.
+//
+// Returns a restore func. Not safe for concurrent use, and it must never be
+// called outside a test: TestProductionIterationCount guards the shipped
+// default, not this.
+func SetPBKDF2IterForTest(n int) func() {
+	prev := pbkdf2Iter
+	pbkdf2Iter = n
+	return func() { pbkdf2Iter = prev }
+}
 
 // hashPassword returns an encoded hash of pw: "pbkdf2-sha256$<iter>$<salt>$<key>"
 // with salt and key base64 (raw, std alphabet).
