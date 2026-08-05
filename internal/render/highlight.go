@@ -98,9 +98,6 @@ func canonLang(lang string) string {
 	return ""
 }
 
-// highlighted reports whether lang names a language the highlighter supports.
-func highlighted(lang string) bool { return canonLang(lang) != "" }
-
 // highlight tokenizes src for lang into HTML with classed token spans. For an
 // unsupported language it returns src HTML-escaped and unstyled. Every code byte
 // is escaped on output, so the result is always injection-safe.
