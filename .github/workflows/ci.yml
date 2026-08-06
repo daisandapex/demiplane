@@ -91,6 +91,15 @@ jobs:
       - name: mark workspace safe for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      # `go test` compiles _test.go files, so it type-checks a package that
+      # `go build` cannot. A non-test file under e2e/ referencing a symbol
+      # declared in a _test.go file therefore passes the test leg below while
+      # still breaking `go build -tags e2e ./...` for anyone building the
+      # module — exactly what happened to e2e/harness.go. `go vet` does not
+      # catch it either, because vet also sees test files. Only a build does.
+      - name: build (e2e)
+        run: go build -tags "e2e reply tls" ./...
+
       # The suite spawns subprocesses and binds ephemeral loopback ports, so it
       # is slower and flakier-by-nature than the unit legs. Bound it rather than
       # letting a hung child burn the job's full 6-hour default.
