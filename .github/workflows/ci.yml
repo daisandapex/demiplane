@@ -105,3 +105,26 @@ jobs:
       # letting a hung child burn the job's full 6-hour default.
       - name: test (e2e, race)
         run: go test -race -tags "e2e reply tls" -timeout 10m ./e2e/...
+
+  # scripts/pre-push-leak-audit.sh is the guard this project asks contributors
+  # to install before pushing to a public repo. Its failure mode is a SILENT
+  # PASS — it reported "clean" on leaks it had actually detected — and a guard
+  # that is trusted while doing nothing is worse than no guard at all. Nothing
+  # in CI exercised it, so the defect survived until someone ran the script by
+  # hand. This job runs its test suite on every PR.
+  hooks:
+    name: hooks (leak audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      # Builds throwaway git repos in a temp dir and asserts the guard blocks
+      # what it must and passes what it must. Case 4 is the regression that
+      # motivated this job.
+      - name: test (pre-push leak audit)
+        run: ./scripts/test-pre-push-leak-audit.sh
