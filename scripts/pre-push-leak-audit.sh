@@ -1,35 +1,39 @@
 #!/usr/bin/env bash
 # Pre-push leak audit.
 #
-# This project develops in the open. There is no promotion step between a commit
-# and the public internet, so the last useful moment to catch a private
-# identifier is immediately before the push.
+# Repos that develop in the open have no promotion step between a commit and
+# the public internet, so the last useful moment to catch a private identifier
+# is immediately before the push.
 #
 # Install:
+#
 #   ln -sf ../../scripts/pre-push-leak-audit.sh .git/hooks/pre-push
+#
+# Verify it after installing. A leak guard that silently passes is worse than
+# no guard, because it is trusted — see scripts/test-pre-push-leak-audit.sh,
+# which CI runs.
 #
 # Bypass (deliberately awkward):
 #   git push --no-verify
 #
 # Two pattern sources:
 #
-#   1. The generic set below. Things nobody should publish from any machine:
-#      RFC1918 and CGNAT addresses, private key headers, obvious credential
-#      shapes. Useful to every contributor.
+#   1. The generic set below. Credential shapes nobody should publish from any
+#      machine. Useful to every repo without configuration.
 #
-#   2. An optional `.leakpatterns` file in the repo root, one extended-regex per
-#      line, `#` for comments. It is gitignored. If you operate this software on
-#      infrastructure whose hostnames, domains or address ranges should not
-#      appear in public commits, put them there. Deliberately not committed:
-#      a published list of what you are hiding describes the thing you are
-#      hiding.
+#   2. A per-repo `.leakpatterns` file in the repo root, one extended-regex per
+#      line, `#` for comments. It must stay untracked — a published list of what
+#      you are hiding describes the thing you are hiding. Fleet hostnames,
+#      personal domains, real-name identities and deanonymising signing keys go
+#      here, because they differ per repo: what is permitted in one repo's
+#      identity policy is a leak in another's.
 set -uo pipefail
 
-# Credential shapes only. Deliberately NOT private IP ranges: this is a
-# self-hosted LAN and mesh tool, so its documentation legitimately contains
-# addresses like 192.168.1.50 as examples. A rule that fires on every doc page
-# is a rule that gets bypassed, and a bypassed hook protects nothing. Operators
-# who need address patterns can add their own ranges to .leakpatterns.
+# Credential shapes only. Deliberately NOT private IP ranges: some of these
+# repos are self-hosted LAN and mesh tools whose documentation legitimately
+# contains addresses like 192.168.1.50 as examples. A rule that fires on every
+# doc page is a rule that gets bypassed, and a bypassed hook protects nothing.
+# Repos that need address patterns add their own ranges to .leakpatterns.
 GENERIC_PATTERNS=(
   'BEGIN [A-Z ]*PRIVATE KEY'
   '\bAKIA[0-9A-Z]{16}\b'
@@ -47,14 +51,18 @@ if [[ -f "$repo_root/.leakpatterns" ]]; then
   [[ -n "$extra" ]] && patterns="$patterns|$extra"
 fi
 
-# This script necessarily contains pattern-shaped text. Exempt it.
-SELF_EXEMPT='^scripts/pre-push-leak-audit\.sh$'
+# Any in-repo copy of this script necessarily contains pattern-shaped text.
+SELF_EXEMPT='(^|/)pre-push-leak-audit(\.sh)?$'
 
 fail=0
 note() { printf '  %s\n' "$*" >&2; }
 
 echo "== pre-push leak audit ==" >&2
 
+# git feeds pre-push one line per ref: <local ref> <local sha> <remote ref>
+# <remote sha>. remote_ref is unused but named rather than dropped, so the
+# protocol stays legible at the read.
+# shellcheck disable=SC2034
 while read -r local_ref local_sha remote_ref remote_sha; do
   [[ -z "${local_sha:-}" ]] && continue
   [[ "$local_sha" =~ ^0+$ ]] && continue   # branch deletion
@@ -73,7 +81,10 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     while IFS= read -r f; do
       [[ -z "$f" ]] && continue
       [[ "$f" =~ $SELF_EXEMPT ]] && continue
-      if git show "$c:$f" 2>/dev/null | grep -qIiE "$patterns"; then
+      # Process substitution, not a pipe: `grep -q` exits on first match, the
+      # producer takes SIGPIPE (141), and `set -o pipefail` would then report
+      # the pipeline as FAILED — turning a detected leak into a passing check.
+      if grep -qIiE "$patterns" < <(git show "$c:$f" 2>/dev/null); then
         note "LEAK  $c  $f"
         fail=1
       fi
@@ -82,7 +93,14 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 
   # Commit metadata. Identity leaks live here and never appear in a diff --
   # author, committer and signing key are set independently of file content.
-  if git log --format='%an %ae %cn %ce %s %b' $commits 2>/dev/null | grep -qIiE "$patterns"; then
+  # Same SIGPIPE/pipefail hazard as above, and this is where it actually bit:
+  # the metadata stream is large enough that `git log` is still writing when a
+  # match makes `grep -q` exit, so as a pipeline this check silently passed on
+  # every leak it found.
+  # $commits is deliberately unquoted: it is a newline-separated SHA list and
+  # word splitting is how it becomes one argument per commit.
+  # shellcheck disable=SC2086
+  if grep -qIiE "$patterns" < <(git log --format='%an %ae %cn %ce %GK %GS %s %b' $commits 2>/dev/null); then
     note "LEAK  commit metadata or message matches a private pattern"
     fail=1
   fi
@@ -92,6 +110,13 @@ done
 # setups it carries infrastructure detail.
 if git ls-files --error-unmatch .beads >/dev/null 2>&1; then
   note "LEAK  .beads is tracked — it is local state and must stay untracked"
+  fail=1
+fi
+
+# The pattern file is the inverse of a secret: committing it publishes the list
+# of identifiers being suppressed, which is enough to go looking for them.
+if git ls-files --error-unmatch .leakpatterns >/dev/null 2>&1; then
+  note "LEAK  .leakpatterns is tracked — it names what you are hiding"
   fail=1
 fi
 
