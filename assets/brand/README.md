@@ -1,9 +1,13 @@
 <!--
 SPDX-FileCopyrightText: 2026 Dais & Apex
-SPDX-License-Identifier: AGPL-3.0-only
+SPDX-License-Identifier: LicenseRef-DaisAndApex-Brand
 -->
 
 # demiplane brand assets
+
+> **These files are not AGPL.** See `LICENSE` in this directory — the
+> repository's AGPL-3.0 grant covers the source code, not the marks. Forking
+> demiplane does not license you to use its identity.
 
 The mark is a **pocket reality**: a bounded outer world with a gateway gap at the
 bottom and a smaller pocket sealed inside. Monochrome, single-weight line art —

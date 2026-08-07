@@ -191,4 +191,9 @@ public issue.
 AGPL-3.0-only. A commercial license is available; see
 [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
 
+**Brand assets are excepted.** The marks under `assets/brand/` are Dais & Apex
+identity, not software, and are not covered by the AGPL grant — see
+[assets/brand/LICENSE](assets/brand/LICENSE). Fork the code freely; replace the
+marks with your own.
+
 <sub>Maintained by <strong>Dais &amp; Apex</strong>.</sub>
