@@ -152,27 +152,6 @@ func TestGalleryCardIsSlugFirst(t *testing.T) {
 	}
 }
 
-func TestSlugGroup(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"dispatch-08", "dispatch"},
-		{"dispatch-01", "dispatch"},
-		{"notes-reply-log", "notes"},
-		{"plan-q3", "plan"},
-		{"overnight-run", "overnight"},
-		{"notes", "notes"}, // hyphen-free: own key (client folds singletons)
-		{"docs", "docs"},   // hyphen-free
-		{"ME-Notes", "me"}, // lowercased
-		{"  spaced ", "spaced"},
-		{"", "other"},            // empty falls back
-		{"-leading", "-leading"}, // leading hyphen: not a prefix separator
-	}
-	for _, c := range cases {
-		if got := slugGroup(c.in); got != c.want {
-			t.Errorf("slugGroup(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
 func TestGalleryCardHasGroupData(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {
@@ -181,20 +160,25 @@ func TestGalleryCardHasGroupData(t *testing.T) {
 	t.Cleanup(func() { st.Close() })
 	s := New(st, Config{})
 
-	card := s.galleryCard("http://x", store.Artifact{Slug: "dispatch-08", ContentType: "text/html"})
+	card := s.galleryCard("http://x", store.Artifact{Slug: "dispatch-08", ContentType: "text/html", Series: "dispatch"})
 	if !strings.Contains(card, `data-group="dispatch"`) {
-		t.Errorf("card missing data-group derived from slug prefix: %s", card)
+		t.Errorf("card missing data-group from its explicit series: %s", card)
+	}
+	// No ?series= at publish means no group, whatever the slug looks like.
+	plain := s.galleryCard("http://x", store.Artifact{Slug: "dispatch-note", ContentType: "text/html"})
+	if !strings.Contains(plain, `data-group=""`) {
+		t.Errorf("card without a series should carry an empty data-group: %s", plain)
 	}
 }
 
 func TestGalleryHasGroupControl(t *testing.T) {
 	ts := newTestServer(t, "")
-	publish(t, ts, "?slug=dispatch-01", "<h1>a</h1>")
-	publish(t, ts, "?slug=dispatch-02", "<h1>b</h1>")
+	publish(t, ts, "?slug=dispatch-01&series=dispatch", "<h1>a</h1>")
+	publish(t, ts, "?slug=dispatch-02&series=dispatch", "<h1>b</h1>")
 
 	_, body := get(t, ts.URL+"/gallery")
 	page := string(body)
-	for _, want := range []string{`id="ggroup"`, "Group by prefix", "No grouping", `data-group="dispatch"`} {
+	for _, want := range []string{`id="ggroup"`, "Group by series", "No grouping", `data-group="dispatch"`} {
 		if !strings.Contains(page, want) {
 			t.Errorf("gallery page missing group control marker %q", want)
 		}

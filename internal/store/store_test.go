@@ -605,3 +605,64 @@ func TestListExcludesPrivate(t *testing.T) {
 		}
 	}
 }
+
+// TestPutStoresSeries: the explicit ?series= publish value persists with the
+// artifact and comes back through Get and List.
+func TestPutStoresSeries(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	art, err := s.Put(PutOptions{Slug: "lesson-a", Series: "course"}, strings.NewReader("x"))
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if art.Series != "course" {
+		t.Errorf("Put returned Series = %q, want course", art.Series)
+	}
+	got, f, err := s.Get("lesson-a")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	f.Close()
+	if got.Series != "course" {
+		t.Errorf("Get Series = %q, want course", got.Series)
+	}
+	arts, err := s.List(DefaultOwner)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(arts) != 1 || arts[0].Series != "course" {
+		t.Errorf("List Series = %+v, want one artifact in series course", arts)
+	}
+
+	// A republish without ?series= clears the value (publish params replace).
+	if _, err := s.Put(PutOptions{Slug: "lesson-a"}, strings.NewReader("y")); err != nil {
+		t.Fatalf("re-Put: %v", err)
+	}
+	got2, f2, err := s.Get("lesson-a")
+	if err != nil {
+		t.Fatalf("Get after re-Put: %v", err)
+	}
+	f2.Close()
+	if got2.Series != "" {
+		t.Errorf("re-publish without series should clear it, got %q", got2.Series)
+	}
+}
+
+// TestValidateSeries: a series label shares the slug alphabet (URL-safe, one
+// token), so it can never smuggle markup or path segments.
+func TestValidateSeries(t *testing.T) {
+	for _, ok := range []string{"course", "dais-and-apex", "s01", "a.b_c-d"} {
+		if err := ValidateSeries(ok); err != nil {
+			t.Errorf("ValidateSeries(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "a/b", "..", "a b", "-lead", strings.Repeat("x", 200)} {
+		if err := ValidateSeries(bad); err == nil {
+			t.Errorf("ValidateSeries(%q) = nil, want error", bad)
+		}
+	}
+}

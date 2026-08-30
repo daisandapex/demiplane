@@ -23,9 +23,9 @@ import (
 // The metadata is real: the publish timestamp, the instance gallery URL (base-URL
 // aware), and the rendered document's own byte size — which is exactly what the
 // store records, so the "size" the reader sees is the artifact's size. Series
-// prev/next is computed from the slug's prefix family (the same grouping the
-// gallery uses), so a lesson in a family links to its neighbors and a one-off
-// links to nothing.
+// prev/next is computed from the explicit ?series= family (the same grouping the
+// gallery uses), so a lesson published into a series links to its neighbors and
+// an artifact with no series links to nothing.
 
 // sizeSentinel is a placeholder the colophon emits in place of the document size,
 // which is not known until the whole document (colophon included) is assembled.
@@ -43,8 +43,8 @@ type seriesNav struct {
 
 // computeSeries orders the current slug together with its already-published
 // siblings and reports the neighbors and position. siblings is assumed to be the
-// same-family set (the caller groups by slug prefix); duplicates, blanks, and the
-// current slug are defused defensively. Ordering is lexical, which is correct for
+// same-family set (the caller selects by the shared explicit ?series= value);
+// duplicates, blanks, and the current slug are defused defensively. Ordering is lexical, which is correct for
 // the zero-padded numeric suffixes artifacts use (dispatch-07 < -08 < -09) and
 // stable for any other naming.
 func computeSeries(slug string, siblings []string) seriesNav {

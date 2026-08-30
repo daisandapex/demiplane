@@ -68,6 +68,20 @@ func ValidateNamedSlug(name string) error {
 	return nil
 }
 
+// ValidateSeries reports whether name is acceptable as an explicit series label
+// (the ?series= publish param). It shares the named-slug alphabet — URL-safe, a
+// single token, max 128 chars — so a series value is inert in attributes and
+// URLs. All rejections are *InputError so the HTTP layer maps them to 400.
+func ValidateSeries(name string) error {
+	if name == "" {
+		return inputErrorf("series is empty")
+	}
+	if !namedSlugRe.MatchString(name) {
+		return inputErrorf("series %q is not URL-safe (allowed: letters, digits, '.', '_', '-'; max 128 chars)", name)
+	}
+	return nil
+}
+
 // Friendly slugs are "adjective-creature" pairs (D&D-themed) drawn from the
 // embedded wordlists below (slug_words.go) — e.g. shadow-specter, radiant-owlbear.
 // They are memorable and typeable for the one-shot "drop an index.html, bookmark

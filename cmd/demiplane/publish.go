@@ -50,6 +50,7 @@ func runPublish(args []string) error {
 		slug      = fs.String("slug", "", "named slug (overwrites in place); empty lets the server generate one")
 		private   = fs.Bool("private", false, "mint an unguessable capability URL instead of a public slug")
 		ttl       = fs.String("ttl", "", "auto-expire after a duration, e.g. 30m, 2h, 7d")
+		series    = fs.String("series", "", "explicit series family for colophon prev/next and gallery grouping")
 		render    = fs.String("render", "", "render the body from markdown to HTML (\"md\")")
 		filename  = fs.String("filename", "", "filename hint for content-type; defaults to the input file's basename")
 		watch     = fs.Bool("watch", false, "re-publish to a stable slug whenever the file changes (edit-save-see loop)")
@@ -104,6 +105,7 @@ Flags:
 		slug:     *slug,
 		private:  *private,
 		ttl:      *ttl,
+		series:   *series,
 		render:   *render,
 		filename: name,
 	}
@@ -209,6 +211,7 @@ type publisher struct {
 	slug     string
 	private  bool
 	ttl      string
+	series   string
 	render   string
 	filename string
 }
@@ -226,6 +229,9 @@ func (p *publisher) endpoint() string {
 	}
 	if p.ttl != "" {
 		q.Set("ttl", p.ttl)
+	}
+	if p.series != "" {
+		q.Set("series", p.series)
 	}
 	if p.render != "" {
 		q.Set("render", p.render)

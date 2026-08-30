@@ -20,10 +20,10 @@ import (
 // gate), with a dependency-free inline filter/sort/search/group script and a
 // per-card copy-URL button. The empty state points a first-time user at /connect.
 //
-// Findability (demiplane-k3x): the flat card wall is grouped by slug prefix — the
-// text before the first hyphen (dispatch-08 → dispatch) — because artifacts are
-// named in stable families; grouping by prefix matches how a user hunts for "my
-// demiplanes" better than recency buckets, which churn daily and split a family
+// Findability (demiplane-k3x): the flat card wall is grouped by the explicit
+// series set at publish (?series=) — slug text never creates a group — because
+// only a declared family is a family; grouping by series matches how a user
+// hunts for "my demiplanes" better than recency buckets, which churn daily and split a family
 // across time windows. Singleton prefixes fold into an "Other" section so one-offs
 // don't each become their own header. Grouping, filtering, and sorting are all
 // client-side and progressive: with JS disabled the page is the flat card grid
@@ -91,7 +91,7 @@ func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
 		`autocomplete="off" spellcheck="false" aria-label="Filter artifacts">`,
 		html.EscapeString(plural(shown, "artifact")))
 	b.WriteString(`<select id="ggroup" class="gsortsel" aria-label="Group artifacts">` +
-		`<option value="prefix">Group by prefix</option>` +
+		`<option value="series">Group by series</option>` +
 		`<option value="none">No grouping</option>` +
 		`</select>`)
 	b.WriteString(`<select id="gsort" class="gsortsel" aria-label="Sort artifacts">` +
@@ -131,7 +131,9 @@ func (s *Server) galleryCard(base string, a store.Artifact) string {
 	fmt.Fprintf(&c, ` data-slug="%s"`, html.EscapeString(a.Slug))
 	fmt.Fprintf(&c, ` data-type="%s"`, html.EscapeString(badge))
 	fmt.Fprintf(&c, ` data-size="%d"`, a.Size)
-	fmt.Fprintf(&c, ` data-group="%s"`, html.EscapeString(slugGroup(a.Slug)))
+	// data-group carries the artifact's explicit series (?series= at publish);
+	// empty means no series, which the client script folds into 'other'.
+	fmt.Fprintf(&c, ` data-group="%s"`, html.EscapeString(a.Series))
 	fmt.Fprintf(&c, ` data-created="%d">`, a.CreatedAt.Unix())
 
 	c.WriteString(`<div class="ghead">`)
@@ -180,21 +182,6 @@ func shortTypeLabel(ct string) string {
 		return "md"
 	}
 	return sub
-}
-
-// slugGroup derives a card's group key from its slug: the lowercased text before
-// the first hyphen (dispatch-08 → dispatch). A hyphen-free slug is its own key
-// (the client folds any single-member group into the shared "Other" section, so a
-// stray one-off never gets a lonely header). An empty slug falls back to "other".
-func slugGroup(slug string) string {
-	slug = strings.ToLower(strings.TrimSpace(slug))
-	if slug == "" {
-		return "other"
-	}
-	if i := strings.IndexByte(slug, '-'); i > 0 {
-		return slug[:i]
-	}
-	return slug
 }
 
 // humanSize formats a byte count as a compact human-readable string.
@@ -290,7 +277,7 @@ const galleryScript = `<script>
       return (+b.dataset.created)-(+a.dataset.created);
     });
     while(grid.firstChild) grid.removeChild(grid.firstChild);
-    var grouping=groupSel&&groupSel.value==='prefix';
+    var grouping=groupSel&&groupSel.value==='series';
     grid.classList.toggle('grouped',grouping);
     if(grouping){
       // Fold single-member prefixes into a shared 'other' bucket; preserve the

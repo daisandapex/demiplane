@@ -76,8 +76,8 @@ type Options struct {
 	// Published is the artifact's publish timestamp, shown (date only) in the
 	// colophon meta row. It matches the stored CreatedAt (set moments later at Put).
 	Published time.Time
-	// Siblings lists the slugs of already-published artifacts in the same slug
-	// family (shared prefix before the first hyphen), from which series prev/next is
+	// Siblings lists the slugs of already-published artifacts in the same
+	// explicit series (the ?series= publish value), from which prev/next is
 	// computed. It excludes the current artifact, which is not yet stored at render
 	// time. A family of fewer than two total members renders no nav row (a singleton
 	// shows the meta row alone).
@@ -112,11 +112,16 @@ var (
 	reTag = regexp.MustCompile(`<[^>]*>`)
 
 	// Inline patterns, applied to already-escaped text.
-	reCode    = regexp.MustCompile("`([^`]+)`")
-	reLink    = regexp.MustCompile(`\[([^\]]+)\]\(([^)\s]+)\)`)
-	reBold    = regexp.MustCompile(`\*\*([^*]+)\*\*`)
-	reItalic  = regexp.MustCompile(`\*([^*]+)\*`)
-	reItalicU = regexp.MustCompile(`_([^_]+)_`)
+	reCode   = regexp.MustCompile("`([^`]+)`")
+	reLink   = regexp.MustCompile(`\[([^\]]+)\]\(([^)\s]+)\)`)
+	reBold   = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+	reItalic = regexp.MustCompile(`\*([^*]+)\*`)
+	// Underscore emphasis requires a word boundary on both sides (CommonMark
+	// 6.2: `_` is left-flanking only when not preceded by an alphanumeric), so
+	// intraword underscores — snake_case identifiers in prose — stay literal.
+	// `_` is itself a word character to RE2, so `\b_` means "preceded by a
+	// non-word character or the start", and `_\b` the mirror on the right.
+	reItalicU = regexp.MustCompile(`\b_([^_]+)_\b`)
 )
 
 // Markdown renders src as a complete, styled HTML document (used for the
@@ -509,9 +514,21 @@ func renderBlocks(src string) string {
 
 		case strings.HasPrefix(trimmed, "> "):
 			flushPara()
+			// Consume prefixed lines plus lazy continuation: a wrapped quote line
+			// without the `> ` prefix joins the quote, ending on a blank line, a
+			// list marker, or a block opener — the same paragraph-interruption
+			// rules the list continuation uses.
 			var quote []string
-			for i < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i]), "> ") {
-				quote = append(quote, strings.TrimPrefix(strings.TrimSpace(lines[i]), "> "))
+			for i < len(lines) {
+				qt := strings.TrimSpace(lines[i])
+				if strings.HasPrefix(qt, "> ") {
+					quote = append(quote, strings.TrimPrefix(qt, "> "))
+				} else if qt != "" && !isUnordered(qt) && !reOrdered.MatchString(qt) &&
+					!interruptsParagraph(qt) {
+					quote = append(quote, qt)
+				} else {
+					break
+				}
 				i++
 			}
 			i--
@@ -555,18 +572,34 @@ func isUnordered(s string) bool {
 	return strings.HasPrefix(s, "- ") || strings.HasPrefix(s, "* ") || strings.HasPrefix(s, "+ ")
 }
 
-// renderList consumes a contiguous run of list items starting at lines[start]
-// and renders it to nested <ul>/<ol> HTML, returning the index of the first line
-// past the list. A list run is the maximal block of consecutive non-blank lines
-// whose trimmed form is an ordered (`1. `) or unordered (`- `/`* `/`+ `) item; a
-// blank or non-item line ends it (matching the flat behavior it replaces).
+// interruptsParagraph reports whether a trimmed line is a block opener that (per
+// CommonMark) can interrupt a paragraph — and so ends lazy continuation instead
+// of joining the current item or quote.
+func interruptsParagraph(trimmed string) bool {
+	return reHeading.MatchString(trimmed) || reHRule.MatchString(trimmed) ||
+		strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "> ")
+}
+
+// renderList consumes a run of list items starting at lines[start] and renders
+// it to nested <ul>/<ol> HTML, returning the index of the first line past the
+// list. A run is ended by a blank line NOT followed by an indented continuation
+// paragraph, or by a block opener (heading, hrule, fence, blockquote).
+//
+// Continuation (CommonMark lazy continuation): a non-blank line that is not a
+// list marker and not a block opener joins the current item's content with a
+// space — regardless of indent, so hard-wrapped items (authors wrap at 72-80
+// columns) render as one <li>. A blank line followed by a line indented past the
+// current item's marker opens a further paragraph inside the same <li> (a loose
+// item renders every one of its paragraphs in <p>); a blank line followed by
+// anything else ends the list.
 //
 // Nesting is driven by leading indentation (the house convention is two spaces
 // per level, but any consistent widening nests and any narrowing closes, so
 // deeper or ragged indentation still yields a valid tree). Ordered and unordered
 // items mix freely: a change of marker kind at the same indent closes the current
 // list and opens the other. Item text runs through inline(), which HTML-escapes
-// before formatting, so the escape-first XSS posture is unchanged.
+// before formatting, so the escape-first XSS posture is unchanged. Fenced code
+// inside a list item is a known gap (out of scope for this fix).
 //
 // Invariant: each open list frame always has exactly one <li> whose </li> is
 // deferred until a sibling replaces it, a child list closes above it, or the run
@@ -579,6 +612,10 @@ func renderList(lines []string, start int) (string, int) {
 	}
 	var b strings.Builder
 	var stack []frame
+	// The current (innermost open) item's text: para accumulates the paragraph
+	// being read, paras holds any completed earlier paragraphs (loose item).
+	var para []string
+	var paras [][]string
 
 	openTag := func(ordered bool) {
 		if ordered {
@@ -594,16 +631,57 @@ func renderList(lines []string, start int) (string, int) {
 			b.WriteString("</ul>\n")
 		}
 	}
+	// flushItem emits the current item's buffered content: a tight single
+	// paragraph renders bare, a loose item wraps each paragraph in <p>.
+	flushItem := func() {
+		if para == nil && paras == nil {
+			return
+		}
+		if len(paras) == 0 {
+			b.WriteString(inline(strings.Join(para, " ")))
+		} else {
+			for _, p := range append(paras, para) {
+				b.WriteString("<p>" + inline(strings.Join(p, " ")) + "</p>")
+			}
+		}
+		para, paras = nil, nil
+	}
 
 	i := start
 	for i < len(lines) {
 		raw := lines[i]
 		trimmed := strings.TrimSpace(raw)
+
+		if trimmed == "" {
+			// Blank line: a following line indented past the current item's marker
+			// (and not itself a marker) continues the item as a new paragraph;
+			// anything else ends the list.
+			if j := i + 1; j < len(lines) && len(stack) > 0 {
+				nt := strings.TrimSpace(lines[j])
+				nindent := len(lines[j]) - len(strings.TrimLeft(lines[j], " \t"))
+				if nt != "" && !isUnordered(nt) && !reOrdered.MatchString(nt) &&
+					!interruptsParagraph(nt) && nindent > stack[len(stack)-1].indent {
+					paras = append(paras, para)
+					para = nil
+					i++
+					continue
+				}
+			}
+			break
+		}
+
 		ordered := reOrdered.MatchString(trimmed)
 		unordered := isUnordered(trimmed)
 		if !ordered && !unordered {
-			break
+			if len(stack) == 0 || interruptsParagraph(trimmed) {
+				break
+			}
+			// Lazy continuation: join the current item's paragraph.
+			para = append(para, trimmed)
+			i++
+			continue
 		}
+
 		indent := len(raw) - len(strings.TrimLeft(raw, " \t"))
 		var content string
 		if ordered {
@@ -611,6 +689,9 @@ func renderList(lines []string, start int) (string, int) {
 		} else {
 			content = trimmed[2:]
 		}
+
+		// A new marker ends the current item's content region.
+		flushItem()
 
 		// Ascend: close every level deeper than this item's indent. Each pop closes
 		// that level's open <li> and its list tag; the parent <li> it lived inside is
@@ -639,9 +720,10 @@ func renderList(lines []string, start int) (string, int) {
 		}
 
 		b.WriteString("<li>")
-		b.WriteString(inline(content))
+		para = append(para, content)
 		i++
 	}
+	flushItem()
 
 	// Unwind any levels left open at the end of the run.
 	for len(stack) > 0 {
@@ -697,15 +779,30 @@ func renderTable(header []string, rows [][]string) string {
 	return b.String()
 }
 
+// codeSentinel frames a code-span placeholder. NUL cannot survive
+// html.EscapeString'd source text, so a framed index is unambiguous — the same
+// placeholder shape highlight.go uses for escaping.
+const codeSentinel = "\x00"
+
 // inline escapes text and applies inline formatting. Escaping happens first so
-// raw HTML in the source is rendered as text, never executed.
+// raw HTML in the source is rendered as text, never executed. Code spans are
+// then lifted into placeholders BEFORE the emphasis passes run, so `_`/`*`
+// inside inline code (most snake_case identifiers) are never rewritten into
+// <em>/<strong>; the finished spans are restored last.
 func inline(s string) string {
 	s = html.EscapeString(s)
-	s = reCode.ReplaceAllString(s, "<code>$1</code>")
+	var spans []string
+	s = reCode.ReplaceAllStringFunc(s, func(m string) string {
+		spans = append(spans, "<code>"+reCode.FindStringSubmatch(m)[1]+"</code>")
+		return codeSentinel + strconv.Itoa(len(spans)-1) + codeSentinel
+	})
 	s = reLink.ReplaceAllStringFunc(s, renderLink)
 	s = reBold.ReplaceAllString(s, "<strong>$1</strong>")
 	s = reItalic.ReplaceAllString(s, "<em>$1</em>")
 	s = reItalicU.ReplaceAllString(s, "<em>$1</em>")
+	for i, span := range spans {
+		s = strings.Replace(s, codeSentinel+strconv.Itoa(i)+codeSentinel, span, 1)
+	}
 	return s
 }
 
