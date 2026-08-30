@@ -998,21 +998,23 @@ func TestBrowsePageExcludesPrivate(t *testing.T) {
 }
 
 // TestCollapseSeries is the unit for the landing table's series folding
-// (demiplane-0pw): a slug family collapses to one reference on its newest member;
-// a lone artifact stays a plain row.
+// (demiplane-0pw): an explicit ?series= family collapses to one reference on its
+// newest member; an artifact with no series stays a plain row even when its slug
+// shares a prefix with the family.
 func TestCollapseSeries(t *testing.T) {
 	base := time.Now()
 	pub := []store.Artifact{
-		{Slug: "dispatch-08", CreatedAt: base},                                  // newest member
-		{Slug: "dispatch-01", CreatedAt: base.Add(-time.Hour)},                  // older member
-		{Slug: "design-lab", CreatedAt: base.Add(-2 * time.Hour)},               // singleton
-		{Slug: "notes", CreatedAt: base.Add(-3 * time.Hour), PasswordHash: "x"}, // locked singleton
+		{Slug: "dispatch-08", Series: "dispatch", CreatedAt: base},                 // newest member
+		{Slug: "dispatch-01", Series: "dispatch", CreatedAt: base.Add(-time.Hour)}, // older member
+		{Slug: "design-lab", CreatedAt: base.Add(-2 * time.Hour)},                  // singleton
+		{Slug: "notes", CreatedAt: base.Add(-3 * time.Hour), PasswordHash: "x"},    // locked singleton
+		{Slug: "dispatch-note", CreatedAt: base.Add(-4 * time.Hour)},               // shared prefix, no series
 	}
 	rows := collapseSeries(pub)
-	if len(rows) != 3 {
-		t.Fatalf("collapseSeries len = %d, want 3 (one series + two singletons)", len(rows))
+	if len(rows) != 4 {
+		t.Fatalf("collapseSeries len = %d, want 4 (one series + three singletons)", len(rows))
 	}
-	// The series folds to the prefix, counts its members, links to the newest.
+	// The series folds to its name, counts its members, links to the newest.
 	if rows[0].label != "dispatch" || rows[0].count != 2 || rows[0].slug != "dispatch-08" {
 		t.Errorf("series row = %+v, want label=dispatch count=2 slug=dispatch-08", rows[0])
 	}
@@ -1026,6 +1028,10 @@ func TestCollapseSeries(t *testing.T) {
 	if rows[2].label != "notes" || rows[2].count != 1 || !rows[2].locked {
 		t.Errorf("locked singleton row = %+v, want notes count=1 locked", rows[2])
 	}
+	// A shared slug prefix without ?series= never joins the family.
+	if rows[3].label != "dispatch-note" || rows[3].count != 1 {
+		t.Errorf("prefix without a series must stay a plain row: %+v", rows[3])
+	}
 }
 
 // TestLandingTableSlugOnlyAndCollapsed asserts the served landing table
@@ -1033,9 +1039,9 @@ func TestCollapseSeries(t *testing.T) {
 // slug-series rendered as one "(N)" reference to the newest member.
 func TestLandingTableSlugOnlyAndCollapsed(t *testing.T) {
 	ts := newConfiguredServer(t, Config{Browse: true})
-	publish(t, ts, "?slug=dispatch-01", "<h1>1</h1>")
-	publish(t, ts, "?slug=dispatch-02", "<h1>2</h1>")
-	publish(t, ts, "?slug=dispatch-03", "<h1>3</h1>")
+	publish(t, ts, "?slug=dispatch-01&series=dispatch", "<h1>1</h1>")
+	publish(t, ts, "?slug=dispatch-02&series=dispatch", "<h1>2</h1>")
+	publish(t, ts, "?slug=dispatch-03&series=dispatch", "<h1>3</h1>")
 	publish(t, ts, "?slug=design-lab", "<h1>d</h1>")
 
 	_, body := get(t, ts.URL+"/")
@@ -1262,5 +1268,67 @@ func TestExplicitBaseURLWinsOverHost(t *testing.T) {
 	}
 	if strings.Contains(body, "attacker.example") {
 		t.Errorf("llms.txt reflected the request Host despite --base-url:\n%s", body)
+	}
+}
+
+// TestSeriesRequiresExplicitParam is the demiplane-7q9j design fix: the series
+// family is the explicit ?series= publish value, never inferred from slug text.
+// Two adjacent dais-* names with no ?series= render no prev/next row.
+func TestSeriesRequiresExplicitParam(t *testing.T) {
+	ts := newTestServer(t, "")
+	publish(t, ts, "?slug=dais-and-apex-mentor-brief&render=md", "# Brief\n\nbody")
+	u := publish(t, ts, "?slug=dais-and-apex-story-handoff&render=md", "# Handoff\n\nbody")
+	_, body := get(t, u)
+	page := string(body)
+	if strings.Contains(page, `class="prev"`) || strings.Contains(page, `class="next"`) {
+		t.Errorf("shared slug words must not create a series without ?series=:\n%s", page)
+	}
+}
+
+// TestSeriesParamGroupsPrevNext: two artifacts published with the same ?series=
+// value render prev/next between them, and the value rides the /list JSON.
+func TestSeriesParamGroupsPrevNext(t *testing.T) {
+	ts := newTestServer(t, "")
+	publish(t, ts, "?slug=lesson-a&render=md&series=course", "# A\n\nbody")
+	u := publish(t, ts, "?slug=lesson-b&render=md&series=course", "# B\n\nbody")
+	_, body := get(t, u)
+	page := string(body)
+	if !strings.Contains(page, `class="prev"`) || !strings.Contains(page, "lesson-a") {
+		t.Errorf("same ?series= should link prev to lesson-a:\n%s", page)
+	}
+	if !strings.Contains(page, "2 of 2") {
+		t.Errorf("series position missing:\n%s", page)
+	}
+	// Slug text no longer matters: a same-prefix slug outside the series stays out.
+	publish(t, ts, "?slug=lesson-c&render=md", "# C\n\nbody")
+	u2 := publish(t, ts, "?slug=lesson-d&render=md&series=course", "# D\n\nbody")
+	_, body2 := get(t, u2)
+	if strings.Contains(string(body2), "lesson-c") {
+		t.Errorf("series must include only ?series= members, lesson-c leaked in:\n%s", body2)
+	}
+	// The stored series value is visible in /list JSON.
+	_, lj := get(t, ts.URL+"/list")
+	if !strings.Contains(string(lj), `"series":"course"`) {
+		t.Errorf("/list JSON missing the series value:\n%s", lj)
+	}
+}
+
+// TestSeriesParamValidation: a malformed ?series= is a 400, and ?private
+// cannot join a public series (private artifacts are never listed or linked).
+func TestSeriesParamValidation(t *testing.T) {
+	ts := newTestServer(t, "")
+	for _, q := range []string{
+		"?slug=x1&series=bad%20value",
+		"?slug=x2&series=" + strings.Repeat("y", 200),
+		"?private=true&series=course",
+	} {
+		resp, err := http.Post(ts.URL+"/publish"+q, "text/html", strings.NewReader("<p>x</p>"))
+		if err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("publish %s = %d, want 400", q, resp.StatusCode)
+		}
 	}
 }

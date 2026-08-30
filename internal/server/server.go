@@ -372,6 +372,24 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Series membership is EXPLICIT: only artifacts published with the same
+	// ?series= value form a family (colophon prev/next, gallery grouping, the
+	// landing fold). Slug text never creates one — the earlier prefix inference
+	// grouped unrelated documents whenever two slugs shared a first word.
+	series := q.Get("series")
+	if series != "" {
+		if err := store.ValidateSeries(series); err != nil {
+			http.Error(w, "?series: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		// A private artifact is never listed or linked, so it cannot join a
+		// public series; reject the combination instead of silently dropping it.
+		if private {
+			http.Error(w, "?series cannot be combined with ?private — a private artifact is never listed or linked", http.StatusBadRequest)
+			return
+		}
+	}
+
 	// The password must not travel in the URL (logged surface). Reject it loudly
 	// rather than silently accepting the leak-prone form.
 	if q.Has("password") {
@@ -459,16 +477,15 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		// document's own byte length for "size" (that length IS the stored artifact
 		// size), so we only supply the publish time, the same-family siblings for
 		// series prev/next, and the base URLs. Siblings are the already-published,
-		// non-private artifacts sharing this slug's prefix family (the gallery's
-		// grouping); a named-slug requirement keeps auto-generated capability slugs
-		// out of accidental families. A List error is non-fatal — the colophon just
-		// shows the meta row with no series nav.
+		// non-private artifacts carrying the same explicit ?series= value; a
+		// named-slug requirement keeps auto-generated capability slugs out of the
+		// nav (a generated slug is not a stable link target). A List error is
+		// non-fatal — the colophon just shows the meta row with no series nav.
 		var siblings []string
-		if named != "" {
+		if series != "" && named != "" {
 			if arts, lerr := s.store.List(store.DefaultOwner); lerr == nil {
-				grp := slugGroup(named)
 				for _, a := range arts {
-					if a.Slug != named && slugGroup(a.Slug) == grp {
+					if a.Slug != named && a.Series == series {
 						siblings = append(siblings, a.Slug)
 					}
 				}
@@ -500,6 +517,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		Private:  private,
 		Password: r.Header.Get(PasswordHeader),
 		TTL:      ttl,
+		Series:   series,
 	}
 	art, err := s.store.Put(opts, src)
 	if err != nil {
@@ -527,6 +545,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 			"private":      art.Private,
 			"password":     art.HasPassword(),
 			"expires_at":   rfc3339OrEmpty(art.ExpiresAt),
+			"series":       art.Series,
 		})
 		return
 	}
@@ -667,6 +686,7 @@ type listItem struct {
 	Private     bool   `json:"private"`
 	Password    bool   `json:"password"`
 	ExpiresAt   string `json:"expires_at,omitempty"`
+	Series      string `json:"series,omitempty"`
 }
 
 // handleList returns the caller's artifacts as JSON, newest first. In v1 the
@@ -692,6 +712,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 			Private:     a.Private,
 			Password:    a.HasPassword(),
 			ExpiresAt:   rfc3339OrEmpty(a.ExpiresAt),
+			Series:      a.Series,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"artifacts": items, "count": len(items)})
@@ -813,10 +834,10 @@ const landingTableCap = 8
 
 // landingRow is one row of the landing "Published" table after series collapse.
 // A single-member family renders as its own slug; a family of two or more folds
-// into one reference (label = the shared prefix, count = the size, slug = the
+// into one reference (label = the series name, count = the size, slug = the
 // newest member the row links to).
 type landingRow struct {
-	label   string    // display text: full slug (singleton) or prefix (series)
+	label   string    // display text: full slug (singleton) or series name
 	slug    string    // link target: the row's own slug, or the newest member's
 	count   int       // family size (1 for a singleton)
 	created time.Time // newest member's publish time
@@ -824,12 +845,13 @@ type landingRow struct {
 }
 
 // collapseSeries folds a newest-first artifact slice into landing rows, grouping
-// by slug prefix (slugGroup: text before the first hyphen). A family of two or
-// more collapses to a single reference linking to its newest member; a lone
-// artifact stays a plain row (no forced "(1)"). Row order follows first-sighting,
-// which — because the input is newest-first — orders families by their newest
-// member. This is the landing analogue of the gallery's client-side prefix
-// grouping (demiplane-0pw).
+// by the explicit series value set at publish (?series=). An artifact with no
+// series always stays a plain row; a declared family of two or more collapses to
+// a single reference linking to its newest member. Row order follows
+// first-sighting, which — because the input is newest-first — orders families by
+// their newest member. This is the landing analogue of the gallery's client-side
+// series grouping (slug-prefix inference is gone: one shared token was never a
+// family signal).
 func collapseSeries(pub []store.Artifact) []landingRow {
 	type acc struct {
 		idx     int // position in rows, to update in place
@@ -838,12 +860,11 @@ func collapseSeries(pub []store.Artifact) []landingRow {
 	seen := make(map[string]*acc)
 	var rows []landingRow
 	for _, a := range pub {
-		key := slugGroup(a.Slug)
-		if g, ok := seen[key]; ok {
+		if g, ok := seen[a.Series]; a.Series != "" && ok {
 			// A second (or later) member promotes the row to a series: relabel to
-			// the shared prefix, bump the count. The link/date stay on the newest
+			// the series name, bump the count. The link/date stay on the newest
 			// member (the first one seen), and a mixed family drops the lock glyph.
-			rows[g.idx].label = key
+			rows[g.idx].label = a.Series
 			rows[g.idx].count = g.members + 1
 			rows[g.idx].locked = false
 			g.members++
@@ -856,7 +877,9 @@ func collapseSeries(pub []store.Artifact) []landingRow {
 			created: a.CreatedAt,
 			locked:  a.HasPassword(),
 		})
-		seen[key] = &acc{idx: len(rows) - 1, members: 1}
+		if a.Series != "" {
+			seen[a.Series] = &acc{idx: len(rows) - 1, members: 1}
+		}
 	}
 	return rows
 }

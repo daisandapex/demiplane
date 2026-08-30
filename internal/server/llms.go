@@ -51,6 +51,9 @@ Query parameters (all optional):
   ?private=true   Mint a high-entropy, unguessable capability slug. Cannot be
                   combined with ?slug= (a named slug is guessable).
   ?ttl=<dur>      Auto-expire: 30m, 2h, 7d (days), or any Go duration.
+  ?series=<name>  Explicit series family: artifacts published with the same value
+                  link prev/next in their rendered colophon and group together in
+                  the gallery and landing. Slug text alone never creates a series.
   ?render=md      Render a markdown body to a styled HTML page on publish, using
                   the instance's house style: a sticky title header (the doc's
                   first H1), a vanity footer, and — on the default palette —
@@ -158,6 +161,7 @@ func (s *Server) handleHelp(w http.ResponseWriter, r *http.Request) {
 					{"slug", "query", false, "Named, stable slug; overwrites in place. Omit for an auto friendly slug."},
 					{"private", "query", false, "true → mint a high-entropy capability slug. Incompatible with slug."},
 					{"ttl", "query", false, "Auto-expire duration: 30m, 2h, 7d, or any Go duration."},
+					{"series", "query", false, "Explicit series family; same-value artifacts link prev/next and group together."},
 					{"render", "query", false, "md → render a markdown body to HTML on publish."},
 					{"filename", "query", false, "Content-type hint for raw-body uploads."},
 					{"X-Demiplane-Password", "header", false, "Set a view password (never via URL)."},

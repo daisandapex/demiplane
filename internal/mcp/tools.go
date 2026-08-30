@@ -45,7 +45,8 @@ func toolDefs() []tool {
 				"`content` (the text/HTML to publish) or `path` (a local file to read). Optional: " +
 				"`slug` for a stable name that overwrites in place, `private` for an unguessable " +
 				"capability URL, `ttl` to auto-expire (e.g. 30m, 24h, 7d), `render`=md to render " +
-				"markdown to HTML, `filename` as a content-type hint, `password` to gate the view.",
+				"markdown to HTML, `filename` as a content-type hint, `password` to gate the view, " +
+				"`series` to group artifacts into an explicit prev/next family.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -54,6 +55,7 @@ func toolDefs() []tool {
 					"slug":     map[string]any{"type": "string", "description": "stable name that overwrites in place; omit for a generated slug"},
 					"private":  map[string]any{"type": "boolean", "description": "mint an unguessable capability URL instead of a guessable name"},
 					"ttl":      map[string]any{"type": "string", "description": "auto-expire after a duration, e.g. 30m, 2h, 7d"},
+					"series":   map[string]any{"type": "string", "description": "explicit series family for colophon prev/next and gallery grouping"},
 					"render":   map[string]any{"type": "string", "enum": []string{"md", "markdown"}, "description": "render markdown source to an HTML page"},
 					"filename": map[string]any{"type": "string", "description": "filename hint used to pick the content-type"},
 					"password": map[string]any{"type": "string", "description": "require this password to view (sent as a header, never the URL)"},
@@ -114,6 +116,7 @@ type publishArgs struct {
 	Slug     string  `json:"slug"`
 	Private  bool    `json:"private"`
 	TTL      string  `json:"ttl"`
+	Series   string  `json:"series"`
 	Render   string  `json:"render"`
 	Filename string  `json:"filename"`
 	Password string  `json:"password"`
@@ -166,6 +169,7 @@ func callPublish(ctx context.Context, c *Client, raw json.RawMessage) (*toolResu
 		Slug:     a.Slug,
 		Private:  a.Private,
 		TTL:      a.TTL,
+		Series:   a.Series,
 		Render:   a.Render,
 		Filename: filename,
 		Password: a.Password,
