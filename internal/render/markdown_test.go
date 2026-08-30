@@ -888,3 +888,83 @@ func TestMarkdownIntrawordUnderscoreStaysLiteral(t *testing.T) {
 		t.Errorf("**a_b** should render <strong>a_b</strong>:\n%s", out)
 	}
 }
+
+// TestMarkdownListLazyContinuation: a hard-wrapped list item (next line has no
+// marker) joins the current item's content with a space instead of falling out
+// of the list as an orphan paragraph. Authors wrap at 72-80 columns, so this is
+// the common shape of nearly every published list.
+func TestMarkdownListLazyContinuation(t *testing.T) {
+	out := render("- a two-line wrapped bullet\n  that continues here\n- second item")
+	if strings.Count(out, "<li>") != 2 {
+		t.Errorf("want 2 <li>, got:\n%s", out)
+	}
+	if !strings.Contains(out, "<li>a two-line wrapped bullet that continues here</li>") {
+		t.Errorf("wrapped bullet did not join into one <li>:\n%s", out)
+	}
+	if strings.Contains(out, "<p>that continues here</p>") {
+		t.Errorf("continuation line leaked out as an orphan paragraph:\n%s", out)
+	}
+	// Flush-left lazy continuation joins too (CommonMark lazy continuation).
+	lazy := render("- wrapped\nlazily flush left\n- next")
+	if !strings.Contains(lazy, "<li>wrapped lazily flush left</li>") {
+		t.Errorf("flush-left lazy continuation not joined:\n%s", lazy)
+	}
+}
+
+// TestMarkdownListLooseItemParagraphs: a blank line followed by an indented
+// non-marker line opens a second paragraph inside the same <li>.
+func TestMarkdownListLooseItemParagraphs(t *testing.T) {
+	out := render("- a\n\n  b\n- c")
+	if !strings.Contains(out, "<li><p>a</p><p>b</p></li>") {
+		t.Errorf("loose item did not render two paragraphs in one <li>:\n%s", out)
+	}
+	if strings.Count(out, "<li>") != 2 {
+		t.Errorf("want 2 <li> (loose item + sibling), got:\n%s", out)
+	}
+	if strings.Count(out, "<ul>") != 1 {
+		t.Errorf("the loose continuation must not split the list, got:\n%s", out)
+	}
+}
+
+// TestMarkdownListClosesOnFlushParagraph: a blank line followed by a flush-left
+// paragraph still ends the list.
+func TestMarkdownListClosesOnFlushParagraph(t *testing.T) {
+	out := render("- one\n- two\n\nplain paragraph after")
+	if !strings.Contains(out, "<p>plain paragraph after</p>") {
+		t.Errorf("trailing paragraph lost:\n%s", out)
+	}
+	if strings.Count(out, "<li>") != 2 {
+		t.Errorf("want 2 <li>, got:\n%s", out)
+	}
+	pi := strings.Index(out, "<p>plain paragraph after</p>")
+	ui := strings.Index(out, "</ul>")
+	if ui < 0 || pi < ui {
+		t.Errorf("list should close before the trailing paragraph:\n%s", out)
+	}
+}
+
+// TestMarkdownListContinuationInNestedItem: a wrapped line inside a nested item
+// joins the nested item, and the tree stays balanced.
+func TestMarkdownListContinuationInNestedItem(t *testing.T) {
+	out := render("- parent\n  - child wraps\n    onto a second line\n- sibling")
+	if !strings.Contains(out, "<li>child wraps onto a second line</li>") {
+		t.Errorf("nested item continuation not joined:\n%s", out)
+	}
+	if strings.Count(out, "<li>") != strings.Count(out, "</li>") ||
+		strings.Count(out, "<ul>") != strings.Count(out, "</ul>") {
+		t.Errorf("unbalanced tags with nested continuation:\n%s", out)
+	}
+}
+
+// TestMarkdownListInterruptedByBlock: a heading, fence, hrule, or blockquote
+// directly after an item ends the list (those blocks interrupt a paragraph).
+func TestMarkdownListInterruptedByBlock(t *testing.T) {
+	out := render("- item\n## Head")
+	if !strings.Contains(out, "<li>item</li>") || !strings.Contains(out, `<h2 id="head">`) {
+		t.Errorf("heading after a list item should end the list:\n%s", out)
+	}
+	hr := render("- item\n---")
+	if !strings.Contains(hr, "<li>item</li>") || !strings.Contains(hr, "<hr>") {
+		t.Errorf("hrule after a list item should end the list:\n%s", hr)
+	}
+}

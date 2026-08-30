@@ -560,18 +560,34 @@ func isUnordered(s string) bool {
 	return strings.HasPrefix(s, "- ") || strings.HasPrefix(s, "* ") || strings.HasPrefix(s, "+ ")
 }
 
-// renderList consumes a contiguous run of list items starting at lines[start]
-// and renders it to nested <ul>/<ol> HTML, returning the index of the first line
-// past the list. A list run is the maximal block of consecutive non-blank lines
-// whose trimmed form is an ordered (`1. `) or unordered (`- `/`* `/`+ `) item; a
-// blank or non-item line ends it (matching the flat behavior it replaces).
+// interruptsParagraph reports whether a trimmed line is a block opener that (per
+// CommonMark) can interrupt a paragraph — and so ends lazy continuation instead
+// of joining the current item or quote.
+func interruptsParagraph(trimmed string) bool {
+	return reHeading.MatchString(trimmed) || reHRule.MatchString(trimmed) ||
+		strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "> ")
+}
+
+// renderList consumes a run of list items starting at lines[start] and renders
+// it to nested <ul>/<ol> HTML, returning the index of the first line past the
+// list. A run is ended by a blank line NOT followed by an indented continuation
+// paragraph, or by a block opener (heading, hrule, fence, blockquote).
+//
+// Continuation (CommonMark lazy continuation): a non-blank line that is not a
+// list marker and not a block opener joins the current item's content with a
+// space — regardless of indent, so hard-wrapped items (authors wrap at 72-80
+// columns) render as one <li>. A blank line followed by a line indented past the
+// current item's marker opens a further paragraph inside the same <li> (a loose
+// item renders every one of its paragraphs in <p>); a blank line followed by
+// anything else ends the list.
 //
 // Nesting is driven by leading indentation (the house convention is two spaces
 // per level, but any consistent widening nests and any narrowing closes, so
 // deeper or ragged indentation still yields a valid tree). Ordered and unordered
 // items mix freely: a change of marker kind at the same indent closes the current
 // list and opens the other. Item text runs through inline(), which HTML-escapes
-// before formatting, so the escape-first XSS posture is unchanged.
+// before formatting, so the escape-first XSS posture is unchanged. Fenced code
+// inside a list item is a known gap (out of scope for this fix).
 //
 // Invariant: each open list frame always has exactly one <li> whose </li> is
 // deferred until a sibling replaces it, a child list closes above it, or the run
@@ -584,6 +600,10 @@ func renderList(lines []string, start int) (string, int) {
 	}
 	var b strings.Builder
 	var stack []frame
+	// The current (innermost open) item's text: para accumulates the paragraph
+	// being read, paras holds any completed earlier paragraphs (loose item).
+	var para []string
+	var paras [][]string
 
 	openTag := func(ordered bool) {
 		if ordered {
@@ -599,16 +619,57 @@ func renderList(lines []string, start int) (string, int) {
 			b.WriteString("</ul>\n")
 		}
 	}
+	// flushItem emits the current item's buffered content: a tight single
+	// paragraph renders bare, a loose item wraps each paragraph in <p>.
+	flushItem := func() {
+		if para == nil && paras == nil {
+			return
+		}
+		if len(paras) == 0 {
+			b.WriteString(inline(strings.Join(para, " ")))
+		} else {
+			for _, p := range append(paras, para) {
+				b.WriteString("<p>" + inline(strings.Join(p, " ")) + "</p>")
+			}
+		}
+		para, paras = nil, nil
+	}
 
 	i := start
 	for i < len(lines) {
 		raw := lines[i]
 		trimmed := strings.TrimSpace(raw)
+
+		if trimmed == "" {
+			// Blank line: a following line indented past the current item's marker
+			// (and not itself a marker) continues the item as a new paragraph;
+			// anything else ends the list.
+			if j := i + 1; j < len(lines) && len(stack) > 0 {
+				nt := strings.TrimSpace(lines[j])
+				nindent := len(lines[j]) - len(strings.TrimLeft(lines[j], " \t"))
+				if nt != "" && !isUnordered(nt) && !reOrdered.MatchString(nt) &&
+					!interruptsParagraph(nt) && nindent > stack[len(stack)-1].indent {
+					paras = append(paras, para)
+					para = nil
+					i++
+					continue
+				}
+			}
+			break
+		}
+
 		ordered := reOrdered.MatchString(trimmed)
 		unordered := isUnordered(trimmed)
 		if !ordered && !unordered {
-			break
+			if len(stack) == 0 || interruptsParagraph(trimmed) {
+				break
+			}
+			// Lazy continuation: join the current item's paragraph.
+			para = append(para, trimmed)
+			i++
+			continue
 		}
+
 		indent := len(raw) - len(strings.TrimLeft(raw, " \t"))
 		var content string
 		if ordered {
@@ -616,6 +677,9 @@ func renderList(lines []string, start int) (string, int) {
 		} else {
 			content = trimmed[2:]
 		}
+
+		// A new marker ends the current item's content region.
+		flushItem()
 
 		// Ascend: close every level deeper than this item's indent. Each pop closes
 		// that level's open <li> and its list tag; the parent <li> it lived inside is
@@ -644,9 +708,10 @@ func renderList(lines []string, start int) (string, int) {
 		}
 
 		b.WriteString("<li>")
-		b.WriteString(inline(content))
+		para = append(para, content)
 		i++
 	}
+	flushItem()
 
 	// Unwind any levels left open at the end of the run.
 	for len(stack) > 0 {
