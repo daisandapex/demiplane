@@ -76,8 +76,8 @@ type Options struct {
 	// Published is the artifact's publish timestamp, shown (date only) in the
 	// colophon meta row. It matches the stored CreatedAt (set moments later at Put).
 	Published time.Time
-	// Siblings lists the slugs of already-published artifacts in the same slug
-	// family (shared prefix before the first hyphen), from which series prev/next is
+	// Siblings lists the slugs of already-published artifacts in the same
+	// explicit series (the ?series= publish value), from which prev/next is
 	// computed. It excludes the current artifact, which is not yet stored at render
 	// time. A family of fewer than two total members renders no nav row (a singleton
 	// shows the meta row alone).

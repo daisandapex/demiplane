@@ -98,6 +98,7 @@ type PublishParams struct {
 	Slug     string
 	Private  bool
 	TTL      string
+	Series   string
 	Render   string
 	Filename string
 	Password string
@@ -127,6 +128,9 @@ func (c *Client) Publish(ctx context.Context, p PublishParams) (*PublishResult, 
 	}
 	if p.TTL != "" {
 		q.Set("ttl", p.TTL)
+	}
+	if p.Series != "" {
+		q.Set("series", p.Series)
 	}
 	if p.Render != "" {
 		q.Set("render", p.Render)

@@ -179,6 +179,10 @@ func (s *Server) handleHelpPage(w http.ResponseWriter, r *http.Request) {
 		`named <code>?slug=</code>). Add a view password with the ` +
 		`<code>X-Demiplane-Password</code> header (never the URL) to gate reads over ` +
 		`HTTP Basic.</li>` +
+		`<li><strong>Series</strong>: <code>?series=course</code> groups artifacts into ` +
+		`an explicit family — rendered pages in the same series link prev/next in ` +
+		`their colophon, and the gallery and landing group them. Slug text alone ` +
+		`never creates a series.</li>` +
 		`</ul>`)
 
 	// --- Learn more ---

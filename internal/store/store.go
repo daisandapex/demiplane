@@ -45,6 +45,7 @@ type Artifact struct {
 	Private      bool
 	PasswordHash string    // "" = no view password
 	ExpiresAt    time.Time // zero = never expires
+	Series       string    // explicit ?series= family; "" = no series
 }
 
 // HasPassword reports whether the artifact is gated by a view password.
@@ -115,6 +116,9 @@ CREATE TABLE IF NOT EXISTS artifacts (
 		{"private", "ALTER TABLE artifacts ADD COLUMN private INTEGER NOT NULL DEFAULT 0"},
 		{"password_hash", "ALTER TABLE artifacts ADD COLUMN password_hash TEXT NOT NULL DEFAULT ''"},
 		{"expires_at", "ALTER TABLE artifacts ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0"},
+		// Explicit series family (?series= at publish), replacing slug-prefix
+		// inference (render-fidelity item 4).
+		{"series", "ALTER TABLE artifacts ADD COLUMN series TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, col := range added {
 		if err := s.addColumnIfMissing(col.name, col.ddl); err != nil {
@@ -170,6 +174,7 @@ type PutOptions struct {
 	Private  bool          // mark private + (when auto-slugging) use a high-entropy capability slug
 	Password string        // plaintext view password; "" = no gate. Hashed before storage.
 	TTL      time.Duration // 0 = never expires; >0 sets expires_at = now+TTL
+	Series   string        // explicit series family (validated upstream); "" = none
 }
 
 // Put stores r under a slug and records its metadata, returning the artifact.
@@ -222,6 +227,7 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 		Private:      opts.Private,
 		PasswordHash: passwordHash,
 		ExpiresAt:    expiresAt,
+		Series:       opts.Series,
 	}
 	if err := s.upsertMeta(art); err != nil {
 		// Best-effort rollback of the blob we just wrote on a fresh slug; for an
@@ -405,8 +411,8 @@ func (s *Store) writeBlob(slug string, r io.Reader) (sniffed string, size int64,
 // are replaced with the new publish's values (re-publishing resets them).
 func (s *Store) upsertMeta(a Artifact) error {
 	const q = `
-INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(slug) DO UPDATE SET
     filename      = excluded.filename,
     content_type  = excluded.content_type,
@@ -419,10 +425,11 @@ ON CONFLICT(slug) DO UPDATE SET
     -- latched; changing privacy requires an explicit delete + re-publish.
     private       = MAX(artifacts.private, excluded.private),
     password_hash = excluded.password_hash,
-    expires_at    = excluded.expires_at;`
+    expires_at    = excluded.expires_at,
+    series        = excluded.series;`
 	_, err := s.db.Exec(q,
 		a.Slug, a.Filename, a.ContentType, a.Size, a.CreatedAt.Unix(), a.Owner,
-		boolToInt(a.Private), a.PasswordHash, unixOrZero(a.ExpiresAt),
+		boolToInt(a.Private), a.PasswordHash, unixOrZero(a.ExpiresAt), a.Series,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert metadata: %w", err)
@@ -460,10 +467,10 @@ func (s *Store) Get(slug string) (Artifact, *os.File, error) {
 		private int
 	)
 	err := s.db.QueryRow(
-		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at
+		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series
 		   FROM artifacts WHERE slug = ?`,
 		slug,
-	).Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires)
+	).Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Artifact{}, nil, ErrNotFound
 	}
@@ -521,7 +528,7 @@ func (s *Store) Delete(slug string) error {
 func (s *Store) List(owner string) ([]Artifact, error) {
 	now := time.Now().Unix()
 	rows, err := s.db.Query(
-		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at
+		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series
 		   FROM artifacts
 		  WHERE owner = ? AND private = 0 AND (expires_at = 0 OR expires_at > ?)
 		  ORDER BY created_at DESC, slug ASC`,
@@ -540,7 +547,7 @@ func (s *Store) List(owner string) ([]Artifact, error) {
 			expires int64
 			private int
 		)
-		if err := rows.Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires); err != nil {
+		if err := rows.Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series); err != nil {
 			return nil, fmt.Errorf("scan artifact: %w", err)
 		}
 		a.CreatedAt = time.Unix(created, 0).UTC()

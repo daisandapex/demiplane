@@ -151,6 +151,20 @@ below. The document text column is capped near a 68ch measure (`43rem`).
   Ink is near-black, not pure `#000`; the operator's `--css` override opts out
   (their sheet owns print).
 
+## Series grouping
+
+A series — the prev/next colophon nav on rendered documents, the gallery's
+"Group by series" view, and the landing table's folded rows — is **explicit**:
+artifacts belong to the same family only when published with the same
+`?series=` value (the slug alphabet: letters, digits, `.`, `_`, `-`). Slug
+text never creates a family. The retired rule (family = text before the slug's
+first hyphen) grouped unrelated documents the moment two slugs shared a first
+word, which on an instance with prose-like slugs is nearly always; inference
+from names is the same class of mistake at any pattern width, so the signal is
+an author declaration, not a guess. Ordering within a series is lexical by
+slug (zero-padded numeric suffixes sort correctly). Decided 2026-08-30
+(render-fidelity brief, item 4, option b).
+
 ## Typographic blockquotes
 
 Blockquotes take a purely typographic treatment — a left indent set in
