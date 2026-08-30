@@ -837,3 +837,54 @@ func TestScrollPaddingPresent(t *testing.T) {
 		t.Errorf("stylesheet missing scroll-padding-top for the sticky masthead:\n%s", out)
 	}
 }
+
+// TestMarkdownCodeSpanProtectedFromEmphasis pins the code-span/emphasis ordering
+// fix: a code span's content is lifted out before the emphasis passes run, so an
+// underscore or asterisk inside inline code is never rewritten into <em>/<strong>
+// (`project_lms_pillars.md` used to render <code>project<em>lms</em>pillars.md</code>).
+func TestMarkdownCodeSpanProtectedFromEmphasis(t *testing.T) {
+	cases := map[string]string{
+		"`a_b_c`":                  "<code>a_b_c</code>",
+		"`project_lms_pillars.md`": "<code>project_lms_pillars.md</code>",
+		"`*not em*`":               "<code>*not em*</code>",
+		"`**not bold**`":           "<code>**not bold**</code>",
+	}
+	for src, want := range cases {
+		out := render(src)
+		if !strings.Contains(out, want) {
+			t.Errorf("render(%q) missing %q\ngot: %s", src, want, out)
+		}
+		if strings.Contains(out, "<em>") || strings.Contains(out, "<strong>") {
+			t.Errorf("render(%q) leaked emphasis into a code span:\n%s", src, out)
+		}
+	}
+	// Emphasis outside the code span still works alongside a protected span.
+	both := render("use `a_b` and _em_ words")
+	if !strings.Contains(both, "<code>a_b</code>") || !strings.Contains(both, "<em>em</em>") {
+		t.Errorf("code span and emphasis should coexist:\n%s", both)
+	}
+}
+
+// TestMarkdownIntrawordUnderscoreStaysLiteral: per CommonMark, `_` only opens
+// emphasis when it is not preceded by an alphanumeric, so snake_case identifiers
+// in plain prose stay literal.
+func TestMarkdownIntrawordUnderscoreStaysLiteral(t *testing.T) {
+	for _, src := range []string{
+		"foo_bar_baz in prose",
+		"the file project_lms_pillars stays put",
+		"snake_case_word",
+	} {
+		out := render(src)
+		if strings.Contains(out, "<em>") {
+			t.Errorf("intraword underscore opened emphasis in %q:\n%s", src, out)
+		}
+	}
+	// Real underscore emphasis still renders.
+	if out := render("_em_"); !strings.Contains(out, "<em>em</em>") {
+		t.Errorf("_em_ should still render emphasis:\n%s", out)
+	}
+	// Bold containing an intraword underscore keeps the underscore literal.
+	if out := render("**a_b**"); !strings.Contains(out, "<strong>a_b</strong>") {
+		t.Errorf("**a_b** should render <strong>a_b</strong>:\n%s", out)
+	}
+}

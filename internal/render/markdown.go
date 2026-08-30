@@ -112,11 +112,16 @@ var (
 	reTag = regexp.MustCompile(`<[^>]*>`)
 
 	// Inline patterns, applied to already-escaped text.
-	reCode    = regexp.MustCompile("`([^`]+)`")
-	reLink    = regexp.MustCompile(`\[([^\]]+)\]\(([^)\s]+)\)`)
-	reBold    = regexp.MustCompile(`\*\*([^*]+)\*\*`)
-	reItalic  = regexp.MustCompile(`\*([^*]+)\*`)
-	reItalicU = regexp.MustCompile(`_([^_]+)_`)
+	reCode   = regexp.MustCompile("`([^`]+)`")
+	reLink   = regexp.MustCompile(`\[([^\]]+)\]\(([^)\s]+)\)`)
+	reBold   = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+	reItalic = regexp.MustCompile(`\*([^*]+)\*`)
+	// Underscore emphasis requires a word boundary on both sides (CommonMark
+	// 6.2: `_` is left-flanking only when not preceded by an alphanumeric), so
+	// intraword underscores — snake_case identifiers in prose — stay literal.
+	// `_` is itself a word character to RE2, so `\b_` means "preceded by a
+	// non-word character or the start", and `_\b` the mirror on the right.
+	reItalicU = regexp.MustCompile(`\b_([^_]+)_\b`)
 )
 
 // Markdown renders src as a complete, styled HTML document (used for the
@@ -697,15 +702,30 @@ func renderTable(header []string, rows [][]string) string {
 	return b.String()
 }
 
+// codeSentinel frames a code-span placeholder. NUL cannot survive
+// html.EscapeString'd source text, so a framed index is unambiguous — the same
+// placeholder shape highlight.go uses for escaping.
+const codeSentinel = "\x00"
+
 // inline escapes text and applies inline formatting. Escaping happens first so
-// raw HTML in the source is rendered as text, never executed.
+// raw HTML in the source is rendered as text, never executed. Code spans are
+// then lifted into placeholders BEFORE the emphasis passes run, so `_`/`*`
+// inside inline code (most snake_case identifiers) are never rewritten into
+// <em>/<strong>; the finished spans are restored last.
 func inline(s string) string {
 	s = html.EscapeString(s)
-	s = reCode.ReplaceAllString(s, "<code>$1</code>")
+	var spans []string
+	s = reCode.ReplaceAllStringFunc(s, func(m string) string {
+		spans = append(spans, "<code>"+reCode.FindStringSubmatch(m)[1]+"</code>")
+		return codeSentinel + strconv.Itoa(len(spans)-1) + codeSentinel
+	})
 	s = reLink.ReplaceAllStringFunc(s, renderLink)
 	s = reBold.ReplaceAllString(s, "<strong>$1</strong>")
 	s = reItalic.ReplaceAllString(s, "<em>$1</em>")
 	s = reItalicU.ReplaceAllString(s, "<em>$1</em>")
+	for i, span := range spans {
+		s = strings.Replace(s, codeSentinel+strconv.Itoa(i)+codeSentinel, span, 1)
+	}
 	return s
 }
 
