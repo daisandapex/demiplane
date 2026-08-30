@@ -185,19 +185,22 @@ el.textContent=utc+' · '+loc;
 })();</script>
 `
 
-// metaHeadCSS styles the meta-header: a quiet tabular timestamp, then a clean
-// definition-list of labeled fields (accent kicker labels, body-ink values).
+// metaHeadCSS styles the meta-header as the document byline: a letterspaced
+// small sans over a closing hairline (the approved design's .meta grammar),
+// then a definition-list of muted labels and body-ink values. The accent stays
+// out of it (links only).
 // Token references carry literal fallbacks so the block still reads under a
 // --css override that ships no tokens.
 const metaHeadCSS = `
-.metahead{margin:.2rem 0 2.4rem}
+.metahead{margin:.2rem 0 1.75rem;border-bottom:1px solid var(--line,oklch(0.910 0.013 87));
+  padding-bottom:1.25rem}
 .metahead .metadate{margin-bottom:1rem}
-.metahead .tstamp{font-family:var(--sans);font-size:.82rem;font-weight:600;letter-spacing:.03em;
-  color:var(--muted,oklch(0.495 0.022 62));font-variant-numeric:tabular-nums}
+.metahead .tstamp{font:600 .8125rem/1.5 var(--sans);text-transform:uppercase;letter-spacing:.08em;
+  color:var(--muted,oklch(0.462 0.011 78));font-variant-numeric:tabular-nums}
 .metahead .metafields{margin:0;display:grid;gap:.4rem}
 .metahead .metarow{display:flex;gap:.85rem;margin:0;align-items:baseline}
 .metahead .metarow dt{flex:0 0 auto;min-width:7.5rem;font-family:var(--sans);font-size:.7rem;
-  font-weight:700;letter-spacing:.13em;text-transform:uppercase;line-height:1.5;
-  color:var(--accent,oklch(0.555 0.162 47))}
-.metahead .metarow dd{margin:0;color:var(--ink,oklch(0.265 0.020 60))}
+  font-weight:600;letter-spacing:.08em;text-transform:uppercase;line-height:1.5;
+  color:var(--muted,oklch(0.462 0.011 78))}
+.metahead .metarow dd{margin:0;color:var(--ink,oklch(0.237 0.009 75))}
 `

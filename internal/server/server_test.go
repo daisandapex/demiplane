@@ -570,7 +570,7 @@ func TestMarkdownRenderOnPublish(t *testing.T) {
 	}
 	// The rendered page carries the house style by default (demiplane-7fp), not
 	// the old bare system-sans stylesheet.
-	if !strings.Contains(string(body), "--accent:oklch(0.485") || !strings.Contains(string(body), "var(--serif)") {
+	if !strings.Contains(string(body), "--accent:oklch(0.445") || !strings.Contains(string(body), "var(--serif)") {
 		t.Errorf("rendered page missing house-style markers:\n%s", body)
 	}
 	// The print sheet forces light hex values inside @media print; scope the
@@ -581,6 +581,20 @@ func TestMarkdownRenderOnPublish(t *testing.T) {
 	}
 	if strings.Contains(screen, "color:#1a1a1a") {
 		t.Errorf("rendered page still uses the old bare stylesheet:\n%s", body)
+	}
+
+	// The served page carries the full light/dark contract: light on bare
+	// :root, dark under the guarded prefers-color-scheme media query, and dark
+	// again under the explicit data-theme override.
+	for _, block := range []string{
+		":root{",
+		`:root:not([data-theme="light"]){`,
+		`:root[data-theme="dark"]{`,
+		"@media (prefers-color-scheme: dark)",
+	} {
+		if !strings.Contains(string(body), block) {
+			t.Errorf("served page missing theme block %q", block)
+		}
 	}
 
 	// Without ?render, markdown is stored verbatim.
@@ -596,7 +610,7 @@ func TestRenderThemeFlag(t *testing.T) {
 	ts := newConfiguredServer(t, Config{RenderTheme: "dark"})
 	url := publish(t, ts, "?slug=doc&render=md", "# Hello")
 	_, body := get(t, url)
-	if !strings.Contains(string(body), "--bg:oklch(0.225") {
+	if !strings.Contains(string(body), "--bg:oklch(0.228") {
 		t.Errorf("dark theme not applied to rendered page:\n%s", body)
 	}
 }
@@ -685,10 +699,10 @@ func TestChromeHonorsTheme(t *testing.T) {
 
 	for _, path := range []string{"/", "/docs", "/docs/readme"} {
 		_, dbody := get(t, dark.URL+path)
-		if !strings.Contains(string(dbody), "--bg:oklch(0.225") {
+		if !strings.Contains(string(dbody), "--bg:oklch(0.228") {
 			t.Errorf("dark chrome at %s missing dark background token:\n%.300s", path, dbody)
 		}
-		if strings.Contains(string(dbody), "--bg:oklch(0.972") {
+		if strings.Contains(string(dbody), "--bg:oklch(0.982") {
 			t.Errorf("dark chrome at %s leaked the light background token", path)
 		}
 		// Chrome-only classes are still present (theme swaps colors, not structure).
@@ -697,7 +711,7 @@ func TestChromeHonorsTheme(t *testing.T) {
 		}
 
 		_, lbody := get(t, light.URL+path)
-		if !strings.Contains(string(lbody), "--bg:oklch(0.972") {
+		if !strings.Contains(string(lbody), "--bg:oklch(0.982") {
 			t.Errorf("default chrome at %s should be the light house style:\n%.300s", path, lbody)
 		}
 	}

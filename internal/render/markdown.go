@@ -156,17 +156,26 @@ func Markdown(src []byte, opts Options) []byte {
 
 	// Stylesheet: a --css override owns the look (toggle off); a pinned named
 	// theme (catppuccin/dracula/one-dark) fixes its single palette (toggle off,
-	// nothing to flip to); otherwise the masthead ships both token sets so the
-	// client light/dark toggle can flip instantly.
-	toggle := opts.CSS == "" && opts.Header && !theme.Pinned(opts.Theme)
+	// nothing to flip to); otherwise EVERY rendered document ships the
+	// three-block contract sheet (light on bare :root, dark under a guarded
+	// prefers-color-scheme media query, dark again under an explicit
+	// [data-theme="dark"]), so the OS preference and a stored choice work even
+	// on pages without the masthead toggle. An unknown theme name falls back to
+	// "" (the default light face of the contract).
+	themeName := opts.Theme
+	if themeName != "" && !theme.Valid(themeName) {
+		themeName = ""
+	}
+	contract := opts.CSS == "" && !theme.Pinned(themeName)
+	toggle := contract && opts.Header
 	var css string
 	switch {
 	case opts.CSS != "":
 		css = opts.CSS
-	case toggle:
+	case contract:
 		css = theme.ToggleCSS()
 	default:
-		css = theme.CSS(opts.Theme)
+		css = theme.CSS(themeName)
 	}
 	if opts.Header || opts.Footer {
 		css += docChromeCSS
@@ -188,9 +197,9 @@ func Markdown(src []byte, opts Options) []byte {
 	}
 
 	var b strings.Builder
-	b.WriteString(docHead(css, titleText, opts.Theme, toggle))
+	b.WriteString(docHead(css, titleText, themeName, contract, toggle))
 	if opts.Header {
-		b.WriteString(masthead(title, opts.Theme, toggle))
+		b.WriteString(masthead(title, themeName, toggle))
 	}
 	b.WriteString("<main class=\"wrap\">\n")
 	b.WriteString(metaHTML)
@@ -416,19 +425,19 @@ func replyBox(slug, next string) string {
 // OKLCH fallbacks so it still renders under a --css override that ships no
 // tokens), matching the editorial chrome. No layout property is transitioned.
 const replyBoxCSS = `
-.dp-reply{margin:2.6rem 0 0;padding:1.3rem 1.4rem;border:1px solid var(--line,oklch(0.895 0.008 255));
-  border-radius:12px;background:var(--bg,oklch(0.972 0.004 250))}
+.dp-reply{margin:2.6rem 0 0;padding:1.3rem 1.4rem;border:1px solid var(--line,oklch(0.910 0.013 87));
+  border-radius:12px;background:var(--bg,oklch(0.982 0.004 91))}
 .dp-reply h2{margin:0 0 .7rem;font-family:var(--serif);font-size:1.15rem;font-weight:600;
-  letter-spacing:-.01em;border:none;padding:0;color:var(--ink,oklch(0.255 0.012 262))}
+  letter-spacing:-.01em;border:none;padding:0;color:var(--ink,oklch(0.237 0.009 75))}
 .dp-reply textarea{width:100%;min-height:7rem;font:inherit;padding:.7rem .8rem;box-sizing:border-box;
-  border:1px solid var(--line,oklch(0.895 0.008 255));border-radius:8px;
-  background:var(--bg,oklch(0.972 0.004 250));color:var(--ink,oklch(0.255 0.012 262));resize:vertical}
-.dp-reply textarea:focus{outline:2px solid var(--accent,oklch(0.485 0.135 27));outline-offset:1px;border-color:transparent}
+  border:1px solid var(--line,oklch(0.910 0.013 87));border-radius:8px;
+  background:var(--bg,oklch(0.982 0.004 91));color:var(--ink,oklch(0.237 0.009 75));resize:vertical}
+.dp-reply textarea:focus{outline:2px solid var(--accent,oklch(0.445 0.122 23));outline-offset:1px;border-color:transparent}
 .dp-reply-row{display:flex;margin-top:.8rem}
 .dp-reply button{font:inherit;font-weight:600;cursor:pointer;padding:.6rem 1.25rem;border:1px solid transparent;
-  border-radius:8px;background:var(--accent,oklch(0.485 0.135 27));color:oklch(0.985 0.004 250)}
+  border-radius:8px;background:var(--accent,oklch(0.445 0.122 23));color:oklch(0.985 0.004 95)}
 .dp-reply button:hover{filter:brightness(1.05)}
-.dp-reply-note{margin:.75rem 0 0;font-size:.8rem;color:var(--muted,oklch(0.495 0.012 258))}
+.dp-reply-note{margin:.75rem 0 0;font-size:.8rem;color:var(--muted,oklch(0.462 0.011 78))}
 `
 
 // Body renders src to inner HTML only (no <html>/<head> wrapper), so callers
@@ -764,11 +773,15 @@ func safeURL(u string) bool {
 	return true
 }
 
-// docHead returns the document head with css inlined and the initial data-theme
-// set on <html>. When toggle is true a tiny inline script runs before the body
-// paints, resolving the viewer's theme (localStorage → server default →
-// prefers-color-scheme) with no flash of the wrong theme.
-func docHead(css, titleText, themeName string, toggle bool) string {
+// docHead returns the document head with css inlined. An explicit server theme
+// (or a pinned/custom sheet) sets data-theme on <html>; a contract page with no
+// server theme leaves the attribute off so the stylesheet's guarded
+// prefers-color-scheme block follows the OS. When withInit is true (masthead
+// pages, which carry the toggle) a tiny inline script runs before the body
+// paints, applying a stored explicit choice from localStorage with no flash of
+// the wrong theme; headerless renders ship no script at all (the reply flow
+// depends on a JS-free document), so they follow the OS/server theme only.
+func docHead(css, titleText, themeName string, contract, withInit bool) string {
 	initial := themeName
 	if initial == "" {
 		initial = theme.Default
@@ -776,8 +789,14 @@ func docHead(css, titleText, themeName string, toggle bool) string {
 	if titleText == "" {
 		titleText = "Untitled"
 	}
-	head := `<!DOCTYPE html>
-<html lang="en" data-theme="` + initial + `">
+	htmlTag := `<html lang="en" data-theme="` + initial + `">`
+	if contract && themeName == "" {
+		// No explicit server theme: leave data-theme unset so the stylesheet's
+		// guarded prefers-color-scheme block follows the OS with no JS at all;
+		// the init script applies only a stored explicit choice.
+		htmlTag = `<html lang="en">`
+	}
+	head := "<!DOCTYPE html>\n" + htmlTag + `
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -786,38 +805,40 @@ func docHead(css, titleText, themeName string, toggle bool) string {
 <link rel="icon" type="image/svg+xml" href="` + demiplane.FaviconDataURI + `">
 <style>` + css + `</style>
 `
-	if toggle {
-		head += initThemeScript(themeName) + "\n"
+	if withInit {
+		head += initThemeScript() + "\n"
 	}
 	return head + `</head>
 <body>
 `
 }
 
-// initThemeScript runs synchronously in <head> to set data-theme before paint.
-// serverTheme is "" / "light" / "dark" (validated upstream), so embedding it in
-// the JS string literal is injection-safe. Empty serverTheme means "no server
-// default" → fall through to prefers-color-scheme.
-func initThemeScript(serverTheme string) string {
-	return `<script>(function(){try{var k='demiplane-theme',s=localStorage.getItem(k),d='` +
-		serverTheme + `';var t=s||d||((window.matchMedia&&` +
-		`matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light');` +
-		`document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>`
+// initThemeScript runs synchronously in <head> to apply a stored explicit
+// theme choice before paint. Only "light"/"dark" values are honored; with no
+// stored choice the markup's data-theme (the server --theme) or, when that is
+// absent, the stylesheet's guarded prefers-color-scheme block decides, so the
+// OS preference works even with JavaScript disabled.
+func initThemeScript() string {
+	return `<script>(function(){try{var s=localStorage.getItem('demiplane-theme');` +
+		`if(s==='light'||s==='dark'){document.documentElement.setAttribute('data-theme',s);}}catch(e){}})();</script>`
 }
 
 // docChromeScript wires the masthead's theme toggle (persisting the choice in
 // localStorage) and the hairline + shadow on scroll. It runs after the body
-// parses. The icon swap (sun/moon) is pure CSS keyed off data-theme.
+// parses. The effective theme falls back to prefers-color-scheme when no
+// data-theme is set, mirroring the stylesheet's guarded dark block. The icon
+// swap (sun/moon) is pure CSS keyed off data-theme plus the same media query.
 const docChromeScript = `<script>(function(){
-var k='demiplane-theme',btn=document.querySelector('.themetoggle');
+var k='demiplane-theme',root=document.documentElement,btn=document.querySelector('.themetoggle');
+var eff=function(){var t=root.getAttribute('data-theme');
+if(t==='dark'||t==='light')return t;
+return (window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';};
 if(btn){
-var sync=function(){btn.setAttribute('aria-pressed',
-document.documentElement.getAttribute('data-theme')==='dark'?'true':'false');};
+var sync=function(){btn.setAttribute('aria-pressed',eff()==='dark'?'true':'false');};
 sync();
 btn.addEventListener('click',function(){
-var cur=document.documentElement.getAttribute('data-theme')==='dark'?'dark':'light';
-var next=cur==='dark'?'light':'dark';
-document.documentElement.setAttribute('data-theme',next);
+var next=eff()==='dark'?'light':'dark';
+root.setAttribute('data-theme',next);
 sync();
 try{localStorage.setItem(k,next);}catch(e){}});}
 var bar=document.querySelector('.docbar');
@@ -844,40 +865,44 @@ window.addEventListener('scroll',f,{passive:true});}
 // The full title is always in <head><title> and, when the body keeps its H1, in
 // the document body.
 const docChromeCSS = `
-main.wrap,.docbar>.wrap,.docfoot>.wrap{max-width:43rem}
-main.wrap{padding-top:2.6rem}
-.lead{font-size:1.2rem;line-height:1.62;color:var(--muted,oklch(0.495 0.012 258));
-  font-weight:400;margin:0 0 1.7em}
-.lead strong{color:var(--ink,oklch(0.255 0.012 262));font-weight:600}
-.docbar{position:sticky;top:0;z-index:10;background:var(--bg,oklch(0.972 0.004 250));
+.docbar>.wrap,.docfoot>.wrap{max-width:calc(70ch + 2.5rem);padding:0 1.25rem}
+main.wrap{max-width:none;padding:2.6rem 1.25rem 5rem}
+main.wrap>*{max-width:70ch;margin-inline:auto}
+@media (min-width:60rem){main.wrap>.table-wrap,main.wrap>pre{max-width:min(62rem,100%)}}
+.lead{font-size:1.0625rem}
+.docbar{position:sticky;top:0;z-index:10;background:var(--bg,oklch(0.982 0.004 91));
   border-bottom:1px solid transparent;
   transition:border-color .35s cubic-bezier(.22,1,.36,1),box-shadow .35s cubic-bezier(.22,1,.36,1)}
-.docbar.scrolled{border-bottom-color:var(--line,oklch(0.895 0.008 255));
-  box-shadow:0 8px 24px -14px var(--shadow,oklch(0.280 0.010 262 / 0.14))}
+.docbar.scrolled{border-bottom-color:var(--line,oklch(0.910 0.013 87));
+  box-shadow:0 8px 24px -14px var(--shadow,oklch(0.250 0.010 80 / 0.14))}
 .docbar>.wrap{display:flex;align-items:center;gap:1rem;padding-top:1.15rem;padding-bottom:1.05rem}
 .docbar .masthead{display:flex;flex-direction:column;gap:.22rem;min-width:0}
-.docbar .kicker{font-family:var(--sans);font-size:.7rem;font-weight:700;letter-spacing:.2em;
-  text-transform:uppercase;color:var(--accent,oklch(0.485 0.135 27))}
-.docbar .doctitle{font-family:var(--serif);font-size:1.5rem;font-weight:600;margin:0;
-  line-height:1.3;letter-spacing:-.018em;border:none;padding:0 0 .14em;color:var(--ink,oklch(0.255 0.012 262));
+.docbar .kicker{font-family:var(--sans);font-size:.7rem;font-weight:600;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--muted,oklch(0.462 0.011 78))}
+.docbar .doctitle{font-family:var(--serif);font-size:1.5rem;font-weight:700;margin:0;
+  line-height:1.3;letter-spacing:-.02em;border:none;padding:0 0 .14em;color:var(--ink,oklch(0.237 0.009 75));
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media (max-width:34rem){.docbar .doctitle{white-space:normal;overflow:hidden;
   display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}}
 .themetoggle{margin-left:auto;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
-  width:2.15rem;height:2.15rem;cursor:pointer;color:var(--muted,oklch(0.495 0.012 258));
-  background:transparent;border:1px solid var(--line,oklch(0.895 0.008 255));border-radius:999px;
+  width:2.15rem;height:2.15rem;cursor:pointer;color:var(--muted,oklch(0.462 0.011 78));
+  background:var(--panel,oklch(0.995 0.002 95));border:1px solid var(--line,oklch(0.910 0.013 87));border-radius:999px;
   transition:color .25s cubic-bezier(.22,1,.36,1),border-color .25s cubic-bezier(.22,1,.36,1)}
-.themetoggle:hover{color:var(--accent,oklch(0.485 0.135 27));border-color:var(--accent,oklch(0.485 0.135 27))}
+.themetoggle:hover{color:var(--ink,oklch(0.237 0.009 75));border-color:var(--line-strong,oklch(0.714 0.018 85))}
 .themetoggle svg{width:1.05rem;height:1.05rem;display:block;
   transition:transform .35s cubic-bezier(.22,1,.36,1)}
 .themetoggle:hover svg{transform:rotate(11deg) scale(1.06)}
 .themetoggle .i-moon{display:none}
 html[data-theme="dark"] .themetoggle .i-sun{display:none}
 html[data-theme="dark"] .themetoggle .i-moon{display:block}
-.docfoot{border-top:1px solid var(--line,oklch(0.895 0.008 255));margin-top:3rem}
-.docfoot>.wrap{padding-top:.85rem;padding-bottom:.85rem;color:var(--muted,oklch(0.495 0.012 258));
+@media (prefers-color-scheme: dark){
+html:not([data-theme="light"]) .themetoggle .i-sun{display:none}
+html:not([data-theme="light"]) .themetoggle .i-moon{display:block}}
+.docfoot{border-top:1px solid var(--line,oklch(0.910 0.013 87));margin-top:3rem}
+.docfoot>.wrap{padding-top:.85rem;padding-bottom:.85rem;color:var(--muted,oklch(0.462 0.011 78));
   font-size:.76rem;letter-spacing:.01em}
-.docfoot .mark{font-family:var(--serif);color:var(--accent,oklch(0.485 0.135 27));text-decoration:none}
+.docfoot .mark{font-family:var(--serif);color:var(--muted,oklch(0.462 0.011 78));text-decoration:none}
+.docfoot a.mark{color:var(--accent,oklch(0.445 0.122 23))}
 .docfoot a.mark:hover{text-decoration:underline;text-underline-offset:2px}
 @media (prefers-reduced-motion:reduce){
 .docbar,.themetoggle,.themetoggle svg{transition:none}
@@ -888,32 +913,31 @@ html[data-theme="dark"] .themetoggle .i-moon{display:block}
 // published document is meant to read like "a well-set private document", so the
 // print sheet forces a page-friendly light palette regardless of the on-screen
 // theme (dark and the pinned developer palettes waste toner and read poorly on
-// paper), re-inverts the code slab to bordered-light, unsticks the masthead,
-// hides interactive chrome (the theme toggle; heading anchors are already
-// display:none in print via contentCSS), lets code wrap instead of clipping to a
-// fixed scroll box, and sets sane @page margins. It overrides only the tokens the
-// screen palette would otherwise darken; everything else inherits the same
-// element typography, so the printed page is the screen document minus the
-// screen. Ink is a near-black (not pure #000) to keep the house's no-pure-black
-// spirit and spare toner; paper is the sheet's own white.
+// paper), unsticks the masthead, hides interactive chrome (the theme toggle;
+// heading anchors are already display:none in print via contentCSS), lets code
+// and tables lay out in full instead of clipping to their scroll boxes, and sets
+// sane @page margins. The selector list repeats the token override at the
+// specificity of the screen sheet's guarded dark blocks so printing from an
+// OS-dark machine still gets light ink. Ink is a warm near-black (not pure
+// #000) to keep the house's no-pure-black spirit and spare toner.
 const printCSS = `
 @media print{
-  :root{
-    --bg:#ffffff;--panel:#ffffff;--zebra:transparent;--ink:#1a1a1a;--muted:#565656;
-    --line:#c9c9c9;--line-soft:#dddddd;--accent:#9a1b1b;--accent-hover:#9a1b1b;
-    --accent-soft:#f2f2f2;--code-bg:#f6f6f4;--code-ink:#1f1f1f;--code-inline:#9a1b1b;
-    --code-line:#c9c9c9;--shadow:transparent;
-    --tok-key:#9a1b1b;--tok-fn:#1c5474;--tok-str:#1f6b3b;--tok-com:#6a6a6a;
+  :root,:root:not([data-theme="light"]),:root[data-theme="dark"]{
+    --bg:#ffffff;--panel:#ffffff;--ink:#1a1815;--muted:#4c4944;
+    --line:#d6d2c9;--line-strong:#8f8a80;--accent:#6e2828;
+    --code-bg:#f4f2ec;--code-ink:#1a1815;--code-border:#b9b4aa;
+    --shadow:transparent;--sel:transparent;
+    --tok-key:#6e2828;--tok-fn:#1c5474;--tok-str:#1f6b3b;--tok-com:#4c4944;
   }
   html{scroll-padding-top:0}
-  body{background:#ffffff;color:#1a1a1a;font-size:11pt;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-  a{color:#1a1a1a;text-decoration:underline;text-underline-offset:2px}
-  .docbar{position:static;box-shadow:none;border-bottom:1px solid #c9c9c9}
+  body{background:#ffffff;color:#1a1815;font-size:11pt;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  a{color:var(--accent);text-decoration:underline;text-decoration-color:currentColor;text-underline-offset:2px}
+  .docbar{position:static;box-shadow:none;border-bottom:1px solid #d6d2c9}
   .themetoggle{display:none}
-  pre{background:#f6f6f4;color:#1f1f1f;border:1px solid #c9c9c9;
-    white-space:pre-wrap;word-wrap:break-word;overflow:visible}
+  pre{white-space:pre-wrap;word-wrap:break-word;overflow:visible}
   pre code{color:inherit}
-  blockquote{color:#1a1a1a}
+  .table-wrap{overflow:visible}
+  blockquote{color:#1a1815}
   h2,h3{page-break-after:avoid}
   pre,blockquote,table,img{page-break-inside:avoid}
   .colo{page-break-inside:avoid}
