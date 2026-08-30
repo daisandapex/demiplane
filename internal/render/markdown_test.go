@@ -968,3 +968,27 @@ func TestMarkdownListInterruptedByBlock(t *testing.T) {
 		t.Errorf("hrule after a list item should end the list:\n%s", hr)
 	}
 }
+
+// TestMarkdownBlockquoteLazyContinuation: a wrapped quote line without the `> `
+// prefix joins the quote (CommonMark lazy continuation) instead of falling out
+// as a separate paragraph.
+func TestMarkdownBlockquoteLazyContinuation(t *testing.T) {
+	out := render("> a\nb")
+	if !strings.Contains(out, "<blockquote>a b</blockquote>") {
+		t.Errorf("wrapped quote did not join into one blockquote:\n%s", out)
+	}
+	if strings.Count(out, "<blockquote>") != 1 || strings.Contains(out, "<p>b</p>") {
+		t.Errorf("continuation line leaked out of the blockquote:\n%s", out)
+	}
+	// A blank line still ends the quote; the next paragraph stands alone.
+	closed := render("> quoted line\n\nplain after")
+	if !strings.Contains(closed, "<blockquote>quoted line</blockquote>") ||
+		!strings.Contains(closed, "<p>plain after</p>") {
+		t.Errorf("blank line should close the quote before the paragraph:\n%s", closed)
+	}
+	// A list marker interrupts the quote (lists interrupt paragraphs).
+	list := render("> q\n- item")
+	if !strings.Contains(list, "<blockquote>q</blockquote>") || !strings.Contains(list, "<li>item</li>") {
+		t.Errorf("list after a quote should not be swallowed:\n%s", list)
+	}
+}

@@ -514,9 +514,21 @@ func renderBlocks(src string) string {
 
 		case strings.HasPrefix(trimmed, "> "):
 			flushPara()
+			// Consume prefixed lines plus lazy continuation: a wrapped quote line
+			// without the `> ` prefix joins the quote, ending on a blank line, a
+			// list marker, or a block opener — the same paragraph-interruption
+			// rules the list continuation uses.
 			var quote []string
-			for i < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i]), "> ") {
-				quote = append(quote, strings.TrimPrefix(strings.TrimSpace(lines[i]), "> "))
+			for i < len(lines) {
+				qt := strings.TrimSpace(lines[i])
+				if strings.HasPrefix(qt, "> ") {
+					quote = append(quote, strings.TrimPrefix(qt, "> "))
+				} else if qt != "" && !isUnordered(qt) && !reOrdered.MatchString(qt) &&
+					!interruptsParagraph(qt) {
+					quote = append(quote, qt)
+				} else {
+					break
+				}
 				i++
 			}
 			i--
