@@ -9,51 +9,80 @@ token once, every surface re-skins.
 
 ## Direction
 
-Refined editorial. The reference is a well-set private document, calm,
-trustworthy, read late in the evening on a wide monitor, not a SaaS dashboard.
-The identity is a cool near-neutral paper, serif headings, mono code, a
-restrained true-red accent with a deeper red for link hover/active.
+Refined editorial, in an essay voice. The reference is a well-set private
+document, calm, trustworthy, read late in the evening on a wide monitor, not a
+SaaS dashboard. The identity is warm paper, one serif family (Charter/Iowan)
+for body and headings alike, mono code on a light bordered slab, and an
+oxblood accent spent on links and nothing else. Hierarchy is size-led; section
+structure is carried by hairlines, never by color. This system was chosen by
+design competition (entry j, 2026-08-30) and supersedes the earlier
+cool-neutral "rojo" palette.
 
 ## Color
 
-OKLCH throughout. Every neutral is tinted toward a cool near-neutral hue
-(h ~ 250 to 262, chroma ~ 0.004 to 0.014), so nothing reads as flat grey and the
-neutral does not advertise the accent. There is no pure black or white anywhere:
-even the lightest surface and darkest ink keep a trace of tint, and chroma falls
-as lightness approaches the extremes. The accent (a true red, h ~ 26 to 28) is
-held under ~10% of the surface: rules, links, the kicker, code accents, list
-markers. A second, deeper red (`--accent-hover`) is the link hover/active state.
+OKLCH throughout. Every neutral is tinted warm (h ~ 75 to 91, chroma ~ 0.004
+to 0.025), so the paper reads as stock, not screen grey. There is no pure black
+or white anywhere: the card surface stops just short of white (`--panel`
+L 0.995) and the darkest ink keeps a trace of warmth. The accent (an oxblood
+red, h ~ 23 to 29, a dusty terracotta on the dark face) is spent on links and
+the keyboard focus ring only; headings, list markers, the kicker, and inline
+code are all ink or muted. Link hover deepens the underline (1px to 2px, tint
+to full accent), not the color, so there is no second accent token.
 
-Color strategy: **Restrained** (tinted neutrals + one accent).
+Color strategy: **Restrained** (warm tinted neutrals + one accent, links only).
 
 ### Token map
 
 | Token | Light | Dark | Role |
 |---|---|---|---|
-| `--bg` | `oklch(0.972 0.004 250)` | `oklch(0.225 0.008 255)` | page surface (cool near-neutral paper / dark) |
-| `--panel` | `oklch(0.988 0.003 250)` | `oklch(0.263 0.009 255)` | raised surface (chrome cards; the `--zebra` source on the dark faces) |
-| `--ink` | `oklch(0.255 0.012 262)` | `oklch(0.918 0.006 252)` | body text (also the blockquote's serif-italic ink) |
-| `--muted` | `oklch(0.495 0.012 258)` | `oklch(0.712 0.010 255)` | secondary text, lead, captions |
-| `--line` | `oklch(0.895 0.008 255)` | `oklch(0.340 0.010 255)` | hairline rules, borders |
-| `--line-soft` | `oklch(0.930 0.006 255)` | `oklch(0.300 0.009 255)` | table inner rules |
-| `--zebra` | `transparent` | `oklch(0.263 0.009 255)` | even-row table stripe — off in the light face (row rules carry it), a real step on the dark faces |
-| `--accent` | `oklch(0.485 0.135 27)` | `oklch(0.700 0.130 26)` | links, kicker, markers, code accent |
-| `--accent-hover` | `oklch(0.44 0.15 26)` | `oklch(0.660 0.135 26)` | link hover/active (deeper red) |
-| `--accent-soft` | `oklch(0.952 0.020 28)` | `oklch(0.320 0.045 26)` | inline-code background |
-| `--code-bg` | `oklch(0.278 0.010 258)` | `oklch(0.180 0.008 258)` | code-block surface |
-| `--code-ink` | `oklch(0.918 0.008 255)` | `oklch(0.905 0.008 255)` | code-block text |
-| `--code-inline` | `oklch(0.455 0.130 27)` | `oklch(0.760 0.105 27)` | inline-code text |
-| `--code-line` | `oklch(0.400 0.014 258)` | `oklch(0.360 0.010 258)` | code-block border |
+| `--bg` | `oklch(0.982 0.004 91)` | `oklch(0.228 0.006 78)` | page surface (warm paper `#faf9f6` / warm near-black `#1e1c19`) |
+| `--panel` | `oklch(0.995 0.002 95)` | `oklch(0.261 0.008 85)` | raised card surface (table cards, chrome cards) |
+| `--ink` | `oklch(0.237 0.009 75)` | `oklch(0.923 0.009 85)` | body text (also the blockquote's serif-italic ink) |
+| `--muted` | `oklch(0.462 0.011 78)` | `oklch(0.708 0.012 77)` | secondary text, byline, table headers, list markers |
+| `--line` | `oklch(0.910 0.013 87)` | `oklch(0.330 0.010 81)` | hairline rules, borders, table row rules |
+| `--line-strong` | `oklch(0.714 0.018 85)` | `oklch(0.461 0.015 87)` | emphatic rules: table header underline, `hr`, toggle hover ring |
+| `--accent` | `oklch(0.445 0.122 23)` | `oklch(0.749 0.082 29)` | links and the focus ring, nothing else |
+| `--code-bg` | `oklch(0.953 0.010 87)` | `oklch(0.205 0.008 85)` | code surface, inline and block (follows its face) |
+| `--code-ink` | `oklch(0.261 0.010 89)` | `oklch(0.871 0.015 85)` | code text, inline and block |
+| `--code-border` | `oklch(0.883 0.017 88)` | `oklch(0.342 0.015 85)` | code hairline border, inline and block |
 | `--navy` | `oklch(0.420 0.085 245)` | `oklch(0.620 0.095 240)` | secondary accent (landing GET badge) |
 | `--danger` | `oklch(0.520 0.165 28)` | `oklch(0.700 0.150 28)` | destructive accent (DELETE badge) |
 | `--info-bg/-line/-ink` | blue-grey trio | blue-grey trio | landing ethos pill |
-| `--shadow` | `oklch(0.280 0.010 262 / 0.14)` | `oklch(0.120 0.010 258 / 0.45)` | scrolled-masthead shadow |
-| `--sel` | `oklch(0.912 0.045 28)` | `oklch(0.380 0.055 26)` | text selection |
+| `--shadow` | `oklch(0.250 0.010 80 / 0.14)` | `oklch(0.100 0.008 80 / 0.45)` | scrolled-masthead shadow |
+| `--sel` | `oklch(0.909 0.025 43)` | `oklch(0.369 0.023 48)` | text selection |
+| `--tok-key/-fn/-str/-com` | dark inks for the light slab | light inks for the dark slab | code syntax accents, AA on `--code-bg` per face |
+
+The light values are exact OKLCH conversions of the approved competition sheet
+(`#faf9f6` paper, `#8b3232` links, `#f2efe8` code slab, white cards), except
+`--panel`, which stops at L 0.995 instead of pure `#ffffff` to honor the
+no-pure-white refusal. Retired with the port: `--accent-hover`,
+`--accent-soft`, `--code-inline`, `--code-line`, `--line-soft`, `--zebra`.
 
 Body and secondary text clear WCAG AA against their surface in both faces
-(measured, default palette): light `--ink` 14.55 : 1, `--muted` 5.65 : 1,
-`--accent` 6.32 : 1 on `--bg`; dark `--ink` 13.42 : 1, `--muted` 6.70 : 1,
-`--accent` 6.05 : 1 on `--bg`. All clear 4.5 : 1 on `--panel` too.
+(measured, default palette): light `--ink` 15.8 : 1, `--muted` 6.7 : 1,
+`--accent` 7.7 : 1 on `--bg`; dark `--ink` 13.5 : 1, `--muted` 6.6 : 1,
+`--accent` 7.4 : 1 on `--bg`. All clear 4.5 : 1 on `--panel` too (worst pair:
+dark `--muted` on `--panel`, 5.97 : 1). Code ink and all four `--tok-*` syntax
+accents clear AA on `--code-bg` in both faces. These are pinned by
+`TestWarmPaletteContrastAA` and `TestCodeTokenContrastAA`.
+
+### Theme contract (light/dark)
+
+Every rendered document that is not under a pinned theme or an operator `--css`
+override ships one stylesheet in three blocks, in this order:
+
+1. the complete light palette on bare `:root` (the default),
+2. the dark palette under `@media (prefers-color-scheme: dark)`, guarded as
+   `:root:not([data-theme="light"])` so an explicit light choice wins, and
+3. the dark palette again under `:root[data-theme="dark"]` so an explicit dark
+   choice wins in both directions.
+
+An explicit `data-theme` on `<html>` always beats the OS preference; with no
+attribute, the media query decides, so OS dark works with JavaScript disabled.
+The server `--theme` stamps the attribute; the reader's toggle rewrites it and
+persists to localStorage; a tiny head script re-applies the stored choice
+before paint. `theme.ToggleCSS()` emits the contract and
+`TestToggleCSSThreeBlockContract` pins it.
 
 ### Named themes
 
@@ -98,43 +127,62 @@ to clear the 3 : 1 UI bar for that white text.
 **Interaction with the light/dark toggle.** A named theme **overrides and pins** its
 palette: it is dark-only, has no light counterpart, so a `?render=md` page rendered
 under it drops the reader's sun/moon light↔dark toggle (there is nothing to flip to)
-and emits its single `:root` palette. The toggle exists **only** for the default
-palette, where `--theme light|dark` sets the initial side of a switch
-the reader still controls. This is the `theme.Pinned(name)` seam: pinned themes
-(`catppuccin`/`dracula`/`one-dark`) suppress the toggle; the unpinned pair keeps it.
+and emits its single `:root` palette instead of the three-block contract sheet. The
+toggle exists **only** for the default palette, where `--theme light|dark` sets the
+initial side of a switch the reader still controls. This is the `theme.Pinned(name)`
+seam: pinned themes (`catppuccin`/`dracula`/`one-dark`) suppress the toggle; the
+unpinned pair keeps it.
 
 ## Typography
 
 System stacks only, no web fonts, no CDN.
 
-- `--serif`: Iowan Old Style, Palatino, Georgia (headings, masthead title, footer mark)
-- `--sans`: system UI sans (body, kicker, table headers)
+- `--serif`: Charter, Bitstream Charter, Iowan Old Style, Palatino, Georgia
+  (body AND headings; one family carries the whole document)
+- `--sans`: system UI sans (byline/meta, table text, colophon)
 - `--mono`: system mono (code)
 
-Editorial scale: 17px (`1.0625rem`) base on 1.7 leading; headings on a roughly
-1.25 modular scale with tightened tracking (`-0.016em`) and 1.15 line-height for
-a set-text feel. Vertical rhythm is varied, a heading owes more space above than
-below. The document text column is capped near a 68ch measure (`43rem`).
+Essay scale: 16px (`1rem`) serif body on 1.6 leading, compact block margins
+(paragraphs owe `.875em` below). Headings are size-led at weight 700:
+h1 `2.125rem` (tracked `-0.02em`), h2 `1.5rem` over a hairline top rule (the
+section scan aid), h3 `1.1875rem`, then `1.0625rem`/`1rem`/`.875rem` down to
+h6. The lead paragraph bumps to `1.0625rem`. Blockquotes are unboxed italic at
+`1.1875rem`. Tables drop to a `.875rem` sans with tabular numerals; table
+headers are muted weight-600, never uppercase (the byline keeps its
+letterspaced uppercase as a one-off). `text-wrap: pretty` on paragraphs,
+`balance` on headings.
+
+The measure is `70ch` on the document column. Tables and code blocks break out
+to a centred `min(62rem, 100%)` cap on viewports over `60rem`; below that they
+fall back to the measure and scroll horizontally inside their own container
+(`.table-wrap` / `pre`), so the body never scrolls sideways
+(`overflow-x: clip` on `html, body` backstops it).
 
 ## Rendered-document chrome (`?render=md`)
 
 - **Masthead** (`.docbar`): sticky, page-colored, borderless until scroll, then a
-  hairline plus a soft shadow fade in (ease-out-expo). Holds a small-caps accent
-  kicker (the wordmark), the document title set as the single display-serif H1
-  (lifted from the body so it is not duplicated), and the theme toggle.
+  hairline plus a soft shadow fade in (ease-out-expo). Holds a letterspaced
+  muted kicker (the wordmark; the accent is links-only), the document title set
+  as the single display-serif H1 (lifted from the body so it is not
+  duplicated), and the theme toggle. The masthead and footer columns align to
+  the 70ch text measure.
 - **Title**: every rendered document emits a `<head><title>` (the lifted H1, or
   the slug fallback, reduced to plain text), so a shared link, tab, or bookmark is
   never blank.
-- **Lead**: the renderer tags the first body paragraph `class="lead"` (set quiet
-  and slightly larger: muted, relaxed leading) so a dense first line reads as a
-  dek. The explicit class survives a frontmatter meta-header injected ahead of the
+- **Lead**: the renderer tags the first body paragraph `class="lead"` (bumped
+  to `1.0625rem`, full ink; the size alone carries the dek). The explicit class
+  survives a frontmatter meta-header injected ahead of the
   body, where a positional `:first-child` selector would silently stop matching.
 - **Theme toggle**: an inline sun / moon SVG (currentColor, no icon dep). Click
   flips `data-theme` on `<html>` and persists to `localStorage`; the matching
-  icon shows via CSS. Initial state resolves localStorage, then the server
-  `--theme`/config, then OS `prefers-color-scheme`, set before paint (no FOUC).
-  The button carries `aria-pressed` (true when dark is active), kept in sync on
-  load and on click.
+  icon shows via CSS (keyed off `data-theme` plus the same guarded media query,
+  so it is right even before any choice is stored). Initial state: a stored
+  localStorage choice is re-applied before paint (no FOUC); otherwise the
+  server `--theme` stamp or, with neither, the stylesheet's
+  `prefers-color-scheme` block decides (see the theme contract above). The
+  button carries `aria-pressed` (true when dark is effective), kept in sync on
+  load and on click. Headerless renders ship no scripts at all and follow the
+  OS/server theme.
 - **Footer**: a thin single-line credit, hairline top rule, muted, aligned to
   the text column.
 - **Focus**: a global `:focus-visible` ring (`2px solid var(--accent)`, 2px
@@ -167,10 +215,10 @@ slug (zero-padded numeric suffixes sort correctly). Decided 2026-08-30
 
 ## Typographic blockquotes
 
-Blockquotes take a purely typographic treatment — a left indent set in
-serif-italic `--ink`, no box, no fill, and (per the house refusal) **no
-side-stripe**. Restraint by subtraction: the indent and the italic face carry the
-quotation without a bordered card.
+Blockquotes take a purely typographic treatment — an inset set in serif-italic
+`--ink`, one step larger than body (`1.1875rem`), no box, no fill, and (per
+the house refusal) **no side-stripe**. Restraint by subtraction: the inset,
+the size, and the italic face carry the quotation without a bordered card.
 
 ## Motion
 
@@ -181,6 +229,7 @@ Everything is disabled under `prefers-reduced-motion`.
 ## Refusals (impeccable absolute bans, enforced here)
 
 No side-stripe accent borders, no gradient text, no glassmorphism, no
-hero-metric template, no pure `#000`/`#fff`, no em dashes in demiplane's own UI
-copy. (User markdown content is rendered verbatim, including any em dashes it
-contains.)
+hero-metric template, no pure `#000`/`#fff` (the table card's `--panel` stops
+at L 0.995 for exactly this reason), no accent spent on non-link text, no em
+dashes in demiplane's own UI copy. (User markdown content is rendered
+verbatim, including any em dashes it contains.)

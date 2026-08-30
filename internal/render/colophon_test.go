@@ -76,7 +76,7 @@ func TestColophonSeriesRendering(t *testing.T) {
 	}
 	// p1 (demiplane-10n): the colophon meta links hover with an underline, unifying
 	// their affordance with the nav links (which already underline on hover).
-	if !strings.Contains(out, ".colo .meta a:hover{color:var(--accent,oklch(0.485 0.135 27));text-decoration:underline") {
+	if !strings.Contains(out, ".colo .meta a:hover{color:var(--accent,oklch(0.445 0.122 23));text-decoration:underline") {
 		t.Errorf("colophon meta hover should underline to match nav links:\n%s", out)
 	}
 }

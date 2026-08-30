@@ -87,13 +87,13 @@ func TestValid(t *testing.T) {
 
 func TestCSSCarriesTokensAndContent(t *testing.T) {
 	css := CSS("light")
-	for _, marker := range []string{"--accent:oklch(0.485", "--bg:oklch(0.972", "var(--serif)", ".wrap{"} {
+	for _, marker := range []string{"--accent:oklch(0.445", "--bg:oklch(0.982", "var(--serif)", ".wrap{"} {
 		if !strings.Contains(css, marker) {
 			t.Errorf("CSS(light) missing %q", marker)
 		}
 	}
 	dark := CSS("dark")
-	if !strings.Contains(dark, "--bg:oklch(0.225") || strings.Contains(dark, "--bg:oklch(0.972") {
+	if !strings.Contains(dark, "--bg:oklch(0.228") || strings.Contains(dark, "--bg:oklch(0.982") {
 		t.Errorf("CSS(dark) did not swap the background token:\n%s", dark)
 	}
 	// Typography is shared, so both carry the same content block.
@@ -147,7 +147,7 @@ func TestNamedThemePalettes(t *testing.T) {
 		if !strings.Contains(css, c.accent) {
 			t.Errorf("CSS(%q) missing accent %q", c.name, c.accent)
 		}
-		if strings.Contains(css, "--bg:oklch(0.972") {
+		if strings.Contains(css, "--bg:oklch(0.982") {
 			t.Errorf("CSS(%q) leaked the default light background", c.name)
 		}
 		// Shared typography still rides along.
@@ -157,17 +157,20 @@ func TestNamedThemePalettes(t *testing.T) {
 	}
 }
 
-// TestDefaultPaletteRecolor pins the red-on-cool-neutral default: a two-step
-// accent (--accent + --accent-hover), the cool-neutral background, and the
-// keyboard-focus ring that the a11y pass added. Both faces carry the hover token.
-func TestDefaultPaletteRecolor(t *testing.T) {
+// TestDefaultPaletteWarmPort pins the warm essay palette ported from the
+// approved render=md design (entry j, 2026-08-30): oxblood accent, warm paper,
+// near-white card panel, the keyboard-focus ring, and the underline-thickness
+// link hover. The retired cool "rojo" palette and its dropped token names must
+// be fully gone from both faces.
+func TestDefaultPaletteWarmPort(t *testing.T) {
 	light := CSS("light")
 	for _, marker := range []string{
-		"--accent:oklch(0.485 0.135 27)",
-		"--accent-hover:oklch(0.44 0.15 26)",
-		"--bg:oklch(0.972 0.004 250)",
+		"--accent:oklch(0.445 0.122 23)",
+		"--bg:oklch(0.982 0.004 91)",
+		"--panel:oklch(0.995 0.002 95)",
+		"--line-strong:oklch(0.714 0.018 85)",
 		":focus-visible{outline:2px solid var(--accent)",
-		"a:hover,a:active{color:var(--accent-hover)",
+		"a:hover,a:active{text-decoration-thickness:2px",
 	} {
 		if !strings.Contains(light, marker) {
 			t.Errorf("CSS(light) missing %q", marker)
@@ -175,18 +178,19 @@ func TestDefaultPaletteRecolor(t *testing.T) {
 	}
 	dark := CSS("dark")
 	for _, marker := range []string{
-		"--accent:oklch(0.700 0.130 26)",
-		"--accent-hover:oklch(0.660 0.135 26)",
-		"--bg:oklch(0.225 0.008 255)",
+		"--accent:oklch(0.749 0.082 29)",
+		"--bg:oklch(0.228 0.006 78)",
 	} {
 		if !strings.Contains(dark, marker) {
 			t.Errorf("CSS(dark) missing %q", marker)
 		}
 	}
-	// The old warm-parchment default must be fully gone from both faces.
-	for _, gone := range []string{"0.555 0.162 47", "0.972 0.009 78", "0.760 0.150 62"} {
+	for _, gone := range []string{
+		"0.485 0.135 27", "0.972 0.004 250", "0.225 0.008 255",
+		"--accent-hover", "--accent-soft", "--zebra", "--code-inline", "--line-soft",
+	} {
 		if strings.Contains(light+dark, gone) {
-			t.Errorf("stale warm-parchment token %q still present", gone)
+			t.Errorf("retired token %q still present", gone)
 		}
 	}
 }
@@ -246,87 +250,87 @@ func TestBlockquoteTypographicNoBox(t *testing.T) {
 	}
 }
 
-// TestZebraTokenPerFace is the m6 (demiplane-b09) decision: light-face table zebra
-// is dropped (transparent — the row rules carry the structure), while every dark
-// face keeps a real perceptible stripe via a dedicated --zebra token.
-func TestZebraTokenPerFace(t *testing.T) {
-	if !strings.Contains(Content(), "tbody tr:nth-child(2n) td{background:var(--zebra)}") {
-		t.Error("zebra rule must reference the --zebra token")
+// TestTableCardTreatment is the entry-j table decision: tables sit on a raised
+// card (.table-wrap carries the panel surface, hairline border, and radius),
+// rows are separated by hairlines instead of zebra stripes, numerals are
+// tabular so figure columns align, and the header row is quiet weight with no
+// uppercase run (the byline keeps letterspacing as a one-off).
+func TestTableCardTreatment(t *testing.T) {
+	c := Content()
+	i := strings.Index(c, ".table-wrap{")
+	if i < 0 {
+		t.Fatal("no .table-wrap rule in Content()")
 	}
-	// Light face: zebra off.
-	if !strings.Contains(CSS("light"), "--zebra:transparent") {
-		t.Error("light face should drop zebra (--zebra:transparent)")
-	}
-	// Every dark/pinned face defines a non-transparent --zebra step.
-	for _, name := range []string{"dark", "catppuccin", "dracula", "one-dark"} {
-		css := CSS(name)
-		if !strings.Contains(css, "--zebra:oklch(") {
-			t.Errorf("%s face should keep a real zebra step (--zebra:oklch(...))", name)
+	rule := c[i : i+strings.IndexByte(c[i:], '}')]
+	for _, want := range []string{"background:var(--panel)", "border:1px solid var(--line)",
+		"border-radius:8px", "overflow-x:auto"} {
+		if !strings.Contains(rule, want) {
+			t.Errorf("table-wrap rule missing %q:\n%s", want, rule)
 		}
 	}
-	// The toggle sheet flips zebra with the face: light root transparent, dark
-	// override a real step.
-	tog := ToggleCSS()
-	if !strings.Contains(tog, "--zebra:transparent") || !strings.Contains(tog, "--zebra:oklch(") {
-		t.Error("ToggleCSS must define --zebra in both the light root and the dark override")
+	if strings.Contains(c, "--zebra") || strings.Contains(c, "nth-child(2n)") {
+		t.Errorf("zebra striping must be gone; hairlines carry the row structure")
+	}
+	if !strings.Contains(c, "tbody tr+tr td{border-top:1px solid var(--line)}") {
+		t.Errorf("rows should be separated by hairline top borders")
+	}
+	if !strings.Contains(c, "font-variant-numeric:tabular-nums") {
+		t.Errorf("table cells should align numerals with tabular-nums")
+	}
+	th := strings.Index(c, "thead th{")
+	thRule := c[th : th+strings.IndexByte(c[th:], '}')]
+	if strings.Contains(thRule, "text-transform") || strings.Contains(thRule, "letter-spacing") {
+		t.Errorf("table headers must not run uppercase/letterspaced:\n%s", thRule)
 	}
 }
 
-// TestCodeCommentContrastAA is the C1 fix: the code-comment ink (--tok-com) must
-// clear WCAG AA (4.5:1) on its code slab (--code-bg) in BOTH faces, at normal
-// size. The light face failed at 4.04:1 (L 0.62) and is lifted to L 0.67; the
-// dark face keeps 0.62 and must not regress from its prior 5.17:1.
-func TestCodeCommentContrastAA(t *testing.T) {
-	light := CSS("light")
-	lc := contrastRatio(tokenColor(t, light, "--tok-com"), tokenColor(t, light, "--code-bg"))
-	if lc < 4.5 {
-		t.Errorf("light code-comment contrast %.3f:1 < 4.5:1 (WCAG AA fail)", lc)
-	}
-	if lc < 4.85 || lc > 4.95 {
-		t.Errorf("light code-comment contrast %.3f:1 drifted from the ~4.91:1 target", lc)
-	}
-	dark := CSS("dark")
-	dc := contrastRatio(tokenColor(t, dark, "--tok-com"), tokenColor(t, dark, "--code-bg"))
-	if dc < 4.5 {
-		t.Errorf("dark code-comment contrast %.3f:1 < 4.5:1 (WCAG AA fail)", dc)
-	}
-	if dc < 5.16 {
-		t.Errorf("dark code-comment contrast %.3f:1 regressed below its prior 5.17:1", dc)
+// TestCodeTokenContrastAA: the code slab now follows its face (light slab on
+// the light face), so every syntax token and the code ink must clear WCAG AA
+// (4.5:1) against --code-bg in BOTH faces.
+func TestCodeTokenContrastAA(t *testing.T) {
+	for _, name := range []string{"light", "dark"} {
+		css := CSS(name)
+		slab := tokenColor(t, css, "--code-bg")
+		for _, tk := range []string{"--code-ink", "--tok-key", "--tok-fn", "--tok-str", "--tok-com"} {
+			if r := contrastRatio(tokenColor(t, css, tk), slab); r < 4.5 {
+				t.Errorf("%s %s contrast %.3f:1 < 4.5:1 on --code-bg (WCAG AA fail)", name, tk, r)
+			}
+		}
 	}
 }
 
-// TestHeadingScaleHierarchy is the M2/M3 fix: h4 sits ABOVE the 1.0625rem body,
-// the modular scale stays monotonic down through h5/h6, and h5/h6 are styled at
-// all (serif family + hover-reveal anchors), closing the a11y gap where the
-// renderer emitted them but the theme did not.
+// TestHeadingScaleHierarchy pins the entry-j size-led hierarchy: a 34/24/19
+// serif scale at weight 700, h4 above the 1rem body, monotonic down through
+// h6, and h5/h6 still styled (serif family + hover-reveal anchors).
 func TestHeadingScaleHierarchy(t *testing.T) {
 	c := Content()
-	if !strings.Contains(c, "h4{font-size:1.15rem") {
-		t.Errorf("h4 should be bumped above the 1.0625rem body:\n%s", c)
-	}
-	if strings.Contains(c, "h4{font-size:1.06rem") {
-		t.Errorf("h4 still at the too-small 1.06rem")
-	}
-	for _, r := range []string{"h5{font-size:1.02rem", "h6{font-size:.86rem"} {
+	for _, r := range []string{
+		"h1{font-size:2.125rem", "h2{font-size:1.5rem", "h3{font-size:1.1875rem",
+		"h4{font-size:1.0625rem", "h5{font-size:1rem", "h6{font-size:.875rem",
+	} {
 		if !strings.Contains(c, r) {
 			t.Errorf("missing heading rule %q:\n%s", r, c)
 		}
 	}
 	if !strings.Contains(c, "h1,h2,h3,h4,h5,h6{font-family:var(--serif)") {
-		t.Errorf("h5/h6 not folded into the serif heading rule:\n%s", c)
+		t.Errorf("headings not folded into the serif heading rule:\n%s", c)
 	}
 	if !strings.Contains(c, "h5:hover .heading-anchor,h6:hover .heading-anchor") {
-		t.Errorf("h5/h6 anchors not added to the hover-reveal set:\n%s", c)
+		t.Errorf("h5/h6 anchors not in the hover-reveal set:\n%s", c)
 	}
-	// Monotonic non-increasing scale: h2 > h3 > h4 > body >= h5 > h6.
-	sizes := []float64{1.7, 1.32, 1.15, 1.02, 0.86}
+	// h2 is the hairline-topped section scan aid.
+	if !strings.Contains(c, "border-top:1px solid var(--line)") {
+		t.Errorf("h2 should carry the hairline top rule:\n%s", c)
+	}
+	// Monotonic scale, h4 above the 1rem body.
+	sizes := []float64{2.125, 1.5, 1.1875, 1.0625, 1.0, 0.875}
 	for i := 1; i < len(sizes); i++ {
 		if sizes[i] >= sizes[i-1] {
 			t.Errorf("heading scale not monotonic at index %d", i)
 		}
 	}
-	if sizes[2] <= 1.0625 {
-		t.Errorf("h4 (%.3f) must exceed the body 1.0625rem", sizes[2])
+	if sizes[3] <= 1.0 {
+		t.Errorf("h4 (%.4f) must exceed the 1rem body", sizes[3])
 	}
 }
 
@@ -346,7 +350,7 @@ func TestColorSchemeAndMetaColor(t *testing.T) {
 	if !strings.Contains(tog, "color-scheme:light") || !strings.Contains(tog, "color-scheme:dark") {
 		t.Errorf("ToggleCSS must carry light (root) and dark (override) color-scheme")
 	}
-	if got := MetaColor("light"); got != "oklch(0.972 0.004 250)" {
+	if got := MetaColor("light"); got != "oklch(0.982 0.004 91)" {
 		t.Errorf("MetaColor(light) = %q, want the light --bg", got)
 	}
 	if got := MetaColor("dracula"); got != "oklch(0.288 0.022 278)" {
@@ -354,6 +358,49 @@ func TestColorSchemeAndMetaColor(t *testing.T) {
 	}
 	if MetaColor("neon") != MetaColor(Default) {
 		t.Errorf("MetaColor of an unknown theme should fall back to Default")
+	}
+}
+
+// TestToggleCSSThreeBlockContract pins the house light/dark contract shipped
+// to toggle-capable pages: the complete light palette on bare :root, the dark
+// palette under @media (prefers-color-scheme: dark) guarded as
+// :root:not([data-theme="light"]), and the dark palette again under
+// :root[data-theme="dark"], in that order, so an explicit data-theme always
+// wins and the OS preference works with no JavaScript.
+func TestToggleCSSThreeBlockContract(t *testing.T) {
+	tog := ToggleCSS()
+	iLight := strings.Index(tog, ":root{")
+	iMedia := strings.Index(tog, "@media (prefers-color-scheme: dark){\n:root:not([data-theme=\"light\"]){")
+	iOver := strings.Index(tog, `:root[data-theme="dark"]{`)
+	if iLight != 0 || iMedia < 0 || iOver < 0 || !(iLight < iMedia && iMedia < iOver) {
+		t.Fatalf("toggle sheet must carry light :root, guarded dark media block, explicit dark override, in order (got %d/%d/%d)", iLight, iMedia, iOver)
+	}
+	if n := strings.Count(tog, "--bg:oklch(0.228"); n != 2 {
+		t.Errorf("dark tokens must appear exactly twice (guarded + explicit), got %d", n)
+	}
+	if strings.Count(tog, "color-scheme:light") != 1 || strings.Count(tog, "color-scheme:dark") != 2 {
+		t.Errorf("color-scheme must be declared once per block")
+	}
+}
+
+// TestWarmPaletteContrastAA measures the ported palette: body ink, muted text,
+// and the accent must clear WCAG AA (4.5:1) on both the page and the card
+// surface in both faces.
+func TestWarmPaletteContrastAA(t *testing.T) {
+	for _, name := range []string{"light", "dark"} {
+		css := CSS(name)
+		surfaces := map[string][3]float64{
+			"--bg":    tokenColor(t, css, "--bg"),
+			"--panel": tokenColor(t, css, "--panel"),
+		}
+		for _, tk := range []string{"--ink", "--muted", "--accent"} {
+			fg := tokenColor(t, css, tk)
+			for surf, sc := range surfaces {
+				if r := contrastRatio(fg, sc); r < 4.5 {
+					t.Errorf("%s %s on %s: %.3f:1 < 4.5:1 (WCAG AA fail)", name, tk, surf, r)
+				}
+			}
+		}
 	}
 }
 

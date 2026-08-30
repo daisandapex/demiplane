@@ -275,9 +275,10 @@ func TestMarkdownTableScrollWrapper(t *testing.T) {
 	if !(i >= 0 && tbl > i && end > tbl && div >= 0) {
 		t.Errorf("table-wrap does not enclose the table:\n%s", out)
 	}
-	// The stylesheet gives the wrapper horizontal scrolling.
-	if !strings.Contains(out, ".table-wrap{overflow-x:auto") {
-		t.Errorf("stylesheet missing the overflow-x:auto table-wrap rule:\n%s", out)
+	// The stylesheet gives the wrapper its card surface and horizontal scrolling.
+	if !strings.Contains(out, ".table-wrap{background:var(--panel)") ||
+		!strings.Contains(out, "overflow-x:auto") {
+		t.Errorf("stylesheet missing the card + overflow-x:auto table-wrap rule:\n%s", out)
 	}
 }
 
@@ -318,9 +319,9 @@ func TestMarkdownDocStructure(t *testing.T) {
 func TestMarkdownDefaultUsesHouseStyle(t *testing.T) {
 	out := string(Markdown([]byte("# Title"), Options{}))
 	for _, marker := range []string{
-		"--accent:oklch(0.485", // house accent token (true red)
+		"--accent:oklch(0.445", // house accent token (true red)
 		"var(--serif)",         // headings use the serif token
-		"--bg:oklch(0.972",     // cool near-neutral background token
+		"--bg:oklch(0.982",     // cool near-neutral background token
 		`class="wrap"`,         // centered content container
 	} {
 		if !strings.Contains(out, marker) {
@@ -369,15 +370,18 @@ func TestMarkdownPrintStylesheet(t *testing.T) {
 	}
 }
 
-// TestMarkdownThemeDarkSwitchesTokens asserts --theme dark swaps the token block
-// while keeping the shared typography.
+// TestMarkdownThemeDarkSwitchesTokens asserts --theme dark renders dark: the
+// contract sheet carries both palettes and the explicit data-theme stamp makes
+// the dark override win, while the shared typography stays.
 func TestMarkdownThemeDarkSwitchesTokens(t *testing.T) {
 	dark := string(Markdown([]byte("# Title"), Options{Theme: "dark"}))
-	if !strings.Contains(dark, "--bg:oklch(0.225") {
+	if !strings.Contains(dark, "--bg:oklch(0.228") {
 		t.Errorf("dark theme did not apply dark background token:\n%s", dark)
 	}
-	if strings.Contains(dark, "--bg:oklch(0.972") {
-		t.Errorf("dark theme leaked the light background token:\n%s", dark)
+	// The contract sheet ships both palettes; an explicit server dark wins by
+	// stamping data-theme on <html> so the dark override applies.
+	if !strings.Contains(dark, `<html lang="en" data-theme="dark">`) {
+		t.Errorf("explicit dark theme must stamp data-theme so the dark override wins:\n%s", dark)
 	}
 	// Typography is still the shared one.
 	if !strings.Contains(dark, "var(--serif)") {
@@ -385,7 +389,7 @@ func TestMarkdownThemeDarkSwitchesTokens(t *testing.T) {
 	}
 	// An unknown theme name falls back to the default (light).
 	bogus := string(Markdown([]byte("# Title"), Options{Theme: "neon"}))
-	if !strings.Contains(bogus, "--bg:oklch(0.972") {
+	if !strings.Contains(bogus, "--bg:oklch(0.982") {
 		t.Errorf("unknown theme should fall back to default house style:\n%s", bogus)
 	}
 }
@@ -401,16 +405,22 @@ func TestMarkdownPinnedThemePinsPaletteAndDropsToggle(t *testing.T) {
 	if !strings.Contains(out, "--bg:oklch(0.288 0.022 278)") {
 		t.Errorf("pinned dracula theme did not emit its background token:\n%s", out)
 	}
-	// ToggleCSS ships both sheets via an html[data-theme="dark"] override; a
-	// pinned theme must NOT, and must not render the toggle button.
-	if strings.Contains(out, `html[data-theme="dark"]{`) {
+	// ToggleCSS ships both sheets via a :root[data-theme="dark"] override; a
+	// pinned theme must NOT, and must not render the toggle button. The print
+	// sheet legitimately names that selector when forcing light ink, so scope
+	// the check to the on-screen CSS before the @media print block.
+	screen := out
+	if i := strings.Index(out, "@media print"); i >= 0 {
+		screen = out[:i]
+	}
+	if strings.Contains(screen, `:root[data-theme="dark"]{`) {
 		t.Errorf("pinned theme leaked the two-sheet toggle override:\n%s", out)
 	}
 	if strings.Contains(out, `class="themetoggle"`) {
 		t.Errorf("pinned theme should not render the light/dark toggle button:\n%s", out)
 	}
 	// The default palette must not bleed through.
-	if strings.Contains(out, "--bg:oklch(0.972") {
+	if strings.Contains(out, "--bg:oklch(0.982") {
 		t.Errorf("pinned theme leaked the default light background:\n%s", out)
 	}
 }
@@ -419,7 +429,7 @@ func TestMarkdownPinnedThemePinsPaletteAndDropsToggle(t *testing.T) {
 // unpinned warm palette (regression fence for the Pinned() gate).
 func TestMarkdownDefaultThemeKeepsToggle(t *testing.T) {
 	out := string(Markdown([]byte("# Title\n\nbody"), Options{Theme: "dark", Header: true}))
-	if !strings.Contains(out, `html[data-theme="dark"]{`) || !strings.Contains(out, `class="themetoggle"`) {
+	if !strings.Contains(out, `:root[data-theme="dark"]{`) || !strings.Contains(out, `class="themetoggle"`) {
 		t.Errorf("default palette lost its light/dark toggle:\n%s", out)
 	}
 }
@@ -433,7 +443,7 @@ func TestMarkdownCustomCSSReplacesTheme(t *testing.T) {
 		t.Errorf("custom CSS not present:\n%s", out)
 	}
 	// The built-in theme tokens must NOT be emitted when --css is set.
-	if strings.Contains(out, "--accent:oklch(0.485") || strings.Contains(out, "--bg:oklch(0.225") {
+	if strings.Contains(out, "--accent:oklch(0.445") || strings.Contains(out, "--bg:oklch(0.228") {
 		t.Errorf("custom CSS should fully replace the built-in theme:\n%s", out)
 	}
 }
@@ -442,8 +452,12 @@ func TestMarkdownCustomCSSReplacesTheme(t *testing.T) {
 // the renderer emits is the same stylesheet the theme package hands the chrome.
 func TestMarkdownRendererSharesThemeWithChrome(t *testing.T) {
 	out := string(Markdown([]byte("# Title"), Options{Theme: theme.Default}))
-	if !strings.Contains(out, theme.CSS(theme.Default)) {
-		t.Errorf("renderer did not embed the shared theme stylesheet verbatim")
+	if !strings.Contains(out, theme.ToggleCSS()) {
+		t.Errorf("renderer did not embed the shared contract stylesheet verbatim")
+	}
+	pinned := string(Markdown([]byte("# Title"), Options{Theme: "dracula"}))
+	if !strings.Contains(pinned, theme.CSS("dracula")) {
+		t.Errorf("pinned renderer did not embed the shared theme stylesheet verbatim")
 	}
 }
 
@@ -519,10 +533,10 @@ func TestMarkdownNoHeaderKeepsH1(t *testing.T) {
 // TestMarkdownToggleShipsBothTokenSets: the toggle needs both palettes inline.
 func TestMarkdownToggleShipsBothTokenSets(t *testing.T) {
 	out := string(Markdown([]byte("# T"), Options{Header: true}))
-	if !strings.Contains(out, ":root{") || !strings.Contains(out, `html[data-theme="dark"]{`) {
+	if !strings.Contains(out, ":root{") || !strings.Contains(out, `:root[data-theme="dark"]{`) {
 		t.Errorf("both token sets must be present for the toggle:\n%s", out)
 	}
-	if !strings.Contains(out, "--bg:oklch(0.972") || !strings.Contains(out, "--bg:oklch(0.225") {
+	if !strings.Contains(out, "--bg:oklch(0.982") || !strings.Contains(out, "--bg:oklch(0.228") {
 		t.Errorf("light and dark bg tokens both required for an instant client swap")
 	}
 	if !strings.Contains(out, `class="themetoggle"`) {
@@ -533,6 +547,30 @@ func TestMarkdownToggleShipsBothTokenSets(t *testing.T) {
 	}
 	if !strings.Contains(out, "prefers-reduced-motion") {
 		t.Errorf("expected a prefers-reduced-motion guard for the masthead transition")
+	}
+}
+
+// TestMarkdownThreeThemeBlocks pins the house light/dark contract on the page
+// the server serves for ?render=md: the complete light palette on bare :root,
+// the dark palette under a guarded prefers-color-scheme media query, and the
+// dark palette again under an explicit [data-theme="dark"] override so a
+// stored choice wins in both directions.
+func TestMarkdownThreeThemeBlocks(t *testing.T) {
+	out := string(Markdown([]byte("# T\n\nbody"), Options{Header: true, Footer: true}))
+	for _, block := range []string{
+		":root{",
+		"@media (prefers-color-scheme: dark){\n:root:not([data-theme=\"light\"]){",
+		`:root[data-theme="dark"]{`,
+	} {
+		if !strings.Contains(out, block) {
+			t.Errorf("served page missing theme block %q", block)
+		}
+	}
+	if strings.Count(out, "--bg:oklch(0.228") < 2 {
+		t.Errorf("dark tokens must appear in both the guarded media block and the explicit override")
+	}
+	if !strings.Contains(out, "--bg:oklch(0.982") {
+		t.Errorf("light tokens must live on the bare :root")
 	}
 }
 
@@ -560,7 +598,7 @@ func TestMarkdownToggleUsesSunMoonSVG(t *testing.T) {
 // ahead of the body.
 func TestMarkdownLeadParagraph(t *testing.T) {
 	out := string(Markdown([]byte("# Doc\n\n**Date:** today\n\nrest"), Options{Header: true}))
-	if !strings.Contains(out, `.lead{font-size:1.2rem`) {
+	if !strings.Contains(out, ".lead{font-size:1.0625rem") {
 		t.Errorf("expected a .lead rule for the dek:\n%s", out)
 	}
 	if !strings.Contains(out, `<p class="lead">`) {
@@ -570,7 +608,7 @@ func TestMarkdownLeadParagraph(t *testing.T) {
 		t.Errorf("the fragile positional lead selector must be gone:\n%s", out)
 	}
 	// Editorial measure is applied to the document column.
-	if !strings.Contains(out, "max-width:43rem") {
+	if !strings.Contains(out, "max-width:70ch") {
 		t.Errorf("expected a capped editorial measure for the document column:\n%s", out)
 	}
 }
@@ -618,19 +656,24 @@ func TestMastheadToggleAriaPressed(t *testing.T) {
 	}
 }
 
-// TestMarkdownToggleInitialTheme: server theme sets the initial data-theme; an
-// unset theme leaves the init script to fall back to prefers-color-scheme.
+// TestMarkdownToggleInitialTheme: an explicit server theme sets the initial
+// data-theme; an unset theme leaves the attribute OFF so the stylesheet's
+// guarded prefers-color-scheme block follows the OS with no JS at all.
 func TestMarkdownToggleInitialTheme(t *testing.T) {
 	d := string(Markdown([]byte("# T"), Options{Header: true, Theme: "dark"}))
 	if !strings.Contains(d, `<html lang="en" data-theme="dark">`) {
 		t.Errorf("explicit dark not reflected in <html data-theme>:\n%s", d)
 	}
 	u := string(Markdown([]byte("# T"), Options{Header: true}))
-	if !strings.Contains(u, `<html lang="en" data-theme="light">`) {
-		t.Errorf("unset theme should render light server-side (no-JS):\n%s", u)
+	if strings.Contains(u, `<html lang="en" data-theme=`) {
+		t.Errorf("unset theme must leave data-theme off so prefers-color-scheme decides:\n%s", u)
 	}
-	if !strings.Contains(u, "d=''") {
-		t.Errorf("unset server theme must be empty in the init script so prefers-color-scheme applies:\n%s", u)
+	if !strings.Contains(u, `<html lang="en">`) {
+		t.Errorf("unset theme should still emit the html element:\n%s", u)
+	}
+	// The init script applies only a stored explicit choice.
+	if !strings.Contains(u, "localStorage.getItem('demiplane-theme')") {
+		t.Errorf("init script should read the stored theme choice:\n%s", u)
 	}
 }
 
@@ -644,7 +687,7 @@ func TestMarkdownCustomCSSDisablesToggle(t *testing.T) {
 	if !strings.Contains(out, `class="doctitle"`) {
 		t.Errorf("masthead title should still render under --css")
 	}
-	if strings.Contains(out, `html[data-theme="dark"]{`) {
+	if strings.Contains(out, `:root[data-theme="dark"]{`) {
 		t.Errorf("custom CSS should not ship the built-in dark token set")
 	}
 }
@@ -777,7 +820,7 @@ func TestMarkdownColorScheme(t *testing.T) {
 	if !strings.Contains(tog, "color-scheme:dark") {
 		t.Errorf("toggle sheet missing the dark color-scheme override:\n%s", tog)
 	}
-	if !strings.Contains(tog, `<meta name="theme-color" content="oklch(0.972 0.004 250)">`) {
+	if !strings.Contains(tog, `<meta name="theme-color" content="oklch(0.982 0.004 91)">`) {
 		t.Errorf("missing light theme-color meta:\n%s", tog)
 	}
 	// A pinned dark theme carries a single color-scheme:dark and its own bar color.
@@ -804,7 +847,7 @@ func TestMarkdownChromeNoBurntOrange(t *testing.T) {
 		}
 	}
 	// The rojo accent fallback is what should be there instead.
-	if !strings.Contains(out, "var(--accent,oklch(0.485 0.135 27))") {
+	if !strings.Contains(out, "var(--accent,oklch(0.445 0.122 23))") {
 		t.Errorf("chrome accent fallback not synced to the rojo token:\n%s", out)
 	}
 }

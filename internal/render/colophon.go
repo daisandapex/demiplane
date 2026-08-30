@@ -154,18 +154,18 @@ func humanSize(n int64) string {
 // pushed right, and a right-aligned meta row. Colors are theme tokens with OKLCH
 // fallbacks so the block still renders under a --css override that ships none.
 const coloCSS = `
-.colo{margin-top:3.5rem;padding-top:1rem;border-top:1px solid var(--line,oklch(0.895 0.008 255));
+.colo{margin-top:3.5rem;padding-top:1rem;border-top:1px solid var(--line,oklch(0.910 0.013 87));
   font:.8rem/1.7 var(--sans)}
 .colo .nav{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;align-items:baseline}
-.colo .nav a.prev{color:var(--muted,oklch(0.495 0.012 258))}
-.colo .nav .pos{color:var(--muted,oklch(0.495 0.012 258))}
-.colo .nav a.next{color:var(--accent,oklch(0.485 0.135 27));font-weight:600}
+.colo .nav a.prev{color:var(--muted,oklch(0.462 0.011 78))}
+.colo .nav .pos{color:var(--muted,oklch(0.462 0.011 78))}
+.colo .nav a.next{color:var(--accent,oklch(0.445 0.122 23));font-weight:600}
 .colo .nav a:hover{text-decoration:underline;text-underline-offset:2px}
 .colo .mark{margin-left:auto;letter-spacing:.12em;text-transform:uppercase;
-  color:var(--muted,oklch(0.495 0.012 258));font-size:.72rem}
-.colo .meta{display:flex;flex-wrap:wrap;gap:.3rem 1.4rem;color:var(--muted,oklch(0.495 0.012 258));
+  color:var(--muted,oklch(0.462 0.011 78));font-size:.72rem}
+.colo .meta{display:flex;flex-wrap:wrap;gap:.3rem 1.4rem;color:var(--muted,oklch(0.462 0.011 78));
   font-size:.75rem;margin-top:.5rem}
-.colo .meta a{color:var(--muted,oklch(0.495 0.012 258))}
-.colo .meta a:hover{color:var(--accent,oklch(0.485 0.135 27));text-decoration:underline;text-underline-offset:2px}
+.colo .meta a{color:var(--muted,oklch(0.462 0.011 78))}
+.colo .meta a:hover{color:var(--accent,oklch(0.445 0.122 23));text-decoration:underline;text-underline-offset:2px}
 .colo .meta .r{margin-left:auto}
 `

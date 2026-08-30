@@ -56,7 +56,7 @@ header.top nav a.active,header.top nav a:hover{color:var(--accent)}
 .ethos{display:inline-block;font-size:.92rem;color:var(--info-ink);background:var(--info-bg);
   border:1px solid var(--info-line);border-radius:999px;padding:.3rem .9rem;margin:.4rem 0 1rem}
 .badge{display:inline-block;font-family:var(--mono);font-size:.72rem;font-weight:700;
-  letter-spacing:.04em;padding:.15rem .5rem;border-radius:5px;color:oklch(0.985 0.004 250);vertical-align:middle}
+  letter-spacing:.04em;padding:.15rem .5rem;border-radius:5px;color:oklch(0.985 0.004 95);vertical-align:middle}
 .badge.post{background:var(--accent)}
 .badge.get{background:var(--navy)}
 .badge.delete{background:var(--danger)}
@@ -69,13 +69,13 @@ header.top nav a.active,header.top nav a:hover{color:var(--accent)}
 .tile:hover{border-color:var(--accent);text-decoration:none}
 .tile .t{font-family:var(--serif);font-size:1.05rem;color:var(--ink)}
 .tile .d{color:var(--muted);font-size:.85rem;margin-top:.2rem}
-.codeblock{margin:1rem 0;border-radius:10px;overflow:hidden;border:1px solid var(--code-line)}
+.codeblock{margin:1rem 0;border-radius:10px;overflow:hidden;border:1px solid var(--code-border)}
 .codeblock .cbhead{display:flex;align-items:center;justify-content:space-between;
   background:var(--code-bg);color:var(--code-ink);font-family:var(--mono);font-size:.7rem;
   letter-spacing:.12em;text-transform:uppercase;padding:.45rem .9rem}
 .codeblock .cbhead button{font:inherit;letter-spacing:.08em;background:transparent;
-  color:var(--code-ink);border:1px solid var(--code-line);border-radius:5px;padding:.1rem .55rem;cursor:pointer}
-.codeblock .cbhead button:hover{background:var(--code-line);color:var(--code-ink)}
+  color:var(--code-ink);border:1px solid var(--code-border);border-radius:5px;padding:.1rem .55rem;cursor:pointer}
+.codeblock .cbhead button:hover{background:var(--code-border);color:var(--code-ink)}
 .codeblock pre{margin:0;border:none;border-radius:0}
 footer{border-top:1px solid var(--line);color:var(--muted);font-size:.85rem;padding:1.5rem 0}
 footer .mark{font-family:var(--serif);color:var(--ink)}
