@@ -18,7 +18,7 @@ JavaScript cannot drive `/publish`, `/list`, or `DELETE` at your control plane.
 
 | Plane | What lives here | Default bind |
 |---|---|---|
-| Control plane | `POST /publish`, `GET /list`, `DELETE /{slug}`, `/docs`, `/help`, `/connect`, `/gallery`, reply admin | `127.0.0.1:8080` |
+| Control plane | `POST /publish`, `GET /list`, `DELETE /{slug}`, `POST /rerender`, `/docs`, `/help`, `/connect`, `/gallery`, reply admin | `127.0.0.1:8080` |
 | Content origin | `GET /{slug}` artifact bytes, sites, SSE reload stream, inline answer submit | control port + 1, e.g. `:8081` |
 
 `POST /publish` runs on the control plane and returns a URL on the content
@@ -420,6 +420,75 @@ resp.Body.Close()
 fmt.Println(resp.StatusCode) // 204 or 404
 ```
 
+## POST /rerender
+
+Rebake a `?render=md` page from the markdown the store kept when it was
+published, using the instance's **current** renderer and theme. Control plane,
+auth: bearer.
+
+`POST /rerender/{slug}` rebakes one page; `POST /rerender` walks every stored
+artifact and rebakes each one that has a retained source. Neither takes a body.
+
+This exists because rendering happens once, at publish: without it, upgrading the
+renderer or switching themes leaves every existing page on the old output until
+someone re-publishes it from a copy of the markdown they may no longer have.
+
+A rebake changes the rendering and nothing else. The slug, filename,
+content-type, privacy, view password, TTL, series, and original publish date all
+survive it, and the page keeps its URL.
+
+An artifact with no retained source — anything published before source retention
+existed, and every non-markdown upload — is **skipped, not failed**: the response
+is `200` with `"rerendered": false` and a reason, and the artifact's bytes are
+untouched. `404` means the slug does not exist at all. Scope: this rebakes. There
+is no version history, no diff, and no editor.
+
+```json
+{
+  "slug": "notes",
+  "rerendered": true,
+  "size": 8192
+}
+```
+
+```json
+{
+  "rerendered": 33,
+  "skipped": 5,
+  "failed": {},
+  "results": [
+    { "slug": "notes", "rerendered": true, "size": 8192 },
+    { "slug": "logo.svg", "rerendered": false, "reason": "no retained markdown source (published before source retention, or not a ?render=md page)" }
+  ]
+}
+```
+
+Without `Accept: application/json` both routes answer in plain text.
+
+### Rerender: worked examples
+
+```bash
+# one page
+curl -X POST -H "Authorization: Bearer $TOKEN" "$CTRL/rerender/notes"
+
+# every page with a retained source, after upgrading the binary
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Accept: application/json" \
+     "$CTRL/rerender"
+```
+
+```python
+import os, requests
+r = requests.post(
+    "https://demiplane.example/rerender",
+    headers={
+        "Authorization": f"Bearer {os.environ['DEMIPLANE_TOKEN']}",
+        "Accept": "application/json",
+    },
+)
+report = r.json()
+print(report["rerendered"], "rebaked,", report["skipped"], "skipped")
+```
+
 ## Replies
 
 The reply module (build tag `reply`) lets a viewer respond to a published page
@@ -585,7 +654,8 @@ and it never lists private capability slugs.
 These names collide with built-in routes and are rejected (`400`) as a `?slug=`,
 so an artifact can never shadow a route: `publish`, `list`, `docs`, `help`,
 `help.json`, `llms.txt`. Feature routes reserve their own top segments too
-(for example `connect`, `gallery`, `reply`, `replies`, `answer`, `_events`).
+(for example `connect`, `gallery`, `rerender`, `reply`, `replies`, `answer`,
+`_events`).
 
 ## See also
 

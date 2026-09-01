@@ -121,7 +121,7 @@ defaults, and TTL/expiry, with **no dependency on pico.sh**.
 | **Internal-first** | Loopback by default; bind a LAN/mesh IP to expose. A wildcard bind logs a loud warning. |
 | **Per-artifact privacy** | 144-bit unguessable capability slugs, optional view passwords, TTL/expiry with a background sweeper. |
 | **Two-plane isolation** | Control plane and content origin are separate; served content cannot touch your controls. |
-| **Markdown render** | Opt-in `?render=md` with themes, syntax highlighting, heading anchors, and frontmatter meta-headers. |
+| **Markdown render** | Opt-in `?render=md` with themes, syntax highlighting, heading anchors, and frontmatter meta-headers. The markdown source is kept, so `POST /rerender` rebakes pages after a theme or renderer change. |
 | **Multi-file sites** | Publish a tar/zip/multipart bundle and serve the whole tree at one slug. |
 | **Live reload** | `?live` streams updates over SSE while you iterate. |
 | **SSH ingest** | `demiplane receive` publishes over your existing `sshd` via an `authorized_keys` forced command. |

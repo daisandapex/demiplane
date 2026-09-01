@@ -34,6 +34,38 @@ artifacts are never listed.
 The render theme system (OKLCH tokens, type scale, the rendered-page chrome) is documented
 in [DESIGN.md](../DESIGN.md).
 
+## Source retention and re-rendering
+
+A rendered page is baked once, at publish. demiplane keeps the **markdown it was
+given** alongside the baked HTML (a sidecar under `<store>/sources/`, mode 0700
+like the blobs), so a later renderer or theme change can rebake the page from the
+store instead of from whatever copy of the source you still have:
+
+```sh
+# after installing a new binary or changing --theme
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Accept: application/json" \
+     "$CTRL/rerender"            # every page that has a retained source
+
+curl -X POST -H "Authorization: Bearer $TOKEN" "$CTRL/rerender/notes"   # just one
+```
+
+A rebake re-runs the current renderer over the stored source and swaps the result
+in at the same URL. Everything else about the artifact is preserved: privacy, the
+view password, TTL, series, and the original publish date shown in the colophon
+(a rebake is not a re-publish and does not redate the page). A `?live` tab
+watching the page reloads itself, as it does for a publish.
+
+Pages published before source retention existed — and every artifact that was
+never a `?render=md` publish — have no stored source. They are **skipped and
+counted**, never touched and never an error, so a sweep over an old instance
+reports what it could and could not rebake. A re-publish that carries no source
+(a plain HTML upload landing on a slug that used to be a rendered page) drops the
+stale source with it; deleting or expiring an artifact removes its source too.
+
+Deliberately out of scope: version history, diffing, and editing. There is one
+stored source per slug and a rebake overwrites the page with what the current
+renderer makes of it. Endpoint reference: [API.md](../API.md#post-rerender).
+
 ## Inline replies (optional module)
 
 The closing half of the loop: a viewer responds to a published page —
