@@ -19,15 +19,48 @@ to a box you own, reachable only from your own network.
 > IP. That is the product, not a limitation — if you want a URL a stranger can
 > open, [use a public host instead](#when-not-to-use-it).
 
-## 60 seconds to your first link
+## Install
 
-Requires [Go 1.26+](https://go.dev/dl/). A cold build takes about 30 seconds.
+```sh
+go install github.com/daisandapex/demiplane/cmd/demiplane@latest
+```
+
+Requires [Go 1.26+](https://go.dev/dl/). The binary lands in
+`$(go env GOPATH)/bin`; a cold build takes about 30 seconds.
+
+**Why this, and why never `curl | bash`.** `go install` fetches the module
+through the Go module proxy and verifies what it downloads against
+[`sum.golang.org`](https://sum.golang.org) — a public transparency log that this
+project does not run, does not control, and cannot rewrite after the fact. The
+checksum your machine checks is the checksum every other machine checks, so a
+tampered copy served to you alone fails before a single line compiles. Then your
+own toolchain builds the source. That is cryptographic proof the source you are
+compiling is the source everybody else received, which means you do not have to
+trust the author of an unfamiliar binary — you verify instead. A piped shell
+installer gives you the opposite: it asks for that trust and offers nothing to
+check. demiplane will not ship one.
+
+Until the first tagged release, `@latest` resolves to a *pseudo-version* of the
+form `v0.0.0-<date>-<commit>`, built from the tip of `main`. It is verified
+through the same log; a tagged release is imminent.
+
+Prefer a clone if you want the build-tagged optional modules, or want to read
+before you build:
 
 ```sh
 git clone https://github.com/daisandapex/demiplane && cd demiplane
 go build -o demiplane ./cmd/demiplane
+# with the optional modules compiled in:
+go build -tags "reply tls" -o demiplane ./cmd/demiplane
+```
 
-./demiplane serve --store ./data &
+For the container path — including the digest-pinned pull that makes an image
+reference immutable — see [`docs/deployment.md`](docs/deployment.md#docker).
+
+## 60 seconds to your first link
+
+```sh
+demiplane serve --store ./data &
 #   control   http://127.0.0.1:8080   (publish / list / delete)
 #   content   http://127.0.0.1:8081   (artifacts — isolated origin)
 
