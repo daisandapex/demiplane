@@ -6,6 +6,16 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Release workflow** (`.github/workflows/release.yml`) — pushing a `vX.Y.Z`
+  tag builds `linux/amd64`, `linux/arm64`, and `darwin/arm64` binaries, writes a
+  `SHA256SUMS` file, records a GitHub build provenance attestation per binary,
+  and publishes the GitHub release. Every third-party action is pinned to a full
+  commit SHA, permissions are least-privilege per job, and the release toolchain
+  reads its Go version from `go.mod` so it cannot drift from CI's. A downloaded
+  binary is verifiable with `gh attestation verify` before it is ever run.
+
 ## [1.0.0] - 2026-07-16
 
 **First public release, under the GNU AGPL-3.0.** Everything in this section has

@@ -1,0 +1,141 @@
+name: Release
+
+# Cut by pushing a SemVer tag to main (`git tag v1.2.0 && git push origin v1.2.0`).
+# Landing work and cutting a release are separate decisions (CONTRIBUTING.md), so
+# nothing here runs on a merge — only on the tag.
+#
+# What a consumer gets: a binary per platform, a SHA256SUMS file, and a GitHub
+# build provenance attestation. The attestation is the point. demiplane is
+# published under a studio handle with no reputation to trade on, so "trust the
+# author" is not an argument we are entitled to make; instead every artifact
+# carries a signed, publicly-logged statement of which repository, which commit,
+# and which workflow produced it, which anyone can check before running a byte:
+#
+#   gh attestation verify ./demiplane_1.2.0_linux_amd64 --repo daisandapex/demiplane
+#
+# That is the same posture the README's `go install` path takes with
+# sum.golang.org: give the reader something to verify instead of someone to trust.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'   # pre-releases: v1.2.0-rc.1
+
+# Read-only by default; the one job that needs to write says so for itself.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    name: build, attest, publish
+    runs-on: ubuntu-latest
+    # Unlike ci.yml this job does NOT run inside the golang container. It needs
+    # the runner's own `gh` (absent from the golang image) to create the release,
+    # and the attestation action wants the host runner's node + OIDC plumbing.
+    # Go therefore comes from setup-go, reading the version straight out of go.mod
+    # so the release toolchain can never drift from the one CI compiles with.
+    permissions:
+      contents: write      # create the release and upload its assets
+      id-token: write      # OIDC token the provenance signer exchanges
+      attestations: write  # record the attestation on this repository
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: false
+          # Release artifacts must not be built from a restorable cache: a
+          # poisoned module/build cache would land inside the very binaries this
+          # workflow attests. A release compiles from scratch (zizmor
+          # cache-poisoning).
+          cache: false
+
+      # A tag is worth cutting only if it builds and passes. CI already gated the
+      # commit on main; this is the cheap guard against tagging the wrong one.
+      - name: test
+        run: go test ./...
+
+      # Default (untagged) builds, byte-for-byte the feature set `go install`
+      # produces — the optional reply/tls modules stay opt-in and compile-in-only,
+      # so a release binary never quietly carries a listener the docs call
+      # optional. -trimpath keeps absolute build paths out of the binary.
+      - name: build
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${VERSION#v}"
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/arm64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            out="dist/demiplane_${version}_${os}_${arch}"
+            echo "building ${out}"
+            CGO_ENABLED=0 GOOS="${os}" GOARCH="${arch}" \
+              go build -trimpath \
+                -ldflags "-s -w -X main.version=${version}" \
+                -o "${out}" ./cmd/demiplane
+          done
+          ls -l dist
+
+      # Checksums over the exact files uploaded, in the standard `sha256sum -c`
+      # format so a consumer can verify with the coreutils they already have.
+      - name: checksums
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum demiplane_* > SHA256SUMS
+          cat SHA256SUMS
+
+      # One attestation per binary, keyed by its digest. SHA256SUMS is deliberately
+      # NOT a subject: it is a convenience file, and trusting it would just move the
+      # question back to trusting a file with nothing behind it.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/demiplane_*
+
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # A tag carrying a pre-release suffix (v1.2.0-rc.1) is published as a
+          # pre-release, so `@latest` consumers are never handed a release candidate.
+          prerelease=()
+          case "${TAG}" in
+            *-*) prerelease=(--prerelease) ;;
+          esac
+          notes="$(printf '%s\n' \
+            "Verify a binary before running it:" \
+            '' \
+            '```sh' \
+            "gh attestation verify ./demiplane_${TAG#v}_linux_amd64 --repo ${REPO}" \
+            "sha256sum -c SHA256SUMS" \
+            '```' \
+            '' \
+            "Or build it yourself, verified against sum.golang.org:" \
+            '' \
+            '```sh' \
+            "go install github.com/${REPO}/cmd/demiplane@${TAG}" \
+            '```' \
+            '' \
+            "Binaries are default builds; the optional \`reply\` and \`tls\` modules" \
+            "are compile-time and need a source build (\`go build -tags \"reply tls\"\`)." \
+            '' \
+            "See CHANGELOG.md for what changed.")"
+          gh release create "${TAG}" \
+            --repo "${REPO}" \
+            --title "${TAG}" \
+            --notes "${notes}" \
+            "${prerelease[@]}" \
+            dist/*
