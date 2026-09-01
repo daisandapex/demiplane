@@ -77,6 +77,10 @@ Optional features are compiled in via the module-extension pattern (see
   since the last release: a breaking change is a **major** bump, a
   backward-compatible feature is a **minor** bump, and a fix-only release is a
   **patch**.
+- Pushing a `vX.Y.Z` tag is the whole release: `.github/workflows/release.yml`
+  builds the linux/amd64, linux/arm64 and darwin/arm64 binaries, writes
+  `SHA256SUMS`, attests each binary's build provenance, and publishes the GitHub
+  release. Never push a tag to test it.
 - Landing work and cutting a release are separate decisions. `main` accumulates
   merges; a release is cut deliberately when there is user-meaningful value,
   bumping the version, updating `CHANGELOG.md`, and tagging `vX.Y.Z`. A

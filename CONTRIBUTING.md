@@ -87,6 +87,19 @@ go test -race -tags "reply tls" ./...
   a major bump, a backward-compatible feature is a minor bump, and a fix-only
   release is a patch. Releases are cut deliberately (version bump +
   `CHANGELOG.md` entry + `vX.Y.Z` tag), not on every merge.
+- Pushing the tag is the whole release. `.github/workflows/release.yml` builds
+  `linux/amd64`, `linux/arm64`, and `darwin/arm64` binaries, writes `SHA256SUMS`,
+  records a GitHub build provenance attestation for each binary, and publishes
+  the GitHub release. A tag with a pre-release suffix (`v1.2.0-rc.1`) publishes
+  as a pre-release. Anyone can then check a downloaded binary against the
+  attestation before running it:
+
+  ```sh
+  gh attestation verify ./demiplane_1.2.0_linux_amd64 --repo daisandapex/demiplane
+  ```
+
+  Release binaries are default builds; the optional `reply` and `tls` modules are
+  compile-time and need a source build.
 
 ## Architecture quick reference
 
