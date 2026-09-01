@@ -63,7 +63,7 @@ const defaultMaxUpload = 100 << 20 // 100 MiB
 // version is the release baseline; a build stamps the exact commit via
 // -ldflags "-X main.version=1.2-<short-sha>" (see the Dockerfile and the release
 // runbook). A bare `go build` reports this baseline.
-var version = "1.2.0"
+var version = "2.0.0"
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)

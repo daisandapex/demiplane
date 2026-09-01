@@ -6,6 +6,22 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-09-01
+
+### Changed
+
+- **BREAKING: series membership is explicit.** Artifacts join a prev/next
+  family only through the `series` publish parameter; slug-prefix families
+  (`notes-01`, `notes-02`, …) no longer group automatically. Pages
+  published before this change keep working individually, but their colophon
+  prev/next links and gallery grouping are gone until each is republished with
+  an explicit `?series=`.
+- **Markdown render overhaul** — rendered markdown pages get a reworked house
+  theme and a set of render-fidelity fixes (#12, #13). Markdown bakes at
+  publish, so pages published before the overhaul keep their old rendering
+  until rebaked (see source retention, below, for how that stops being true
+  going forward).
+
 ### Added
 
 - **Release workflow** (`.github/workflows/release.yml`) — pushing a `vX.Y.Z`
