@@ -454,7 +454,16 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 
 	// Optional markdown→HTML render. This path buffers the (small) document
 	// rather than streaming, bounded by maxRenderBytes.
-	var src io.Reader = body
+	//
+	// The buffered document is also RETAINED (sourceBody/renderSpec below): the
+	// baked HTML is a lossy, one-way projection of it, so keeping only the HTML
+	// meant a renderer or theme change could never reach a page again once its
+	// author lost the markdown. See internal/store/source.go and rerender.go.
+	var (
+		src        io.Reader = body
+		sourceBody []byte
+		renderSpec string
+	)
 	if renderRequested(q) {
 		data, rerr := io.ReadAll(io.LimitReader(body, maxRenderBytes+1))
 		if rerr != nil {
@@ -481,16 +490,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		// named-slug requirement keeps auto-generated capability slugs out of the
 		// nav (a generated slug is not a stable link target). A List error is
 		// non-fatal — the colophon just shows the meta row with no series nav.
-		var siblings []string
-		if series != "" && named != "" {
-			if arts, lerr := s.store.List(store.DefaultOwner); lerr == nil {
-				for _, a := range arts {
-					if a.Slug != named && a.Series == series {
-						siblings = append(siblings, a.Slug)
-					}
-				}
-			}
-		}
+		published := time.Now()
 		src = bytes.NewReader(render.Markdown(data, render.Options{
 			Theme:       s.renderTheme,
 			CSS:         s.renderCSS,
@@ -503,12 +503,17 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 			ReplyNext:   next, // validated above; "" unless a reply box is baked
 			Colophon:    true,
 			Slug:        named,
-			Published:   time.Now(),
-			Siblings:    siblings,
+			Published:   published,
+			Siblings:    s.seriesSiblings(series, named),
 			ContentBase: s.contentBase(r),
 			IndexURL:    s.requestBase(r) + "/gallery",
 		}))
 		filename = renderedName(filename)
+		// Retain the markdown and the request-side render arguments, so this page
+		// can be rebaked by a later renderer without its author still holding a
+		// copy of the source (POST /rerender).
+		sourceBody = data
+		renderSpec = marshalRenderSpec(renderSpecFor(named, series, replySlugFor(replyBox, named), next, published))
 	}
 
 	opts := store.PutOptions{
@@ -518,6 +523,10 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		Password: r.Header.Get(PasswordHeader),
 		TTL:      ttl,
 		Series:   series,
+		// nil on a non-rendered publish, which also DROPS any source retained at
+		// this slug by an earlier rendered publish (store.Put).
+		Source:     sourceBody,
+		RenderSpec: renderSpec,
 	}
 	art, err := s.store.Put(opts, src)
 	if err != nil {
@@ -744,6 +753,32 @@ func replyRequested(q url.Values) bool {
 	default: // "question", "comment", "1", "true", "on", bare ?reply
 		return true
 	}
+}
+
+// seriesSiblings returns the already-published, non-private artifacts that share
+// an explicit ?series= family with named, for the colophon's prev/next nav. Both
+// the publish path and the rebake path (rerender.go) mint the nav from the CURRENT
+// family, so a page rebaked after its siblings landed picks them up.
+//
+// A series is only a family when it was declared: slug text never creates one.
+// The named-slug requirement keeps auto-generated capability slugs out of the nav
+// — a generated slug is not a stable link target. A List error is non-fatal; the
+// colophon simply shows the meta row with no series nav.
+func (s *Server) seriesSiblings(series, named string) []string {
+	if series == "" || named == "" {
+		return nil
+	}
+	arts, err := s.store.List(store.DefaultOwner)
+	if err != nil {
+		return nil
+	}
+	var siblings []string
+	for _, a := range arts {
+		if a.Slug != named && a.Series == series {
+			siblings = append(siblings, a.Slug)
+		}
+	}
+	return siblings
 }
 
 // replySlugFor returns the slug the rendered page's reply box should target, or

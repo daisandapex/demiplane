@@ -46,6 +46,11 @@ type Artifact struct {
 	PasswordHash string    // "" = no view password
 	ExpiresAt    time.Time // zero = never expires
 	Series       string    // explicit ?series= family; "" = no series
+	// RenderSpec is the opaque render-parameter blob captured when a rendered
+	// artifact was published, kept so the page can be rebaked from its retained
+	// source later (see source.go). "" = nothing retained. The store never
+	// interprets it.
+	RenderSpec string
 }
 
 // HasPassword reports whether the artifact is gated by a view password.
@@ -56,7 +61,10 @@ func (a Artifact) HasPassword() bool { return a.PasswordHash != "" }
 type Store struct {
 	root    string
 	blobDir string
-	db      *sql.DB
+	// sourceDir holds the ORIGINAL document a rendered artifact was baked from,
+	// one sidecar file per slug. See source.go.
+	sourceDir string
+	db        *sql.DB
 	// notifier, when set (via SetNotifier at startup), is fired after each
 	// successful Put so the SSE live-reload feature can push a reload event. See
 	// notify.go. nil = no notifications (default).
@@ -66,11 +74,17 @@ type Store struct {
 // Open opens (creating if needed) a store rooted at dir.
 func Open(dir string) (*Store, error) {
 	blobDir := filepath.Join(dir, "blobs")
+	sourceDir := filepath.Join(dir, sourceDirName)
 	// 0700, not 0755: blobs include password-gated artifacts, so other local
 	// users must not be able to read them off disk and bypass the view gate.
 	// This also blocks traversal into the store dir (and thus meta.db).
 	if err := os.MkdirAll(blobDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create blob dir: %w", err)
+	}
+	// 0700 for the same reason as blobs: a retained source is the plaintext of a
+	// password-gated page, so it must not be readable by other local users.
+	if err := os.MkdirAll(sourceDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create source dir: %w", err)
 	}
 	dbPath := filepath.Join(dir, "meta.db")
 	// _pragma busy_timeout avoids spurious "database is locked" under concurrency.
@@ -78,7 +92,7 @@ func Open(dir string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open metadata db: %w", err)
 	}
-	s := &Store{root: dir, blobDir: blobDir, db: db}
+	s := &Store{root: dir, blobDir: blobDir, sourceDir: sourceDir, db: db}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, err
@@ -119,6 +133,10 @@ CREATE TABLE IF NOT EXISTS artifacts (
 		// Explicit series family (?series= at publish), replacing slug-prefix
 		// inference (render-fidelity item 4).
 		{"series", "ALTER TABLE artifacts ADD COLUMN series TEXT NOT NULL DEFAULT ''"},
+		// Opaque render parameters for a retained source (source.go). Additive,
+		// defaulting to '', so every pre-existing artifact reads back as "no
+		// retained source" instead of needing a backfill.
+		{"render_spec", "ALTER TABLE artifacts ADD COLUMN render_spec TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, col := range added {
 		if err := s.addColumnIfMissing(col.name, col.ddl); err != nil {
@@ -175,6 +193,13 @@ type PutOptions struct {
 	Password string        // plaintext view password; "" = no gate. Hashed before storage.
 	TTL      time.Duration // 0 = never expires; >0 sets expires_at = now+TTL
 	Series   string        // explicit series family (validated upstream); "" = none
+	// Source is the ORIGINAL document the stored bytes were rendered from, kept
+	// so the page can be rebaked with a later renderer (source.go). nil = nothing
+	// to retain (the ordinary, non-rendered publish).
+	Source []byte
+	// RenderSpec is the opaque render-parameter blob that goes with Source. The
+	// store persists it verbatim and never parses it.
+	RenderSpec string
 }
 
 // Put stores r under a slug and records its metadata, returning the artifact.
@@ -228,12 +253,33 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 		PasswordHash: passwordHash,
 		ExpiresAt:    expiresAt,
 		Series:       opts.Series,
+		RenderSpec:   opts.RenderSpec,
 	}
+
+	// Source retention. A publish that carries a source writes the sidecar; one
+	// that does not DROPS any sidecar already at this slug, so an overwrite (a
+	// plain HTML publish landing on a slug that used to be a rendered page) can
+	// never leave stale source describing bytes that no longer exist.
+	if opts.Source != nil {
+		if err := s.writeSource(slug, opts.Source); err != nil {
+			if !overwrite {
+				os.Remove(filepath.Join(s.blobDir, slug))
+			}
+			return Artifact{}, err
+		}
+	} else if err := s.removeSource(slug); err != nil {
+		if !overwrite {
+			os.Remove(filepath.Join(s.blobDir, slug))
+		}
+		return Artifact{}, err
+	}
+
 	if err := s.upsertMeta(art); err != nil {
 		// Best-effort rollback of the blob we just wrote on a fresh slug; for an
 		// overwrite we leave the new bytes (the row still points at a valid file).
 		if !overwrite {
 			os.Remove(filepath.Join(s.blobDir, slug))
+			_ = s.removeSource(slug)
 		}
 		return Artifact{}, err
 	}
@@ -411,8 +457,8 @@ func (s *Store) writeBlob(slug string, r io.Reader) (sniffed string, size int64,
 // are replaced with the new publish's values (re-publishing resets them).
 func (s *Store) upsertMeta(a Artifact) error {
 	const q = `
-INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(slug) DO UPDATE SET
     filename      = excluded.filename,
     content_type  = excluded.content_type,
@@ -426,10 +472,13 @@ ON CONFLICT(slug) DO UPDATE SET
     private       = MAX(artifacts.private, excluded.private),
     password_hash = excluded.password_hash,
     expires_at    = excluded.expires_at,
-    series        = excluded.series;`
+    series        = excluded.series,
+    -- Follows the bytes: a re-publish with no retained source clears the spec
+    -- along with the sidecar file Put just removed.
+    render_spec   = excluded.render_spec;`
 	_, err := s.db.Exec(q,
 		a.Slug, a.Filename, a.ContentType, a.Size, a.CreatedAt.Unix(), a.Owner,
-		boolToInt(a.Private), a.PasswordHash, unixOrZero(a.ExpiresAt), a.Series,
+		boolToInt(a.Private), a.PasswordHash, unixOrZero(a.ExpiresAt), a.Series, a.RenderSpec,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert metadata: %w", err)
@@ -467,10 +516,10 @@ func (s *Store) Get(slug string) (Artifact, *os.File, error) {
 		private int
 	)
 	err := s.db.QueryRow(
-		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series
+		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec
 		   FROM artifacts WHERE slug = ?`,
 		slug,
-	).Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series)
+	).Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Artifact{}, nil, ErrNotFound
 	}
@@ -519,6 +568,11 @@ func (s *Store) Delete(slug string) error {
 	if err := os.Remove(filepath.Join(s.blobDir, slug)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("delete blob: %w", err)
 	}
+	// The retained source goes with it — a deleted artifact must not leave its
+	// plaintext behind on disk.
+	if err := s.removeSource(slug); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -528,7 +582,7 @@ func (s *Store) Delete(slug string) error {
 func (s *Store) List(owner string) ([]Artifact, error) {
 	now := time.Now().Unix()
 	rows, err := s.db.Query(
-		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series
+		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec
 		   FROM artifacts
 		  WHERE owner = ? AND private = 0 AND (expires_at = 0 OR expires_at > ?)
 		  ORDER BY created_at DESC, slug ASC`,
@@ -547,7 +601,7 @@ func (s *Store) List(owner string) ([]Artifact, error) {
 			expires int64
 			private int
 		)
-		if err := rows.Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series); err != nil {
+		if err := rows.Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec); err != nil {
 			return nil, fmt.Errorf("scan artifact: %w", err)
 		}
 		a.CreatedAt = time.Unix(created, 0).UTC()
@@ -641,6 +695,10 @@ func (s *Store) reapIfExpired(slug string, now time.Time) (bool, error) {
 	}
 	if err := os.Remove(filepath.Join(s.blobDir, slug)); err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("reap blob: %w", err)
+	}
+	// An expired artifact's retained source expires with it.
+	if err := s.removeSource(slug); err != nil {
+		return false, err
 	}
 	return true, nil
 }

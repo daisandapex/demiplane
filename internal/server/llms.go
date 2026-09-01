@@ -40,6 +40,8 @@ POST   /publish        Store the request body, return the artifact URL.
 GET    /{slug}         Fetch an artifact (open; password-gated ones need Basic auth).
 GET    /list           JSON list of artifacts (auth).
 DELETE /{slug}         Delete an artifact (auth).
+POST   /rerender[/{slug}]  Rebake ?render=md pages from their retained markdown
+                       source with the current renderer/theme (auth).
 GET    /docs           Human docs (HTML).  GET /help  Machine API (JSON).
 
 ## POST /publish
@@ -172,6 +174,11 @@ func (s *Server) handleHelp(w http.ResponseWriter, r *http.Request) {
 				Desc: "Fetch an artifact as-is. Open; password-gated artifacts require HTTP Basic credentials."},
 			{Method: "GET", Path: "/list", Auth: true, Desc: "JSON list of the owner's artifacts."},
 			{Method: "DELETE", Path: "/{slug}", Auth: true, Desc: "Delete an artifact."},
+			{Method: "POST", Path: "/rerender/{slug}", Auth: true,
+				Desc: "Rebake one ?render=md page from its retained markdown source with the current renderer. " +
+					"An artifact with no retained source is skipped (200, rerendered=false), not failed."},
+			{Method: "POST", Path: "/rerender", Auth: true,
+				Desc: "Rebake every artifact that retains a markdown source; reports rebaked/skipped/failed counts."},
 			{Method: "GET", Path: "/docs", Auth: false, Desc: "Human-readable documentation (HTML)."},
 			{Method: "GET", Path: "/llms.txt", Auth: false, Desc: "Concise plain-text API reference for LLMs/agents."},
 			{Method: "GET", Path: "/help", Auth: false, Desc: "This self-describing API document (JSON)."},

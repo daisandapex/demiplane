@@ -15,6 +15,19 @@ All notable changes to demiplane are documented here. The format follows
   commit SHA, permissions are least-privilege per job, and the release toolchain
   reads its Go version from `go.mod` so it cannot drift from CI's. A downloaded
   binary is verifiable with `gh attestation verify` before it is ever run.
+- **Source retention and re-rendering** (#14) — a `?render=md` publish now keeps
+  the markdown it was given alongside the baked HTML, and `POST /rerender/{slug}`
+  (or `POST /rerender` for the whole store) rebakes stored pages with the current
+  renderer and theme. Previously the source was discarded at publish, so a
+  renderer change could only reach a page if its author still had a copy of the
+  markdown: five pages were permanently lost during the 2026-08-30 render
+  overhaul. A rebake preserves privacy, view password, TTL, series and the
+  original publish date; artifacts with no retained source (anything published
+  before this, and every non-markdown upload) are skipped and counted, never
+  failed and never rewritten. Sources live in `<store>/sources/` at mode 0700 and
+  are removed with the artifact on re-publish, delete, and expiry. The schema
+  change is additive (`render_spec`), so an existing store upgrades in place.
+  Deliberately not included: version history, diffing, an editor.
 ### Documentation
 
 - **Install section leads with `go install`** — `go install
