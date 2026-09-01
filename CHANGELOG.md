@@ -21,6 +21,19 @@ All notable changes to demiplane are documented here. The format follows
   are removed with the artifact on re-publish, delete, and expiry. The schema
   change is additive (`render_spec`), so an existing store upgrades in place.
   Deliberately not included: version history, diffing, an editor.
+### Documentation
+
+- **Install section leads with `go install`** — `go install
+  github.com/daisandapex/demiplane/cmd/demiplane@latest` is now the first
+  install path in the README, with the trust argument stated plainly: the
+  download is verified against `sum.golang.org`, a public transparency log the
+  project does not control, so the user gets cryptographic proof the source
+  matches what everyone else received and compiles it themselves. Notes that
+  `@latest` resolves to a pseudo-version until the first tagged release, and
+  records that demiplane will not ship a piped-shell installer.
+- **Digest-pinned Docker pulls** — `docs/deployment.md` now documents
+  `image@sha256:…` references and how to read a digest, with the reason a
+  mutable tag is not a version.
 
 ## [1.0.0] - 2026-07-16
 
