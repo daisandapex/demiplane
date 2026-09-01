@@ -136,6 +136,37 @@ The image is a static binary on a distroless base (no shell, non-root). The cont
 you map the ports. Pass extra flags by overriding the command, e.g.
 `docker run ... demiplane serve --bind 0.0.0.0:8080 --store /var/lib/demiplane --browse`.
 
+### Pin the image by digest
+
+A tag is a mutable pointer, not a version: whoever controls the registry
+namespace can move `:1.2` or `:latest` to different bytes at any time, and every
+later `docker pull` silently picks the new content up. A digest is the SHA-256 of
+the image manifest, so `image@sha256:…` names exactly one set of bytes forever
+and the daemon verifies what it received against that hash. Pin the digest
+anywhere the reference is meant to be reproducible — a Compose file, a Kubernetes
+manifest, a CI job, a base image in your own `Dockerfile`:
+
+```sh
+# pull an exact, immutable image
+docker pull demiplane@sha256:0123…            # 64 hex chars, no tag
+
+docker run --rm -p 8080:8080 -p 8081:8081 \
+  -v demiplane-data:/var/lib/demiplane \
+  demiplane@sha256:0123…
+```
+
+Read the digest of an image you already have, or of one in a registry, and paste
+that value into the reference you keep:
+
+```sh
+docker image inspect --format '{{index .RepoDigests 0}}' demiplane:latest
+docker buildx imagetools inspect demiplane:latest    # registry-side, no pull
+```
+
+demiplane's own `Dockerfile` follows the same rule: the builder and distroless
+base images are pinned by digest with the human-readable tag left in a comment,
+so a rebuild months later starts from the bytes the build was tested against.
+
 ## See also
 
 - [HTTP API](../API.md) — endpoints, publish parameters, auth model
