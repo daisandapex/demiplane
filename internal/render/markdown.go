@@ -945,12 +945,20 @@ window.addEventListener('scroll',f,{passive:true});}
 `
 
 // docChromeCSS styles the sticky editorial masthead, the document measure, the
-// quiet lead paragraph, and the thin vanity footer. Colors are theme tokens
-// (with OKLCH fallbacks matching the current rojo palette so the chrome still
-// renders if a --css override ships no tokens). The masthead carries no border
-// until scrolled, then a hairline plus a soft shadow fade in on an ease-out-expo
-// curve. Motion respects prefers-reduced-motion. Layout properties are never
-// transitioned.
+// quiet lead paragraph, and the thin vanity footer.
+//
+// The measure is one root-relative token (--measure) so every block child of
+// main.wrap, and the masthead and footer columns, share a single left edge. A
+// per-child ch value resolved against each element's own font-size: an h2 at
+// 1.5rem got a box 1.5x wider than a paragraph's and, being centred, hung far
+// left of the text column. 30rem holds the body near 70 characters of the
+// serif at 1rem (WCAG 1.4.8 caps the measure at 80).
+//
+// Colors are theme tokens (with OKLCH fallbacks matching the current rojo
+// palette so the chrome still renders if a --css override ships no tokens). The
+// masthead carries no border until scrolled, then a hairline plus a soft shadow
+// fade in on an ease-out-expo curve. Motion respects prefers-reduced-motion.
+// Layout properties are never transitioned.
 //
 // The .doctitle single-line ellipsis truncation (white-space:nowrap;
 // overflow:hidden;text-overflow:ellipsis) is DELIBERATE on the wide masthead: it
@@ -962,9 +970,10 @@ window.addEventListener('scroll',f,{passive:true});}
 // The full title is always in <head><title> and, when the body keeps its H1, in
 // the document body.
 const docChromeCSS = `
-.docbar>.wrap,.docfoot>.wrap{max-width:calc(70ch + 2.5rem);padding:0 1.25rem}
+:root{--measure:30rem}
+.docbar>.wrap,.docfoot>.wrap{max-width:calc(var(--measure) + 2.5rem);padding:0 1.25rem}
 main.wrap{max-width:none;padding:2.6rem 1.25rem 5rem}
-main.wrap>*{max-width:70ch;margin-inline:auto}
+main.wrap>*{max-width:var(--measure);margin-inline:auto}
 @media (min-width:60rem){main.wrap>.table-wrap,main.wrap>pre{max-width:min(62rem,100%)}}
 .lead{font-size:1.0625rem}
 .docbar{position:sticky;top:0;z-index:10;background:var(--bg,oklch(0.982 0.004 91));

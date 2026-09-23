@@ -334,6 +334,66 @@ func TestHeadingScaleHierarchy(t *testing.T) {
 	}
 }
 
+// TestReadingRhythm pins the WCAG 2.2 SC 1.4.8 spacing figures: body leading at
+// least 1.5, the baseline step across a paragraph break at least 1.5x the line
+// step, headings spaced at least twice as far from the block above as from
+// their own text, and inline code that cannot grow the line box.
+func TestReadingRhythm(t *testing.T) {
+	c := Content()
+	num := func(re string) []float64 {
+		m := regexp.MustCompile(re).FindStringSubmatch(c)
+		if m == nil {
+			t.Fatalf("no match for %q:\n%s", re, c)
+		}
+		var out []float64
+		for _, s := range m[1:] {
+			f, err := strconv.ParseFloat(s, 64)
+			if err != nil {
+				t.Fatalf("parse %q: %v", s, err)
+			}
+			out = append(out, f)
+		}
+		return out
+	}
+	lh := num(`body\{[^}]*font:1rem/([0-9.]+) `)[0]
+	if lh < 1.5 {
+		t.Errorf("body line-height %.2f < 1.5 (SC 1.4.8)", lh)
+	}
+	para := num(`\np\{margin:0 0 ([0-9.]+)em`)[0]
+	if (lh+para)/lh < 1.5 {
+		t.Errorf("paragraph step %.2fem is under 1.5x the %.2f line step", lh+para, lh)
+	}
+	list := num(`ul,ol\{margin:0 0 ([0-9.]+)em`)[0]
+	if list != para {
+		t.Errorf("lists (%.3fem) and paragraphs (%.3fem) should share one block gap", list, para)
+	}
+	for _, h := range []string{"h3", "h4", "h5", "h6"} {
+		m := num(h + `\{[^}]*margin:([0-9.]+)rem 0 ([0-9.]+)rem`)
+		if m[0] < 2*m[1] {
+			t.Errorf("%s space above %.3frem is not at least twice the %.3frem below", h, m[0], m[1])
+		}
+		if m[0] <= para {
+			t.Errorf("%s space above %.3frem must exceed the %.3fem paragraph gap", h, m[0], para)
+		}
+	}
+	h2 := num(`h2\{[^}]*padding-top:([0-9.]+)rem;margin:([0-9.]+)rem 0 ([0-9.]+)rem`)
+	if h2[0]+h2[1] < 2*h2[2] {
+		t.Errorf("h2 space above is not at least twice the space below: %v", h2)
+	}
+	code := regexp.MustCompile(`\ncode\{[^}]*\}`).FindString(c)
+	for _, want := range []string{"line-height:1;", "border:0;", "background:color-mix(in oklab,var(--code-border) 45%,var(--code-bg))"} {
+		if !strings.Contains(code, want) {
+			t.Errorf("inline code rule missing %q: %s", want, code)
+		}
+	}
+	if !strings.Contains(c, "pre code{background:none;border:0;color:inherit;padding:0;border-radius:0;font-size:1em;line-height:inherit}") {
+		t.Errorf("code blocks must inherit the pre leading, not the chip's line-height:1:\n%s", c)
+	}
+	if strings.Contains(c, "text-align:justify") {
+		t.Errorf("SC 1.4.8: text must not be justified")
+	}
+}
+
 // TestColorSchemeAndMetaColor is the m2 fix: every pinned theme declares its
 // color-scheme, ToggleCSS carries light in root + dark in the override, and
 // MetaColor returns the palette's own --bg (never drifting).

@@ -6,6 +6,17 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Rendered pages share one left edge.** The document column measure was
+  `70ch` per child, and `ch` follows each element's own font-size, so headings,
+  the lead and blockquotes got wider centred boxes than the body and hung left
+  of it (an h2 by 140px at a 1360px window). The measure is now one
+  root-relative token, `--measure: 30rem`, which also brings the body to about
+  70 characters per line (it measured 83). Paragraph and list spacing, heading
+  spacing and inline code chips now meet WCAG 2.2 SC 1.4.8. Pages bake at
+  publish, so run `POST /rerender` after upgrading.
+
 ## [2.0.0] - 2026-09-01
 
 ### Changed
