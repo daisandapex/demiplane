@@ -44,7 +44,7 @@ Color strategy: **Restrained** (warm tinted neutrals + one accent, links only).
 | `--accent` | `oklch(0.445 0.122 23)` | `oklch(0.749 0.082 29)` | links and the focus ring, nothing else |
 | `--code-bg` | `oklch(0.953 0.010 87)` | `oklch(0.205 0.008 85)` | code surface, inline and block (follows its face) |
 | `--code-ink` | `oklch(0.261 0.010 89)` | `oklch(0.871 0.015 85)` | code text, inline and block |
-| `--code-border` | `oklch(0.883 0.017 88)` | `oklch(0.342 0.015 85)` | code hairline border, inline and block |
+| `--code-border` | `oklch(0.883 0.017 88)` | `oklch(0.342 0.015 85)` | code block hairline border (inline chips are background only) |
 | `--navy` | `oklch(0.420 0.085 245)` | `oklch(0.620 0.095 240)` | secondary accent (landing GET badge) |
 | `--danger` | `oklch(0.520 0.165 28)` | `oklch(0.700 0.150 28)` | destructive accent (DELETE badge) |
 | `--info-bg/-line/-ink` | blue-grey trio | blue-grey trio | landing ethos pill |
@@ -142,8 +142,11 @@ System stacks only, no web fonts, no CDN.
 - `--sans`: system UI sans (byline/meta, table text, colophon)
 - `--mono`: system mono (code)
 
-Essay scale: 16px (`1rem`) serif body on 1.6 leading, compact block margins
-(paragraphs owe `.875em` below). Headings are size-led at weight 700:
+Essay scale: 16px (`1rem`) serif body on 1.6 leading. Paragraphs and lists owe
+`1.5em` below, so the baseline step across a paragraph break is about 1.9x the
+line step (WCAG 2.2 SC 1.4.8 asks for at least 1.5x). Headings sit at least
+twice as far from the block above as from their own text. Inline code is a
+background-only chip (no border) at `line-height:1`, so it never widens a line. Headings are size-led at weight 700:
 h1 `2.125rem` (tracked `-0.02em`), h2 `1.5rem` over a hairline top rule (the
 section scan aid), h3 `1.1875rem`, then `1.0625rem`/`1rem`/`.875rem` down to
 h6. The lead paragraph bumps to `1.0625rem`. Blockquotes are unboxed italic at
@@ -152,7 +155,12 @@ headers are muted weight-600, never uppercase (the byline keeps its
 letterspaced uppercase as a one-off). `text-wrap: pretty` on paragraphs,
 `balance` on headings.
 
-The measure is `70ch` on the document column. Tables and code blocks break out
+The measure is one root-relative token, `--measure: 30rem`, applied to every
+block child of the document column, so headings, paragraphs, lists, the lead and
+blockquotes share one left edge. It holds the body near 70 characters per line
+(SC 1.4.8 caps it at 80). A `ch` measure is avoided on purpose: `ch` resolves
+against each element's own font-size, so a larger heading got a wider centred
+box and hung left of the text. Tables and code blocks break out
 to a centred `min(62rem, 100%)` cap on viewports over `60rem`; below that they
 fall back to the measure and scroll horizontally inside their own container
 (`.table-wrap` / `pre`), so the body never scrolls sideways
@@ -165,7 +173,7 @@ fall back to the measure and scroll horizontally inside their own container
   muted kicker (the wordmark; the accent is links-only), the document title set
   as the single display-serif H1 (lifted from the body so it is not
   duplicated), and the theme toggle. The masthead and footer columns align to
-  the 70ch text measure.
+  the `--measure` text column.
 - **Title**: every rendered document emits a `<head><title>` (the lifted H1, or
   the slug fallback, reduced to plain text), so a shared link, tab, or bookmark is
   never blank.

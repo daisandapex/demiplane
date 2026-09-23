@@ -38,11 +38,11 @@ h1,h2,h3,h4,h5,h6{font-family:var(--serif);font-weight:700;color:var(--ink);
   line-height:1.15;text-wrap:balance}
 h1{font-size:2.125rem;letter-spacing:-.02em;margin:.3em 0 .35em}
 h2{font-size:1.5rem;line-height:1.25;letter-spacing:-.012em;border-top:1px solid var(--line);
-  padding-top:1.125rem;margin:2.375rem 0 .625rem}
-h3{font-size:1.1875rem;line-height:1.3;margin:1.625rem 0 .5rem}
-h4{font-size:1.0625rem;line-height:1.35;margin:1.5rem 0 .4rem}
-h5{font-size:1rem;margin:1.5rem 0 .3rem}
-h6{font-size:.875rem;margin:1.5rem 0 .3rem;color:var(--muted)}
+  padding-top:1.125rem;margin:2.5rem 0 .75rem}
+h3{font-size:1.1875rem;line-height:1.3;margin:2.25rem 0 .625rem}
+h4{font-size:1.0625rem;line-height:1.35;margin:2rem 0 .5rem}
+h5{font-size:1rem;margin:2rem 0 .5rem}
+h6{font-size:.875rem;margin:2rem 0 .5rem;color:var(--muted)}
 .heading-anchor{margin-left:.35em;color:var(--muted);font-weight:400;text-decoration:none;
   opacity:0;user-select:none;transition:opacity .2s cubic-bezier(.22,1,.36,1)}
 .heading-anchor:hover,.heading-anchor:active{color:var(--accent);text-decoration:none}
@@ -52,18 +52,20 @@ h4:hover .heading-anchor,h5:hover .heading-anchor,h6:hover .heading-anchor,
 @media (hover:none){.heading-anchor{opacity:.45}}
 @media print{.heading-anchor{display:none}}
 @media (prefers-reduced-motion:reduce){.heading-anchor{transition:none}}
-p{margin:0 0 .875em;text-wrap:pretty}
-ul,ol{margin:0 0 .875em;padding-left:1.5em}
+p{margin:0 0 1.5em;text-wrap:pretty}
+ul,ol{margin:0 0 1.5em;padding-left:1.5em}
 li{margin:.3em 0}
 li::marker{color:var(--muted)}
 strong{font-weight:700}
 em{font-style:italic}
-code{font-family:var(--mono);font-size:.875em;background:var(--code-bg);
-  color:var(--code-ink);border:1px solid var(--code-border);padding:.05em .35em;border-radius:4px}
+code{font-family:var(--mono);font-size:.875em;line-height:1;
+  background:color-mix(in oklab,var(--code-border) 45%,var(--code-bg));
+  color:var(--code-ink);border:0;padding:.1em .3em;border-radius:3px;
+  -webkit-box-decoration-break:clone;box-decoration-break:clone}
 pre{background:var(--code-bg);color:var(--code-ink);border:1px solid var(--code-border);
   border-radius:8px;padding:.875rem 1rem;margin:0 0 1.125em;overflow-x:auto;
   font-size:.8125rem;line-height:1.55;tab-size:2}
-pre code{background:none;border:0;color:inherit;padding:0;border-radius:0;font-size:1em}
+pre code{background:none;border:0;color:inherit;padding:0;border-radius:0;font-size:1em;line-height:inherit}
 pre .k{color:var(--tok-key)}pre .fn{color:var(--tok-fn)}pre .s{color:var(--tok-str)}
 pre .c{color:var(--tok-com);font-style:italic}
 blockquote{margin:1.625em 0;padding:0 1.75rem;border:none;background:none;

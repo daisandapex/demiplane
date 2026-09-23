@@ -4,6 +4,7 @@
 package render
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -607,9 +608,30 @@ func TestMarkdownLeadParagraph(t *testing.T) {
 	if strings.Contains(out, "main.wrap>p:first-child") {
 		t.Errorf("the fragile positional lead selector must be gone:\n%s", out)
 	}
-	// Editorial measure is applied to the document column.
-	if !strings.Contains(out, "max-width:70ch") {
-		t.Errorf("expected a capped editorial measure for the document column:\n%s", out)
+	// Editorial measure is applied to the document column through the token.
+	for _, want := range []string{
+		":root{--measure:30rem}",
+		"main.wrap>*{max-width:var(--measure);margin-inline:auto}",
+		".docbar>.wrap,.docfoot>.wrap{max-width:calc(var(--measure) + 2.5rem)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected the shared measure rule %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestMarkdownMeasureIsNotFontRelative: the document column must not size its
+// children in ch or em. Either unit resolves against each child's own
+// font-size, so a 1.5rem h2 gets a wider centred box than a 1rem paragraph and
+// its left edge hangs outside the text column.
+func TestMarkdownMeasureIsNotFontRelative(t *testing.T) {
+	out := string(Markdown([]byte("# Doc\n\nlead\n\n## Section\n\nbody"), Options{Header: true}))
+	fontRelative := regexp.MustCompile(`max-width:\s*(calc\()?[0-9.]+(ch|em)\b`)
+	if m := fontRelative.FindString(out); m != "" {
+		t.Errorf("font-relative measure %q is back; use var(--measure):\n%s", m, out)
+	}
+	if !regexp.MustCompile(`--measure:\s*[0-9.]+rem\b`).MatchString(out) {
+		t.Errorf("--measure token must be set in rem:\n%s", out)
 	}
 }
 
