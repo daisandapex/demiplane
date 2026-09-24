@@ -35,12 +35,15 @@ type Client struct {
 	ControlURL string
 	ContentURL string
 	Token      string
-	// TokenFile, when set, is the resolved absolute path of the file the bearer
-	// token was read from. The publish tool refuses to read-and-publish this path
-	// so a prompt-injected model cannot use `path` to exfiltrate the token file to
-	// a public slug (invariant 4: the token is never rendered to a page).
+	// TokenFile, when set, is the file the bearer token was read from. The
+	// publish tool refuses to read-and-publish it (compared by file identity) so
+	// a prompt-injected model cannot use `path` to exfiltrate the token file to a
+	// public slug (invariant 4: the token is never rendered to a page).
 	TokenFile string
-	HTTP      *http.Client
+	// PublishRoot is the directory the publish tool's `path` argument must
+	// resolve inside. "" disables publishing by `path` (content still works).
+	PublishRoot string
+	HTTP        *http.Client
 }
 
 // NewClient builds a Client with sane defaults. controlURL is required;

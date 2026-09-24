@@ -111,11 +111,17 @@ inherits the posture above and was reviewed adversarially before release.
   listeners and cannot pivot to another service on the same loopback host (SSRF
   guard). Because
   MCP tool arguments are **model-chosen** (a prompt-injected model can pick them),
-  the `publish` tool's `path` argument is guarded: it **refuses the configured
-  token file** (matched on the symlink-resolved absolute path) and refuses
-  non-regular files, so it cannot be steered into exfiltrating the token or
-  following a symlink to a secret. `path` still reads any *other* regular file the
-  process can read — scope which files the MCP process can see accordingly.
+  the `publish` tool's `path` argument is guarded the same way whether the token
+  came from `--token-file` or `DEMIPLANE_TOKEN`: `path` must resolve, after
+  symlink resolution, inside a **publish root** (`--publish-root` /
+  `DEMIPLANE_PUBLISH_ROOT`, default the working directory; a working directory of
+  `/` disables `path` publishing unless `/` is set explicitly), and is opened
+  through that root so a raced-in symlink cannot leave it. It refuses symlinks and
+  non-regular files, anything on the `/proc`, `/sys` or `/dev` filesystems (so the
+  process environment is out of reach), and the configured token file matched by
+  **file identity** (device and inode), which also catches a hardlink. `path`
+  still reads any *other* regular file under the publish root that the process
+  can read — choose the root accordingly.
 - **SSE live-reload (`?live` + `GET /_events/{slug}`).** The `?live` wrapper is
   **opt-in** and does not mutate stored bytes — the plain `GET /{slug}` is
   byte-identical to what was published. The wrapper's inline reload script runs

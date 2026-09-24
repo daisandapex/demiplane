@@ -183,6 +183,7 @@ func TestToolsCall_PublishFromPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := NewClient(f.URL, "", "")
+	c.PublishRoot = dir
 	in := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"publish","arguments":{"path":` + jsonStr(fp) + `}}}` + "\n"
 	resps := runLoop(t, c, in)
 	if resps[0].Error != nil {
@@ -215,6 +216,7 @@ func TestToolsCall_PublishRefusesTokenFile(t *testing.T) {
 		abs = real
 	}
 	c.TokenFile = abs
+	c.PublishRoot = dir
 
 	in := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"publish","arguments":{"path":` + jsonStr(tf) + `}}}` + "\n"
 	resps := runLoop(t, c, in)
@@ -239,6 +241,7 @@ func TestToolsCall_PublishRefusesSymlink(t *testing.T) {
 		t.Skipf("symlink unsupported: %v", err)
 	}
 	c := NewClient("http://127.0.0.1:1", "", "")
+	c.PublishRoot = dir
 	in := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"publish","arguments":{"path":` + jsonStr(link) + `}}}` + "\n"
 	resps := runLoop(t, c, in)
 	if resps[0].Error == nil || resps[0].Error.Code != codeInvalidParams {
