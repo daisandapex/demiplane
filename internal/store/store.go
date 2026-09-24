@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"os"
@@ -71,10 +72,20 @@ type Store struct {
 	notifier Notifier
 }
 
-// Open opens (creating if needed) a store rooted at dir.
+// Open opens (creating if needed) a store rooted at dir. The store root, its
+// content directories and the metadata database are created owner-only, and an
+// existing store with group or world bits on any of them is tightened (and the
+// change logged): the database holds capability slugs and password hashes, and
+// the blobs and sources hold the bytes of password-gated artifacts.
 func Open(dir string) (*Store, error) {
 	blobDir := filepath.Join(dir, "blobs")
 	sourceDir := filepath.Join(dir, sourceDirName)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create store dir: %w", err)
+	}
+	if err := tightenStorePerms(dir); err != nil {
+		return nil, err
+	}
 	// 0700, not 0755: blobs include password-gated artifacts, so other local
 	// users must not be able to read them off disk and bypass the view gate.
 	// This also blocks traversal into the store dir (and thus meta.db).
@@ -87,6 +98,14 @@ func Open(dir string) (*Store, error) {
 		return nil, fmt.Errorf("create source dir: %w", err)
 	}
 	dbPath := filepath.Join(dir, "meta.db")
+	// Create the database file 0600 before SQLite does (it would use 0644 under
+	// the usual umask). SQLite gives the -wal and -shm files the database file's
+	// mode, so they start owner-only too.
+	dbFile, err := os.OpenFile(dbPath, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("create metadata db: %w", err)
+	}
+	dbFile.Close()
 	// _pragma busy_timeout avoids spurious "database is locked" under concurrency.
 	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
@@ -98,6 +117,47 @@ func Open(dir string) (*Store, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// storePerms lists the store paths that must be owner-only and the widest mode
+// each may keep. Paths that do not exist yet are skipped; they are created
+// owner-only when first needed.
+var storePerms = []struct {
+	name string
+	mode os.FileMode
+}{
+	{"", 0o700},
+	{"blobs", 0o700},
+	{sourceDirName, 0o700},
+	{"sites", 0o700},
+	{"meta.db", 0o600},
+	{"meta.db-wal", 0o600},
+	{"meta.db-shm", 0o600},
+}
+
+// tightenStorePerms clears any permission bits outside storePerms on the store
+// root, its content directories and the metadata database files, logging each
+// path it changes.
+func tightenStorePerms(dir string) error {
+	for _, e := range storePerms {
+		p := filepath.Join(dir, e.name)
+		fi, err := os.Stat(p)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect %s: %w", p, err)
+		}
+		perm := fi.Mode().Perm()
+		if perm&^e.mode == 0 {
+			continue
+		}
+		if err := os.Chmod(p, perm&e.mode); err != nil {
+			return fmt.Errorf("restrict %s: %w", p, err)
+		}
+		log.Printf("store: restricted %s from %04o to %04o", p, perm, perm&e.mode)
+	}
+	return nil
 }
 
 // Close releases the metadata database handle.

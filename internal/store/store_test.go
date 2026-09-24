@@ -213,8 +213,8 @@ func (repeatingReader) Read(b []byte) (int, error) {
 
 func TestStoreDirsArePrivate(t *testing.T) {
 	// Use a not-yet-existing path so Open() creates the store + blobs dirs
-	// itself (the real fresh-deploy case); t.TempDir() pre-creates its dir with
-	// looser perms, which Open does not re-permission.
+	// itself (the real fresh-deploy case). TestOpenTightensExistingStore covers
+	// an existing store with looser perms.
 	dir := filepath.Join(t.TempDir(), "store")
 	s, err := Open(dir)
 	if err != nil {
