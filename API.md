@@ -217,7 +217,10 @@ func main() {
 Fetch an artifact's bytes as-is, with the stored content-type, on the content
 origin. Always open, except that a password-gated artifact requires HTTP Basic
 credentials (username ignored, password is the password). Range requests and
-conditional GETs are supported. Two query add-ons:
+conditional GETs are supported. Responses carry `Cache-Control: no-cache`, a
+`Last-Modified` that advances on every re-publish and every `POST /rerender`, and
+an `ETag` that changes on every write of the bytes, so a cached copy is
+revalidated and replaced after either. Two query add-ons:
 
 - `?live` wraps the artifact in a first-party live-reload view that refreshes the
   moment the slug is re-published. It never alters the stored bytes.
@@ -639,6 +642,7 @@ and it never lists private capability slugs.
 | `200 OK` | Read succeeded (`GET /{slug}`, `/list`, `/replies`). |
 | `201 Created` | Publish or reply stored. |
 | `204 No Content` | Delete or ack succeeded. |
+| `304 Not Modified` | Conditional `GET /{slug}` whose `If-None-Match` or `If-Modified-Since` still matches. |
 | `302 Found` | Forward-flow redirect once a `?next` slug exists. |
 | `400 Bad Request` | Invalid or reserved slug, `private` + named slug, password in the URL query, bad `ttl`, or a malformed reply/site. |
 | `401 Unauthorized` | Missing or invalid bearer token (write/list/delete/reply admin), or a wrong view password (read). |

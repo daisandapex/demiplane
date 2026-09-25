@@ -611,16 +611,23 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition",
 			fmt.Sprintf("attachment; filename=%q", sanitizeFilename(art.Filename)))
 	}
-	// Artifacts are mutable (re-publishing a slug overwrites in place), so a
-	// browser must revalidate rather than serve a heuristically-cached stale
-	// copy — otherwise ?live reloads, and any re-view of an updated artifact,
-	// show old bytes. no-cache pairs with the Last-Modified below: a conditional
-	// GET returns 304 when unchanged and fresh bytes when re-published.
+	// Artifacts are mutable (re-publishing a slug overwrites in place, and a
+	// rebake replaces the bytes without a publish), so a browser must
+	// revalidate rather than serve a heuristically-cached stale copy —
+	// otherwise ?live reloads, and any re-view of an updated artifact, show old
+	// bytes. no-cache pairs with the validators below: a conditional GET returns
+	// 304 when unchanged and fresh bytes after a re-publish or a rebake.
 	w.Header().Set("Cache-Control", "no-cache")
+	// The version changes on every write of the bytes, including two writes in
+	// the same second, which Last-Modified cannot tell apart. ServeContent
+	// checks If-None-Match before If-Modified-Since.
+	if art.Version != "" {
+		w.Header().Set("ETag", `"`+art.Version+`"`)
+	}
 	// ServeContent handles Range requests, conditional GETs, and keeps the
-	// content-type we set above. CreatedAt is the publish time we recorded,
-	// which advances on every re-publish and drives the Last-Modified header.
-	http.ServeContent(w, r, art.Filename, art.CreatedAt, f)
+	// content-type we set above. LastModified advances on every re-publish and
+	// every rebake.
+	http.ServeContent(w, r, art.Filename, art.LastModified(), f)
 }
 
 // openUpload returns a reader over the uploaded bytes plus a filename hint. It
