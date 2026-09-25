@@ -24,9 +24,10 @@ import (
 // deleted through BOTH surfaces to prove the seam holds symmetrically.
 func TestPublishListGetDelete_RESTAndMCP(t *testing.T) {
 	srv := startServer(t, serverOpts{Token: "grid-token"})
-	mcp := startMCP(t, srv.ControlURL, srv.ContentURL, srv.TokenFile)
+	publishRoot := t.TempDir()
+	mcp := startMCP(t, srv.ControlURL, srv.ContentURL, srv.TokenFile, "--publish-root", publishRoot)
 
-	tmpFile := filepath.Join(t.TempDir(), "from-disk.html")
+	tmpFile := filepath.Join(publishRoot, "from-disk.html")
 	if err := os.WriteFile(tmpFile, []byte("<html><body>from disk</body></html>"), 0o644); err != nil {
 		t.Fatalf("write fixture file: %v", err)
 	}

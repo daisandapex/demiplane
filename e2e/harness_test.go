@@ -346,16 +346,17 @@ type mcpProc struct {
 // the initialize handshake. content may be empty (defaults to the control
 // origin, matching --unsafe-same-origin deployments); tests pass it
 // explicitly since the harness always runs split-origin.
-func startMCP(t *testing.T, controlURL, contentURL, tokenFile string) *mcpProc {
+func startMCP(t *testing.T, controlURL, contentURL, tokenFile string, extra ...string) *mcpProc {
 	t.Helper()
 
 	args := []string{"mcp", "--url", controlURL, "--content-url", contentURL}
 	if tokenFile != "" {
 		args = append(args, "--token-file", tokenFile)
 	}
+	args = append(args, extra...)
 	cmd := exec.Command(binPath, args...)
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "DEMIPLANE_TOKEN=", "DEMIPLANE_URL=")
+	cmd.Env = append(os.Environ(), "DEMIPLANE_TOKEN=", "DEMIPLANE_URL=", "DEMIPLANE_PUBLISH_ROOT=")
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
