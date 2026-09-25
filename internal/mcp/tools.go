@@ -188,13 +188,16 @@ func callPublish(ctx context.Context, c *Client, raw json.RawMessage) (*toolResu
 //   - A client with no publish root refuses `path` outright.
 //   - The given path must not itself be a symlink or special file (Lstat).
 //   - The symlink-resolved path must lie under the publish root, and the file is
-//     opened through an os.Root on that directory, so a component swapped for a
-//     symlink after the check still cannot leave the root.
+//     opened through the os.Root opened on that directory at startup, so neither
+//     a component swapped for a symlink after the check nor a replaced root
+//     directory can move the read outside it.
 //   - The opened file must be a regular file that does not live on the /proc,
 //     /sys or /dev filesystems (compared by device, so an alias path does not
 //     help), which keeps the process environment and kernel state out.
 //   - The opened file must not be the configured token file, compared by file
-//     identity (device and inode), so a symlink or hardlink to it is refused too.
+//     identity (device and inode) against both the file recorded at startup and
+//     whatever the path names now, so a symlink or hardlink to it is refused
+//     even after the original path is renamed or replaced.
 //
 // All identity checks run on the opened descriptor, so the bytes read are the
 // bytes that were checked.
@@ -202,7 +205,7 @@ func readPublishPath(c *Client, p string) ([]byte, *rpcError) {
 	refuse := func(format string, args ...any) *rpcError {
 		return &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf(format, args...)}
 	}
-	if c.PublishRoot == "" {
+	if c.publishRoot == nil {
 		return nil, refuse("publishing by `path` is disabled: no publish root is configured (use `content`, or start `demiplane mcp` with --publish-root)")
 	}
 	fi, err := os.Lstat(p)
@@ -212,10 +215,6 @@ func readPublishPath(c *Client, p string) ([]byte, *rpcError) {
 	if !fi.Mode().IsRegular() {
 		return nil, refuse("path must be a regular file (symlinks and special files are refused)")
 	}
-	root, err := resolveDir(c.PublishRoot)
-	if err != nil {
-		return nil, refuse("resolve publish root: %v", err)
-	}
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return nil, refuse("resolve path: %v", err)
@@ -224,17 +223,12 @@ func readPublishPath(c *Client, p string) ([]byte, *rpcError) {
 	if err != nil {
 		return nil, refuse("resolve path: %v", err)
 	}
-	rel, err := filepath.Rel(root, resolved)
+	rel, err := filepath.Rel(c.publishRootPath, resolved)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return nil, refuse("path is outside the publish root")
 	}
 
-	r, err := os.OpenRoot(root)
-	if err != nil {
-		return nil, refuse("open publish root: %v", err)
-	}
-	defer r.Close()
-	f, err := r.Open(rel)
+	f, err := c.publishRoot.Open(rel)
 	if err != nil {
 		return nil, refuse("read path: %v", err)
 	}
@@ -249,16 +243,28 @@ func readPublishPath(c *Client, p string) ([]byte, *rpcError) {
 	if onPseudoFS(st) {
 		return nil, refuse("refusing to publish a file from /proc, /sys or /dev")
 	}
-	if c.TokenFile != "" {
-		if tfi, err := os.Stat(c.TokenFile); err == nil && os.SameFile(st, tfi) {
-			return nil, refuse("refusing to publish the bearer token file")
-		}
+	if c.isTokenFile(st) {
+		return nil, refuse("refusing to publish the bearer token file")
 	}
 	b, err := io.ReadAll(f)
 	if err != nil {
 		return nil, refuse("read path: %v", err)
 	}
 	return b, nil
+}
+
+// isTokenFile reports whether fi is the token file recorded at startup or the
+// file its path names now.
+func (c *Client) isTokenFile(fi os.FileInfo) bool {
+	if c.tokenID != nil && os.SameFile(fi, c.tokenID) {
+		return true
+	}
+	if c.tokenFile != "" {
+		if cur, err := os.Stat(c.tokenFile); err == nil && os.SameFile(fi, cur) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveDir returns dir as an absolute, symlink-free path.

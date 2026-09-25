@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -35,15 +36,53 @@ type Client struct {
 	ControlURL string
 	ContentURL string
 	Token      string
-	// TokenFile, when set, is the file the bearer token was read from. The
-	// publish tool refuses to read-and-publish it (compared by file identity) so
-	// a prompt-injected model cannot use `path` to exfiltrate the token file to a
-	// public slug (invariant 4: the token is never rendered to a page).
-	TokenFile string
-	// PublishRoot is the directory the publish tool's `path` argument must
-	// resolve inside. "" disables publishing by `path` (content still works).
-	PublishRoot string
-	HTTP        *http.Client
+	HTTP       *http.Client
+
+	// tokenFile and tokenID identify the file the bearer token was read from
+	// (SetTokenFile). The publish tool refuses to read-and-publish it, compared
+	// by file identity, so a prompt-injected model cannot use `path` to
+	// exfiltrate the token to a public slug (invariant 4: the token is never
+	// rendered to a page).
+	tokenFile string
+	tokenID   os.FileInfo
+	// publishRoot is the directory the publish tool's `path` argument must
+	// resolve inside, opened once (SetPublishRoot) so later changes to the
+	// path that named it cannot move it. nil disables publishing by `path`.
+	publishRoot     *os.Root
+	publishRootPath string
+}
+
+// SetTokenFile records the file the bearer token was read from. Its identity
+// (device and inode) is captured now, so a later rename or replacement of the
+// path does not let a hardlink to the original file through.
+func (c *Client) SetTokenFile(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("token file: %w", err)
+	}
+	c.tokenFile = path
+	c.tokenID = fi
+	return nil
+}
+
+// SetPublishRoot confines the publish tool's `path` argument to dir. The
+// directory is resolved and opened here, once; every later read goes through
+// that open directory.
+func (c *Client) SetPublishRoot(dir string) error {
+	resolved, err := resolveDir(dir)
+	if err != nil {
+		return fmt.Errorf("publish root: %w", err)
+	}
+	r, err := os.OpenRoot(resolved)
+	if err != nil {
+		return fmt.Errorf("publish root: %w", err)
+	}
+	if c.publishRoot != nil {
+		c.publishRoot.Close()
+	}
+	c.publishRoot = r
+	c.publishRootPath = resolved
+	return nil
 }
 
 // NewClient builds a Client with sane defaults. controlURL is required;

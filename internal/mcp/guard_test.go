@@ -72,7 +72,9 @@ func TestPublishPathGuard_TokenFileAliases(t *testing.T) {
 		t.Skipf("hardlink unsupported: %v", err)
 	}
 	c, f := newGuardClient(t, "SECRET-TOKEN")
-	c.TokenFile = tf
+	if err := c.SetTokenFile(tf); err != nil {
+		t.Fatal(err)
+	}
 	setPublishRoot(t, c, dir)
 	for _, p := range []string{tf, sym, hard} {
 		f.lastBody = ""
@@ -142,5 +144,62 @@ func TestPublishPathGuard_NoRootRefuses(t *testing.T) {
 	}
 	if body != "" {
 		t.Fatalf("bytes reached the server: %q", body)
+	}
+}
+
+// TestPublishPathGuard_TokenFileReplaced: the token file's identity is taken
+// at startup, so a hardlink to it is still refused after the original path is
+// renamed away and a different file put in its place.
+func TestPublishPathGuard_TokenFileReplaced(t *testing.T) {
+	dir := t.TempDir()
+	tf := filepath.Join(dir, "token")
+	if err := os.WriteFile(tf, []byte("SECRET-TOKEN"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hard := filepath.Join(dir, "hard.html")
+	if err := os.Link(tf, hard); err != nil {
+		t.Skipf("hardlink unsupported: %v", err)
+	}
+	c, f := newGuardClient(t, "SECRET-TOKEN")
+	if err := c.SetTokenFile(tf); err != nil {
+		t.Fatal(err)
+	}
+	setPublishRoot(t, c, dir)
+	if err := os.Rename(tf, filepath.Join(dir, "moved")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tf, []byte("other"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rerr, body := publishPathCall(t, c, f, hard)
+	if rerr == nil || strings.Contains(body, "SECRET-TOKEN") {
+		t.Fatalf("hardlink to the original token file was published after the path was replaced (err %+v)", rerr)
+	}
+}
+
+// TestPublishPathGuard_RootReplaced: the publish root is opened at startup.
+// Replacing the directory at that path with a symlink elsewhere does not move
+// the root.
+func TestPublishPathGuard_RootReplaced(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "root")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("OUTSIDE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, f := newGuardClient(t, "")
+	setPublishRoot(t, c, root)
+	if err := os.Rename(root, root+".orig"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, root); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	rerr, body := publishPathCall(t, c, f, filepath.Join(root, "secret.txt"))
+	if rerr == nil || body == "OUTSIDE" {
+		t.Fatalf("file outside the original root was published after the root path was replaced (err %+v)", rerr)
 	}
 }

@@ -59,15 +59,20 @@ func runMCP(args []string) error {
 			if real, rerr := filepath.EvalSymlinks(abs); rerr == nil {
 				abs = real
 			}
-			client.TokenFile = abs
+			if err := client.SetTokenFile(abs); err != nil {
+				return err
+			}
 		}
 	}
 	root, err := mcpPublishRoot(*publishRoot)
 	if err != nil {
 		return err
 	}
-	client.PublishRoot = root
-	if root == "" {
+	if root != "" {
+		if err := client.SetPublishRoot(root); err != nil {
+			return err
+		}
+	} else {
 		fmt.Fprintln(os.Stderr, "demiplane mcp: publishing by path is disabled (no usable publish root; set --publish-root to enable it)")
 	}
 
