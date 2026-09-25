@@ -187,7 +187,7 @@ func TestLargeBodyStreams(t *testing.T) {
 		t.Fatalf("size = %d, want %d", art.Size, size)
 	}
 
-	f, err := os.Open(filepath.Join(s.blobDir, art.Slug))
+	f, err := os.Open(s.blobFile(art.Slug, art.Version))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,8 +285,8 @@ func TestDelete(t *testing.T) {
 	if _, _, err := s.Get(art.Slug); err != ErrNotFound {
 		t.Errorf("Get after delete = %v, want ErrNotFound", err)
 	}
-	if _, err := os.Stat(filepath.Join(s.blobDir, art.Slug)); !os.IsNotExist(err) {
-		t.Errorf("blob still present after delete: %v", err)
+	if left := slugFiles(t, s.blobDir, art.Slug); len(left) != 0 {
+		t.Errorf("blob still present after delete: %v", left)
 	}
 	// Deleting a missing slug is ErrNotFound.
 	if err := s.Delete("never-existed"); err != ErrNotFound {
@@ -414,7 +414,7 @@ func TestTTLExpiryLazyOnGet(t *testing.T) {
 		t.Errorf("expired Get = %v, want ErrNotFound", err)
 	}
 	// Lazy reclaim removed the blob too.
-	if _, err := os.Stat(filepath.Join(s.blobDir, "ephemeral")); !os.IsNotExist(err) {
+	if left := slugFiles(t, s.blobDir, "ephemeral"); len(left) != 0 {
 		t.Error("expired blob not lazily reclaimed")
 	}
 
@@ -457,7 +457,7 @@ func TestSweepExpired(t *testing.T) {
 	}
 	// Blobs gone too.
 	for _, slug := range []string{"gone1", "gone2"} {
-		if _, err := os.Stat(filepath.Join(s.blobDir, slug)); !os.IsNotExist(err) {
+		if left := slugFiles(t, s.blobDir, slug); len(left) != 0 {
 			t.Errorf("expired blob %q still present", slug)
 		}
 	}
