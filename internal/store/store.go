@@ -139,8 +139,8 @@ func Open(dir string) (*Store, error) {
 	return s, nil
 }
 
-// storePerms lists the store paths that must be owner-only and the widest mode
-// each may keep. Paths that do not exist yet are skipped; they are created
+// storePerms lists the store paths that must be owner-only and the mode each
+// must have. Paths that do not exist yet are skipped; they are created
 // owner-only when first needed.
 var storePerms = []struct {
 	name string
@@ -155,9 +155,10 @@ var storePerms = []struct {
 	{"meta.db-shm", 0o600},
 }
 
-// tightenStorePerms clears any permission bits outside storePerms on the store
-// root, its content directories and the metadata database files, logging each
-// path it changes.
+// tightenStorePerms sets the store root, its content directories and the
+// metadata database files to exactly the modes in storePerms, logging each path
+// it changes. Exact rather than masked, so a file left without its owner bits
+// is repaired too instead of failing later.
 func tightenStorePerms(dir string) error {
 	for _, e := range storePerms {
 		p := filepath.Join(dir, e.name)
@@ -169,13 +170,13 @@ func tightenStorePerms(dir string) error {
 			return fmt.Errorf("inspect %s: %w", p, err)
 		}
 		perm := fi.Mode().Perm()
-		if perm&^e.mode == 0 {
+		if perm == e.mode {
 			continue
 		}
-		if err := os.Chmod(p, perm&e.mode); err != nil {
-			return fmt.Errorf("restrict %s: %w", p, err)
+		if err := os.Chmod(p, e.mode); err != nil {
+			return fmt.Errorf("set mode of %s: %w", p, err)
 		}
-		log.Printf("store: restricted %s from %04o to %04o", p, perm, perm&e.mode)
+		log.Printf("store: set mode of %s from %04o to %04o", p, perm, e.mode)
 	}
 	return nil
 }
@@ -367,7 +368,7 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 
 	unlock := s.locks.lock(slug)
 	defer unlock()
-	prior, err := s.swapMeta(art, sourceGen)
+	prior, err := s.swapMeta(&art, sourceGen)
 	if err != nil {
 		_ = s.removeGenFiles(slug, gen, sourceGen)
 		return Artifact{}, err
@@ -550,12 +551,15 @@ type priorGen struct {
 }
 
 // swapMeta inserts or, for an existing (named) slug, overwrites the metadata
-// row in place, pointing it at a.Version's bytes and sourceGen's source. Owner
+// row in place, pointing it at a.Version's bytes and sourceGen's source. The
+// stored modified time is at least one second past the previous one, so an
+// HTTP Last-Modified validator changes even for two writes in one second;
+// a.ModifiedAt is set to the stored value. Owner
 // is preserved on overwrite; privacy, password, and expiry are replaced with the
 // new publish's values (re-publishing resets them). It returns the generations
 // the row named before, read in the same transaction, so the caller removes
 // exactly the files this write replaced.
-func (s *Store) swapMeta(a Artifact, sourceGen string) (priorGen, error) {
+func (s *Store) swapMeta(a *Artifact, sourceGen string) (priorGen, error) {
 	const q = `
 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, source_gen, modified_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -578,7 +582,8 @@ ON CONFLICT(slug) DO UPDATE SET
     render_spec   = excluded.render_spec,
     blob_gen      = excluded.blob_gen,
     source_gen    = excluded.source_gen,
-    modified_at   = excluded.modified_at;`
+    modified_at   = MAX(excluded.modified_at, artifacts.modified_at + 1)
+RETURNING modified_at;`
 	tx, err := s.db.Begin()
 	if err != nil {
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
@@ -593,16 +598,18 @@ ON CONFLICT(slug) DO UPDATE SET
 	default:
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 	}
-	if _, err := tx.Exec(q,
+	var modified int64
+	if err := tx.QueryRow(q,
 		a.Slug, a.Filename, a.ContentType, a.Size, a.CreatedAt.Unix(), a.Owner,
 		boolToInt(a.Private), a.PasswordHash, unixOrZero(a.ExpiresAt), a.Series, a.RenderSpec,
 		a.Version, sourceGen, unixOrZero(a.ModifiedAt),
-	); err != nil {
+	).Scan(&modified); err != nil {
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 	}
+	a.ModifiedAt = time.Unix(modified, 0).UTC()
 	return p, nil
 }
 

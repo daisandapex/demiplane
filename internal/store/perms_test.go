@@ -13,6 +13,8 @@ import (
 // TestOpenTightensExistingStore: a store left with group/world bits (an older
 // release, a restored backup, a hand-made directory) is brought to owner-only
 // at Open, including the SQLite file and its WAL and shared-memory companions.
+// Paths missing owner bits (sources 0500, -shm 0400) are repaired to the same
+// exact modes.
 func TestOpenTightensExistingStore(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "store")
 	s, err := Open(dir)
@@ -35,11 +37,11 @@ func TestOpenTightensExistingStore(t *testing.T) {
 	loose := map[string]os.FileMode{
 		dir:                               0o775,
 		filepath.Join(dir, "blobs"):       0o755,
-		filepath.Join(dir, "sources"):     0o755,
+		filepath.Join(dir, "sources"):     0o500,
 		filepath.Join(dir, "sites"):       0o755,
 		filepath.Join(dir, "meta.db"):     0o644,
 		filepath.Join(dir, "meta.db-wal"): 0o644,
-		filepath.Join(dir, "meta.db-shm"): 0o644,
+		filepath.Join(dir, "meta.db-shm"): 0o400,
 	}
 	for p, m := range loose {
 		if _, err := os.Stat(p); os.IsNotExist(err) {

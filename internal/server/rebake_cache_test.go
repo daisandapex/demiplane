@@ -93,3 +93,24 @@ func TestRepublishChangesValidators(t *testing.T) {
 		t.Fatalf("revalidation after republish = %d %q, want 200 with new bytes", resp.StatusCode, body)
 	}
 }
+
+// TestRepublishChangesLastModified: a client that revalidates with
+// If-Modified-Since alone (no ETag) still gets new bytes after a republish in
+// the same second.
+func TestRepublishChangesLastModified(t *testing.T) {
+	ts := newTestServer(t, "")
+	url := publish(t, ts, "?slug=ims-only", "<p>one</p>")
+	first, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, first.Body)
+	first.Body.Close()
+	publish(t, ts, "?slug=ims-only", "<p>two</p>")
+	cached := http.Header{}
+	cached.Set("Last-Modified", first.Header.Get("Last-Modified"))
+	resp, body := conditionalGet(t, url, cached)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "two") {
+		t.Fatalf("If-Modified-Since revalidation after republish = %d %q, want 200 with new bytes", resp.StatusCode, body)
+	}
+}

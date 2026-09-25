@@ -273,3 +273,72 @@ func TestRebakeRetriesAfterOutOfProcessPublish(t *testing.T) {
 		t.Errorf("blob files after rebake = %v, want exactly the current one", left)
 	}
 }
+
+// TestModifiedAtAdvancesWithinOneSecond: every write moves the modified time
+// forward, even several writes inside one second, so an HTTP Last-Modified
+// validator always changes with the bytes.
+func TestModifiedAtAdvancesWithinOneSecond(t *testing.T) {
+	s := newTestStore(t)
+	var last time.Time
+	for i, write := range []func() Artifact{
+		func() Artifact { return mustPut(t, s, PutOptions{Slug: "m"}, "a") },
+		func() Artifact {
+			a, err := s.ReplaceBody("m", strings.NewReader("b"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return a
+		},
+		func() Artifact { return mustPut(t, s, PutOptions{Slug: "m"}, "c") },
+		func() Artifact {
+			a, err := s.ReplaceBody("m", strings.NewReader("d"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return a
+		},
+	} {
+		a := write()
+		stored, _ := readBack(t, s, "m")
+		if !stored.ModifiedAt.Equal(a.ModifiedAt) {
+			t.Fatalf("write %d: returned modified %v, stored %v", i, a.ModifiedAt, stored.ModifiedAt)
+		}
+		if i > 0 && !stored.LastModified().After(last) {
+			t.Fatalf("write %d: modified time %v did not advance past %v", i, stored.LastModified(), last)
+		}
+		last = stored.LastModified()
+	}
+}
+
+// TestSourceRereadsAfterConcurrentWrite: a publish from another process that
+// commits between Source's row read and its file read removes the generation
+// the row named. Source must return the new source, not ErrNoSource.
+func TestSourceRereadsAfterConcurrentWrite(t *testing.T) {
+	s := newTestStore(t)
+	other, err := Open(s.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	mustPut(t, s, PutOptions{Slug: "doc", Source: []byte("v1")}, "r1")
+
+	fired := false
+	beforeSourceRead = func() {
+		if fired {
+			return
+		}
+		fired = true
+		if _, err := other.Put(PutOptions{Slug: "doc", Source: []byte("v2")}, strings.NewReader("r2")); err != nil {
+			t.Errorf("out-of-process Put: %v", err)
+		}
+	}
+	defer func() { beforeSourceRead = nil }()
+
+	rec, err := s.Source("doc")
+	if err != nil {
+		t.Fatalf("Source: %v", err)
+	}
+	if string(rec.Body) != "v2" {
+		t.Fatalf("Source body = %q, want the newer source", rec.Body)
+	}
+}

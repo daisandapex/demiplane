@@ -44,6 +44,10 @@ import (
 // sourceDirName is the sidecar directory under the store root.
 const sourceDirName = "sources"
 
+// beforeSourceRead, when set by a test, runs between Source's row read and its
+// file read, to place a concurrent write in that window.
+var beforeSourceRead func()
+
 // ErrNoSource means the artifact exists but no source was retained for it —
 // either it was never a rendered publish, or it predates source retention.
 // Callers treat this as "nothing to do", not as a failure.
@@ -109,16 +113,37 @@ func (s *Store) Source(slug string) (SourceRecord, error) {
 	if err != nil {
 		return SourceRecord{}, fmt.Errorf("lookup source metadata: %w", err)
 	}
-	if sourceGen == noSourceGen {
-		return SourceRecord{}, ErrNoSource
-	}
-
-	body, err := os.ReadFile(s.sourceFile(slug, sourceGen))
-	if err != nil {
-		if os.IsNotExist(err) {
+	var body []byte
+	for attempt := 1; ; attempt++ {
+		if sourceGen == noSourceGen {
 			return SourceRecord{}, ErrNoSource
 		}
-		return SourceRecord{}, fmt.Errorf("read source: %w", err)
+		if beforeSourceRead != nil {
+			beforeSourceRead()
+		}
+		body, err = os.ReadFile(s.sourceFile(slug, sourceGen))
+		if err == nil {
+			break
+		}
+		if !os.IsNotExist(err) {
+			return SourceRecord{}, fmt.Errorf("read source: %w", err)
+		}
+		// Either there is no retained source (a legacy artifact), or another
+		// process committed a write after the row read and removed the
+		// generation that row named. Only a changed row means the latter.
+		prev := sourceGen
+		err = s.db.QueryRow(
+			`SELECT created_at, render_spec, blob_gen, source_gen FROM artifacts WHERE slug = ?`, slug,
+		).Scan(&created, &spec, &blobGen, &sourceGen)
+		if errors.Is(err, sql.ErrNoRows) {
+			return SourceRecord{}, ErrNotFound
+		}
+		if err != nil {
+			return SourceRecord{}, fmt.Errorf("lookup source metadata: %w", err)
+		}
+		if sourceGen == prev || attempt == getAttempts {
+			return SourceRecord{}, ErrNoSource
+		}
 	}
 	return SourceRecord{
 		Slug:      slug,
@@ -235,20 +260,19 @@ func (s *Store) replaceBodyLocked(slug string, expect *string, r io.Reader) (Art
 	if err != nil {
 		return Artifact{}, err
 	}
-	now := time.Now().UTC()
-	res, err := s.db.Exec(
-		`UPDATE artifacts SET size = ?, blob_gen = ?, modified_at = ? WHERE slug = ? AND blob_gen = ?`,
-		size, gen, now.Unix(), slug, cur,
-	)
-	var n int64
-	if err == nil {
-		n, err = res.RowsAffected()
-	}
-	if err != nil {
+	// The modified time moves at least one second forward, so Last-Modified
+	// changes even when the rebake lands in the same second as the publish.
+	var modified int64
+	err = s.db.QueryRow(
+		`UPDATE artifacts SET size = ?, blob_gen = ?, modified_at = MAX(?, modified_at + 1)
+		  WHERE slug = ? AND blob_gen = ? RETURNING modified_at`,
+		size, gen, time.Now().Unix(), slug, cur,
+	).Scan(&modified)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		os.Remove(s.blobFile(slug, gen))
 		return Artifact{}, fmt.Errorf("update body: %w", err)
 	}
-	if n == 0 {
+	if errors.Is(err, sql.ErrNoRows) {
 		// Deleted or republished by another process since the lookup.
 		os.Remove(s.blobFile(slug, gen))
 		if _, lerr := s.lookup(slug); errors.Is(lerr, ErrNotFound) {
@@ -259,7 +283,7 @@ func (s *Store) replaceBodyLocked(slug string, expect *string, r io.Reader) (Art
 	s.dropReplacedGen(slug, cur, noSourceGen)
 	art.Size = size
 	art.Version = gen
-	art.ModifiedAt = now
+	art.ModifiedAt = time.Unix(modified, 0).UTC()
 	// Same notification a publish fires, so a ?live tab watching this slug picks
 	// the new rendering up without a manual reload.
 	s.notify(slug)

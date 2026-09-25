@@ -192,8 +192,8 @@ inherits the posture above and was reviewed adversarially before release.
 - **Store permissions.** The store root, `blobs/`, `sources/`, `sites/` and the
   metadata database (`meta.db` and its `-wal`/`-shm` files) are owner-only
   (directories `0700`, files `0600`). The database holds capability slugs and
-  password hashes. At startup demiplane tightens any of these that carry group
-  or world bits and logs each change.
+  password hashes. At startup demiplane sets any of these whose mode differs to
+  those modes and logs each change.
 - **Native TLS material.** With the TLS module enabled, private keys live under
   `<store>/modules/tls/` (dir `0700`, keys `0600`). The self-signed cert's
   SHA-256 fingerprint is logged at generation for out-of-band pinning; ACME mode
