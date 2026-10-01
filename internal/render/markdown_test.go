@@ -477,38 +477,24 @@ func TestMarkdownHeaderLiftsH1(t *testing.T) {
 	}
 }
 
-// TestDoctitleMobileTwoLineClamp is p3 (demiplane-ycd): on narrow screens the
-// wide masthead's single-line ellipsis relaxes to a 2-line clamp so long titles
-// aren't lost, while the wide layout keeps its single-row clip.
-func TestDoctitleMobileTwoLineClamp(t *testing.T) {
-	out := string(Markdown([]byte("# Title\n\nbody"), Options{Header: true}))
-	// Wide face still clips to one line.
-	if !strings.Contains(out, "white-space:nowrap;overflow:hidden;text-overflow:ellipsis") {
-		t.Errorf("wide masthead should keep single-line ellipsis:\n%s", out)
+// TestDoctitleWraps: the title heads the reading column and wraps at every
+// width. The old masthead clipped it to one line with an ellipsis (two on a
+// phone), which lost most of a long title.
+func TestDoctitleWraps(t *testing.T) {
+	out := string(Markdown([]byte("# Overnight pages: a deep g/y/p/j\n\nbody"), Options{Header: true}))
+	if !strings.Contains(out, `<header class="dochead"><h1 class="doctitle">Overnight pages: a deep g/y/p/j</h1></header>`) {
+		t.Errorf("title should head the reading column:\n%s", out)
 	}
-	// A mobile media query relaxes the title to a 2-line clamp.
-	if !strings.Contains(out, "@media (max-width:34rem){.docbar .doctitle{white-space:normal") ||
-		!strings.Contains(out, "-webkit-line-clamp:2;line-clamp:2") {
-		t.Errorf("mobile 2-line clamp missing from doctitle CSS:\n%s", out)
+	if strings.Contains(out, `<header class="docbar"><div class="wrap"><span class="kicker">demiplane</span><div class="tools"><button class="themetoggle"`) == false {
+		t.Errorf("top bar should hold only the kicker and the tools:\n%s", out)
 	}
-}
-
-// TestMastheadTitleDoesNotClipDescenders guards the descender-clip fix: the
-// .doctitle rule must give glyphs vertical room (a roomy line-height plus bottom
-// padding) so descenders (g/y/p/j) aren't sheared by its overflow:hidden box.
-func TestMastheadTitleDoesNotClipDescenders(t *testing.T) {
-	out := string(Markdown([]byte("# Overnight pages: a deep g/y/p/j\n\nbody"),
-		Options{Header: true}))
-	// The masthead title renders verbatim (the descender glyphs are present).
-	if !strings.Contains(out, `class="doctitle">Overnight pages: a deep g/y/p/j</h1>`) {
-		t.Errorf("masthead title not rendered:\n%s", out)
+	for _, bad := range []string{"text-overflow:ellipsis", "line-clamp", "white-space:nowrap"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("title must wrap, found %q:\n%s", bad, out)
+		}
 	}
-	// The CSS no longer pairs a tight line-height with zero padding (the clip).
-	if strings.Contains(out, "line-height:1.15;letter-spacing:-.018em;border:none;padding:0;") {
-		t.Errorf(".doctitle still has the descender-clipping line-height/padding:\n%s", out)
-	}
-	if !strings.Contains(out, "padding:0 0 .14em") {
-		t.Errorf(".doctitle missing the bottom padding that clears descenders:\n%s", out)
+	if !regexp.MustCompile(`\.dochead \.doctitle\{[^}]*white-space:normal`).MatchString(out) {
+		t.Errorf("doctitle rule should set white-space:normal:\n%s", out)
 	}
 }
 
