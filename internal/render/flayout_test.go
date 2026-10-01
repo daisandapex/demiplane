@@ -102,6 +102,10 @@ func TestFTreeOnlyWithSeries(t *testing.T) {
 	if !strings.Contains(out, want) {
 		t.Errorf("tree should list the family in order:\n%s", out)
 	}
+	// the button is hidden until the script that makes it work runs
+	if !strings.Contains(out, `aria-controls="ftree" aria-expanded="false" hidden `) || !strings.Contains(out, "btn.hidden=false") {
+		t.Errorf("tree button should start hidden and be revealed by script:\n%s", out)
+	}
 	if !strings.Contains(out, `<button class="treebtn" type="button" aria-controls="ftree"`) {
 		t.Errorf("series page should carry the tree button:\n%s", out)
 	}
@@ -125,6 +129,10 @@ func TestFTreeClosedBelow1410Remembered(t *testing.T) {
 	for _, want := range []string{
 		"if(e.key!=='['",
 		"localStorage.setItem(K,o?'open':'closed')",
+		"else m.addListener(f)", // MediaQueryList without addEventListener
+		"if(d)d.open=!narrow.matches",
+		// without script every h3 stays listed in the narrow flow
+		".fjs .frail .outline .l3,.fjs .frail .outline .l3.open{display:none}",
 		"html.nav-on .f.has-tree .ftree{display:block}",
 		".ftree{grid-area:tree;display:none}",
 	} {

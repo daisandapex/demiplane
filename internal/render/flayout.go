@@ -137,7 +137,7 @@ func topbar(serverTheme string, toggle, tree bool) string {
 	var b strings.Builder
 	b.WriteString(`<header class="docbar"><div class="wrap"><span class="kicker">demiplane</span><div class="tools">`)
 	if tree {
-		b.WriteString(`<button class="treebtn" type="button" aria-controls="ftree" aria-expanded="false" ` +
+		b.WriteString(`<button class="treebtn" type="button" aria-controls="ftree" aria-expanded="false" hidden ` +
 			`aria-label="Show or hide the series list" title="Series list ([)">` + treeSVG + `</button>`)
 	}
 	if toggle {
@@ -179,9 +179,10 @@ if(narrow.matches){r.classList.toggle('nav-drawer');}
 else{var o=!r.classList.contains('nav-on');r.classList.toggle('nav-on',o);
 try{localStorage.setItem(K,o?'open':'closed');}catch(e){}}
 paint();};
-if(btn)btn.addEventListener('click',toggle);
-wide.addEventListener('change',function(){var p=pref();if(p!=='open'&&p!=='closed'){r.classList.toggle('nav-on',wide.matches);paint();}});
-narrow.addEventListener('change',function(){r.classList.remove('nav-drawer');paint();});
+var on=function(m,f){if(m.addEventListener)m.addEventListener('change',f);else m.addListener(f);};
+if(btn){btn.hidden=false;btn.addEventListener('click',toggle);}
+on(wide,function(){var p=pref();if(p!=='open'&&p!=='closed'){r.classList.toggle('nav-on',wide.matches);paint();}});
+on(narrow,function(){r.classList.remove('nav-drawer');paint();var d=document.querySelector('.rail-outline');if(d)d.open=!narrow.matches;});
 document.addEventListener('keydown',function(e){
 if(e.key!=='['||e.metaKey||e.ctrlKey||e.altKey)return;
 var t=e.target;if(t&&(t.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))return;
@@ -192,7 +193,7 @@ var links={};document.querySelectorAll('.outline a').forEach(function(a){links[a
 var heads=[].filter.call(document.querySelectorAll('main h2[id],main h3[id]'),function(h){return links[h.id];});
 if(!heads.length)return;
 var cur=null,mark=function(){
-var y=(parseFloat(getComputedStyle(r).getPropertyValue('--top-h'))||3.25)*16+24,c=heads[0];
+var bar=document.querySelector('.docbar'),y=(bar?bar.offsetHeight:52)+24,c=heads[0];
 for(var i=0;i<heads.length;i++){if(heads[i].getBoundingClientRect().top-y<=0)c=heads[i];else break;}
 if(c===cur)return;cur=c;
 Object.keys(links).forEach(function(k){links[k].removeAttribute('aria-current');});
@@ -271,7 +272,7 @@ summary.rail-h::-webkit-details-marker{display:none}
 .frail,.ftree{position:static;max-height:none;overflow:visible;padding:0 0 1.5rem;max-width:var(--measure)}
 .frail .outline{columns:2 11rem;column-gap:1.5rem}
 .frail .outline li{break-inside:avoid}
-.frail .outline .l3,.fjs .frail .outline .l3.open{display:none}
+.fjs .frail .outline .l3,.fjs .frail .outline .l3.open{display:none}
 summary.rail-h::after{content:" +"}
 details[open]>summary.rail-h::after{content:" \2212"}}
 `
