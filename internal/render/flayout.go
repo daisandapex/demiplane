@@ -240,6 +240,7 @@ html.nav-drawer .f.has-tree .ftree{display:block}}
 .treebtn:hover{color:var(--ink,oklch(0.237 0.009 75));border-color:var(--line-strong,oklch(0.714 0.018 85))}
 .treebtn[aria-expanded="true"]{color:var(--accent,oklch(0.445 0.122 23))}
 .treebtn svg{width:1.05rem;height:1.05rem;display:block}
+.treebtn[hidden]{display:none}
 .dochead{grid-area:head;min-width:0;padding-top:2.4rem}
 .dochead .doctitle{max-width:var(--measure);margin:0 0 1.4rem;line-height:1.2;overflow-wrap:break-word;
   white-space:normal}

@@ -106,6 +106,11 @@ func TestFTreeOnlyWithSeries(t *testing.T) {
 	if !strings.Contains(out, `aria-controls="ftree" aria-expanded="false" hidden `) || !strings.Contains(out, "btn.hidden=false") {
 		t.Errorf("tree button should start hidden and be revealed by script:\n%s", out)
 	}
+	// .treebtn sets display, which beats the UA [hidden] rule; without its own
+	// [hidden] rule a page without script shows a button that does nothing.
+	if !strings.Contains(out, ".treebtn[hidden]{display:none}") {
+		t.Errorf("hidden tree button must stay hidden under the .treebtn display rule")
+	}
 	if !strings.Contains(out, `<button class="treebtn" type="button" aria-controls="ftree"`) {
 		t.Errorf("series page should carry the tree button:\n%s", out)
 	}
