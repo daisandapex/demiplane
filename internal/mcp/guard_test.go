@@ -72,7 +72,7 @@ func TestPublishPathGuard_TokenFileAliases(t *testing.T) {
 		t.Skipf("hardlink unsupported: %v", err)
 	}
 	c, f := newGuardClient(t, "SECRET-TOKEN")
-	if err := c.SetTokenFile(tf); err != nil {
+	if err := c.LoadTokenFile(tf); err != nil {
 		t.Fatal(err)
 	}
 	setPublishRoot(t, c, dir)
@@ -161,7 +161,7 @@ func TestPublishPathGuard_TokenFileReplaced(t *testing.T) {
 		t.Skipf("hardlink unsupported: %v", err)
 	}
 	c, f := newGuardClient(t, "SECRET-TOKEN")
-	if err := c.SetTokenFile(tf); err != nil {
+	if err := c.LoadTokenFile(tf); err != nil {
 		t.Fatal(err)
 	}
 	setPublishRoot(t, c, dir)
@@ -201,5 +201,40 @@ func TestPublishPathGuard_RootReplaced(t *testing.T) {
 	rerr, body := publishPathCall(t, c, f, filepath.Join(root, "secret.txt"))
 	if rerr == nil || body == "OUTSIDE" {
 		t.Fatalf("file outside the original root was published after the root path was replaced (err %+v)", rerr)
+	}
+}
+
+// TestLoadTokenFile: the token is trimmed, an empty or missing file is an
+// error, and the recorded identity is the file the token came from.
+func TestLoadTokenFile(t *testing.T) {
+	dir := t.TempDir()
+	tf := filepath.Join(dir, "token")
+	if err := os.WriteFile(tf, []byte("  SECRET-TOKEN\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := NewClient("http://127.0.0.1:1", "", "")
+	if err := c.LoadTokenFile(tf); err != nil {
+		t.Fatal(err)
+	}
+	if c.Token != "SECRET-TOKEN" {
+		t.Fatalf("token = %q", c.Token)
+	}
+	fi, err := os.Stat(tf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.isTokenFile(fi) {
+		t.Fatal("loaded token file is not recognised by identity")
+	}
+
+	empty := filepath.Join(dir, "empty")
+	if err := os.WriteFile(empty, []byte(" \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewClient("http://127.0.0.1:1", "", "").LoadTokenFile(empty); err == nil {
+		t.Fatal("empty token file: want error")
+	}
+	if err := NewClient("http://127.0.0.1:1", "", "").LoadTokenFile(filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("missing token file: want error")
 	}
 }

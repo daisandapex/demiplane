@@ -42,27 +42,9 @@ func runMCP(args []string) error {
 	controlURL := firstNonEmpty(*urlFlag, os.Getenv("DEMIPLANE_URL"), "http://127.0.0.1:8080")
 	content := firstNonEmpty(*contentURL, os.Getenv("DEMIPLANE_CONTENT_URL"))
 
-	// Token from --token-file (preferred) or DEMIPLANE_TOKEN. resolveToken never
-	// reads argv and we never print the returned value.
-	token, err := resolveToken(*tokenFile)
+	client, err := newMCPClient(controlURL, content, *tokenFile)
 	if err != nil {
 		return err
-	}
-
-	client := mcp.NewClient(controlURL, content, token)
-	// Record the token file so the publish tool can refuse to read-and-publish
-	// it (token-exfiltration guard; see readPublishPath). A DEMIPLANE_TOKEN env
-	// token has no backing file; the pseudo-filesystem check covers the process
-	// environment instead.
-	if *tokenFile != "" {
-		if abs, err := filepath.Abs(*tokenFile); err == nil {
-			if real, rerr := filepath.EvalSymlinks(abs); rerr == nil {
-				abs = real
-			}
-			if err := client.SetTokenFile(abs); err != nil {
-				return err
-			}
-		}
 	}
 	root, err := mcpPublishRoot(*publishRoot)
 	if err != nil {
@@ -88,6 +70,35 @@ func runMCP(args []string) error {
 		return fmt.Errorf("mcp server: %w", err)
 	}
 	return nil
+}
+
+// mcpTokenLoaded, when set by a test, runs right after the bearer token is
+// read, to replace the token file in the window before setup finishes.
+var mcpTokenLoaded func()
+
+// newMCPClient builds the MCP client with its bearer token, taken from
+// tokenFile (preferred) or DEMIPLANE_TOKEN; never from argv, never printed. A
+// token file is read through LoadTokenFile, which records the file's identity
+// from the same descriptor the token came from, so the publish tool can refuse
+// to read-and-publish it (token-exfiltration guard; see readPublishPath). A
+// DEMIPLANE_TOKEN env token has no backing file; the pseudo-filesystem check
+// covers the process environment instead.
+func newMCPClient(controlURL, contentURL, tokenFile string) (*mcp.Client, error) {
+	if tokenFile == "" {
+		token, err := resolveToken("")
+		if err != nil {
+			return nil, err
+		}
+		return mcp.NewClient(controlURL, contentURL, token), nil
+	}
+	client := mcp.NewClient(controlURL, contentURL, "")
+	if err := client.LoadTokenFile(tokenFile); err != nil {
+		return nil, err
+	}
+	if mcpTokenLoaded != nil {
+		mcpTokenLoaded()
+	}
+	return client, nil
 }
 
 // mcpPublishRoot picks the directory the publish tool may read `path` from:

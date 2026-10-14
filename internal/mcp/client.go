@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -39,7 +40,7 @@ type Client struct {
 	HTTP       *http.Client
 
 	// tokenFile and tokenID identify the file the bearer token was read from
-	// (SetTokenFile). The publish tool refuses to read-and-publish it, compared
+	// (LoadTokenFile). The publish tool refuses to read-and-publish it, compared
 	// by file identity, so a prompt-injected model cannot use `path` to
 	// exfiltrate the token to a public slug (invariant 4: the token is never
 	// rendered to a page).
@@ -52,15 +53,41 @@ type Client struct {
 	publishRootPath string
 }
 
-// SetTokenFile records the file the bearer token was read from. Its identity
-// (device and inode) is captured now, so a later rename or replacement of the
-// path does not let a hardlink to the original file through.
-func (c *Client) SetTokenFile(path string) error {
-	fi, err := os.Stat(path)
+// LoadTokenFile reads the bearer token from path and records the file it came
+// from. The token and the file identity (device and inode) are both taken from
+// one open descriptor, so a replacement of the path at any point cannot leave
+// the client holding one file's token and another file's identity. A later
+// rename or replacement of the path does not let a hardlink to the original
+// file through either.
+func (c *Client) LoadTokenFile(path string) error {
+	f, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("token file: %w", err)
+		return fmt.Errorf("read token file: %w", err)
 	}
-	c.tokenFile = path
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("read token file: %w", err)
+	}
+	b, err := io.ReadAll(f)
+	if err != nil {
+		return fmt.Errorf("read token file: %w", err)
+	}
+	tok := strings.TrimSpace(string(b))
+	if tok == "" {
+		return fmt.Errorf("token file %q is empty", path)
+	}
+	// The resolved path backs the secondary "whatever the path names now"
+	// check; the identity above is the one that matters.
+	name := path
+	if abs, err := filepath.Abs(path); err == nil {
+		name = abs
+		if real, err := filepath.EvalSymlinks(abs); err == nil {
+			name = real
+		}
+	}
+	c.Token = tok
+	c.tokenFile = name
 	c.tokenID = fi
 	return nil
 }

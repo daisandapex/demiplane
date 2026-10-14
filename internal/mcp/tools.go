@@ -191,6 +191,8 @@ func callPublish(ctx context.Context, c *Client, raw json.RawMessage) (*toolResu
 //     opened through the os.Root opened on that directory at startup, so neither
 //     a component swapped for a symlink after the check nor a replaced root
 //     directory can move the read outside it.
+//   - The file is opened non-blocking, so a FIFO swapped in after the checks
+//     cannot stall the request loop before the descriptor checks refuse it.
 //   - The opened file must be a regular file that does not live on the /proc,
 //     /sys or /dev filesystems (compared by device, so an alias path does not
 //     help), which keeps the process environment and kernel state out.
@@ -228,7 +230,13 @@ func readPublishPath(c *Client, p string) ([]byte, *rpcError) {
 		return nil, refuse("path is outside the publish root")
 	}
 
-	f, err := c.publishRoot.Open(rel)
+	// Opened non-blocking: the file at rel can be swapped for a FIFO after the
+	// checks above, and a blocking open would then wait for a writer forever.
+	// The descriptor checks below refuse anything but a regular file, and
+	// reads from a regular file never return EAGAIN, so the flag is harmless
+	// for the read itself. os.Root already opens the final component with
+	// O_NOFOLLOW and resolves any symlink inside the root.
+	f, err := c.publishRoot.OpenFile(rel, os.O_RDONLY|openNoBlock, 0)
 	if err != nil {
 		return nil, refuse("read path: %v", err)
 	}

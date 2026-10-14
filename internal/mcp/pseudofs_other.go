@@ -7,5 +7,8 @@ package mcp
 
 import "os"
 
+// openNoBlock is zero where opening a special file does not block on a peer.
+const openNoBlock = 0
+
 // onPseudoFS has no pseudo filesystems to refuse outside Unix.
 func onPseudoFS(os.FileInfo) bool { return false }

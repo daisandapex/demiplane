@@ -215,7 +215,7 @@ func TestToolsCall_PublishRefusesTokenFile(t *testing.T) {
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = real
 	}
-	if err := c.SetTokenFile(abs); err != nil {
+	if err := c.LoadTokenFile(abs); err != nil {
 		t.Fatal(err)
 	}
 	setPublishRoot(t, c, dir)
