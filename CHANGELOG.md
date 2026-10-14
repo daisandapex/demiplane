@@ -23,6 +23,16 @@ All notable changes to demiplane are documented here. The format follows
   adding a password, making a page private or changing its expiry takes effect
   together with the new bytes.
 
+### Changed
+
+- **Upgrade note: `demiplane mcp` refuses `path` outside its publish root.** An
+  MCP client that publishes files from outside the directory it starts
+  `demiplane mcp` in (a scratch or temp directory, another repository) now gets
+  an error. Pass `--publish-root <dir>` (or set `DEMIPLANE_PUBLISH_ROOT`) in the
+  MCP server config, or send the page as `content` instead of `path`. Pick the
+  narrowest directory that holds what you publish: every readable regular file
+  under the root can be published.
+
 ### Fixed
 
 - **Concurrent writes to one slug no longer corrupt it.** A publish racing a
@@ -34,7 +44,6 @@ All notable changes to demiplane are documented here. The format follows
   an `ETag` that changes on every write and a `Last-Modified` that `POST
   /rerender` advances, so a revalidating browser gets the new rendering instead
   of `304`.
-
 - **Rendered pages share one left edge.** The document column measure was
   `70ch` per child, and `ch` follows each element's own font-size, so headings,
   the lead and blockquotes got wider centred boxes than the body and hung left
