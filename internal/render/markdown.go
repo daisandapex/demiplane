@@ -210,17 +210,20 @@ func Markdown(src []byte, opts Options) []byte {
 	}
 
 	// Masthead pages take the F layout (flayout.go): the facts move from the
-	// column into the rail, and a series family gets the tree.
+	// column into the rail, and a series family gets the tree. A --css sheet
+	// owns the look, so its pages keep the plain masthead and single column;
+	// F would hand an operator's sheet a grid, rail and tree it never styled.
+	fLayout := opts.Header && opts.CSS == ""
+	if opts.Header && !fLayout {
+		css += mastheadCSS
+	}
 	var rail, tree, bodyClass string
-	if opts.Header {
-		css += fCSS
+	if fLayout {
+		css += fCSS + fPrintCSS
 		bodyHTML = markCodeFirst(bodyHTML)
 		rail = railHTML(metaHTML, outlineFrom(bodyHTML))
 		if metaHTML != "" {
 			css += fMetaCSS
-		}
-		if opts.CSS == "" {
-			css += fPrintCSS
 		}
 		metaHTML = ""
 		if fam := seriesFamily(opts.Slug, opts.Siblings); fam != nil {
@@ -237,11 +240,14 @@ func Markdown(src []byte, opts Options) []byte {
 
 	var b strings.Builder
 	b.WriteString(docHead(css, titleText, themeName, contract, toggle, bodyClass))
-	if opts.Header {
+	switch {
+	case fLayout:
 		b.WriteString(topbar(themeName, toggle, tree != ""))
 		b.WriteString(`<div class="fgrid">` + "\n")
 		b.WriteString(tree)
 		b.WriteString(`<header class="dochead"><h1 class="doctitle">` + title + "</h1></header>\n")
+	case opts.Header:
+		b.WriteString(masthead(title, themeName, toggle))
 	}
 	b.WriteString("<main class=\"wrap\">\n")
 	b.WriteString(metaHTML)
@@ -253,12 +259,12 @@ func Markdown(src []byte, opts Options) []byte {
 		b.WriteString(colophon(opts))
 	}
 	b.WriteString("</main>\n")
-	if opts.Header {
+	if fLayout {
 		b.WriteString(rail)
 		b.WriteString("</div>\n")
 	}
 	if opts.Footer {
-		if opts.Header {
+		if fLayout {
 			b.WriteString(`<footer class="docfoot"><div class="wrap"><div class="fcell">` +
 				footerInner(opts.FooterLink) + "</div></div></footer>\n")
 		} else {
@@ -267,6 +273,8 @@ func Markdown(src []byte, opts Options) []byte {
 	}
 	if opts.Header {
 		b.WriteString(docChromeScript)
+	}
+	if fLayout {
 		b.WriteString(fScript)
 	}
 	if metaNeedsScript {
@@ -300,6 +308,31 @@ func splitFirstH1(src []byte) (titleHTML string, rest []byte) {
 		}
 	}
 	return "", src
+}
+
+// masthead renders the plain sticky title bar a --css page keeps in place of
+// the F top bar: a kicker (the wordmark, small-caps and accented), the document
+// title set as the page's single display-serif H1, and, when toggle is set, the
+// light/dark toggle. The toggle carries both a sun and a moon SVG; CSS shows the
+// one matching data-theme. Under --css toggle is always false today; the
+// parameter keeps the two bars' signatures alike.
+func masthead(titleHTML, serverTheme string, toggle bool) string {
+	var b strings.Builder
+	b.WriteString(`<header class="docbar"><div class="wrap"><div class="masthead">`)
+	b.WriteString(`<span class="kicker">demiplane</span>`)
+	b.WriteString(`<h1 class="doctitle">` + titleHTML + `</h1>`)
+	b.WriteString(`</div>`)
+	if toggle {
+		pressed := "false"
+		if serverTheme == "dark" {
+			pressed = "true"
+		}
+		b.WriteString(`<button class="themetoggle" type="button" aria-pressed="` + pressed + `" ` +
+			`aria-label="Toggle light or dark theme" title="Toggle theme">` +
+			sunSVG + moonSVG + `</button>`)
+	}
+	b.WriteString("</div></header>\n")
+	return b.String()
 }
 
 // stripTags reduces inline-rendered HTML to its text content by removing tags.
@@ -982,8 +1015,9 @@ window.addEventListener('scroll',f,{passive:true});}
 // fade in on an ease-out-expo curve. Motion respects prefers-reduced-motion.
 // Layout properties are never transitioned.
 //
-// Masthead pages lay the bar out with the F grid (flayout.go); the title heads
-// the reading column there and wraps, so nothing here clips it.
+// F pages lay the bar out with the F grid (flayout.go); the title heads the
+// reading column there and wraps, so nothing here clips it. A --css page keeps
+// the plain masthead and adds mastheadCSS.
 const docChromeCSS = `
 :root{--measure:30rem}
 .docbar>.wrap,.docfoot>.wrap{max-width:calc(var(--measure) + 2.5rem);padding:0 1.25rem}
@@ -1022,6 +1056,20 @@ html:not([data-theme="light"]) .themetoggle .i-moon{display:block}}
 @media (prefers-reduced-motion:reduce){
 .docbar,.themetoggle,.themetoggle svg{transition:none}
 .themetoggle:hover svg{transform:none}}
+`
+
+// mastheadCSS lays out the plain masthead of a --css page: kicker over title in
+// one fixed row. The single-line ellipsis is deliberate there, so a long title
+// clips rather than shoving the bar's contents out of the row; at <=34rem it
+// relaxes to a two-line clamp (demiplane-ycd). The full title is always in
+// <head><title>.
+const mastheadCSS = `
+.docbar .masthead{display:flex;flex-direction:column;gap:.22rem;min-width:0}
+.docbar .doctitle{font-family:var(--serif);font-size:1.5rem;font-weight:700;margin:0;
+  line-height:1.3;letter-spacing:-.02em;border:none;padding:0 0 .14em;color:var(--ink,oklch(0.237 0.009 75));
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:34rem){.docbar .doctitle{white-space:normal;overflow:hidden;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}}
 `
 
 // printCSS makes a rendered artifact survive Cmd+P (demiplane-rwj item 5). A
