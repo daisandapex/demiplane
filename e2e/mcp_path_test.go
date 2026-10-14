@@ -33,7 +33,11 @@ func TestMCPPublishPathConfined(t *testing.T) {
 		"proc environ":     "/proc/self/environ",
 		"outside the root": outside,
 		"symlink to token": sym,
-		"relative escape":  filepath.Join(root, "..", filepath.Base(filepath.Dir(outside)), "outside.html"),
+		// Concatenated, not filepath.Join: Join cleans the ".." away.
+		"relative escape": root + "/../" + filepath.Base(filepath.Dir(outside)) + "/outside.html",
+	}
+	if !strings.Contains(cases["relative escape"], "/../") {
+		t.Fatalf("relative escape case %q has no .. component", cases["relative escape"])
 	}
 	hard := filepath.Join(root, "hard.html")
 	if err := os.Link(srv.TokenFile, hard); err == nil {
