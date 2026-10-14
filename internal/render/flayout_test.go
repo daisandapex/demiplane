@@ -4,6 +4,7 @@
 package render
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -233,6 +234,23 @@ func TestFSkippedUnderCustomCSS(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("--css page missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestFPrintHidesOpenTree: the open-state rules that show the tree outrank a
+// bare .ftree, so the print sheet must name the same selectors (it comes later
+// in the sheet) or an open tree prints beside the text.
+func TestFPrintHidesOpenTree(t *testing.T) {
+	out := string(Markdown([]byte("# T\n\nBody\n"), Options{Header: true, Slug: "a", Siblings: []string{"b"}}))
+	i := strings.LastIndex(out, "@media print{\n.f .fgrid")
+	if i < 0 {
+		t.Fatalf("F print sheet missing:\n%s", out)
+	}
+	sheet := out[i:]
+	for _, sel := range []string{"html.nav-on .f.has-tree .ftree", "html.nav-drawer .f.has-tree .ftree"} {
+		if !regexp.MustCompile(regexp.QuoteMeta(sel) + `[^{]*\{display:none\}`).MatchString(sheet) {
+			t.Errorf("print sheet must hide %q", sel)
 		}
 	}
 }

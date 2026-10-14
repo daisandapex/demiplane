@@ -290,13 +290,14 @@ const fMetaCSS = `
 .frail .metahead .metarow dd{overflow-wrap:break-word;font-family:var(--sans)}
 `
 
-// fPrintCSS prints an F page as one column. Like printCSS it is skipped under
-// a --css override, whose sheet owns print.
+// fPrintCSS prints an F page as one column, the tree hidden even when open:
+// the open-state selectors outrank a bare .ftree, so they are named again here,
+// later in the sheet.
 const fPrintCSS = `
 @media print{
 .f .fgrid{display:flex;flex-direction:column;padding:0}
 .dochead{order:0}.frail{order:1}.f main.wrap{order:2}
 .frail{position:static;max-height:none;overflow:visible;padding:0 0 1rem}
-.ftree,.treebtn,.rail-outline{display:none}
+.ftree,html.nav-on .f.has-tree .ftree,html.nav-drawer .f.has-tree .ftree,.treebtn,.rail-outline{display:none}
 .f .docbar>.wrap{height:auto;padding:.6rem 0}}
 `
