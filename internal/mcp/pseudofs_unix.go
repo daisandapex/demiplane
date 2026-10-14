@@ -10,8 +10,8 @@ import (
 	"syscall"
 )
 
-// openNoBlock makes opening a FIFO or device return at once instead of waiting
-// for a peer, so the descriptor can be checked before anything blocks on it.
+// openNoBlock makes opening a FIFO return at once instead of waiting for a
+// writer, so the descriptor can be checked before anything blocks on it.
 const openNoBlock = syscall.O_NONBLOCK
 
 // pseudoFSDirs are mount points whose files expose process and kernel state

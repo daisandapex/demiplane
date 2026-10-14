@@ -53,6 +53,10 @@ type Client struct {
 	publishRootPath string
 }
 
+// tokenFileOpened, when set by a test, runs between LoadTokenFile's open and
+// its reads, to replace the token file inside that window.
+var tokenFileOpened func()
+
 // LoadTokenFile reads the bearer token from path and records the file it came
 // from. The token and the file identity (device and inode) are both taken from
 // one open descriptor, so a replacement of the path at any point cannot leave
@@ -65,6 +69,9 @@ func (c *Client) LoadTokenFile(path string) error {
 		return fmt.Errorf("read token file: %w", err)
 	}
 	defer f.Close()
+	if tokenFileOpened != nil {
+		tokenFileOpened()
+	}
 	fi, err := f.Stat()
 	if err != nil {
 		return fmt.Errorf("read token file: %w", err)

@@ -151,27 +151,56 @@ func TestLastModifiedNotAheadAfterRecreate(t *testing.T) {
 	}
 }
 
-// TestIfRangeDateAfterSameSecondRepublish: a resumed download that carries
-// If-Range with the old Last-Modified must not get a partial response of
-// different bytes when the republish lands in the same second.
-func TestIfRangeDateAfterSameSecondRepublish(t *testing.T) {
-	ts := newTestServer(t, "")
-	url := publish(t, ts, "?slug=resume", "<p>aaaaaaaa</p>")
-	first, _ := get(t, url)
-	publish(t, ts, "?slug=resume", "<p>bbbbbbbb</p>")
+// rangeGet sends a Range request for bytes 3- with the given If-Range value.
+func rangeGet(t *testing.T, url, ifRange string) (int, string) {
+	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Range", "bytes=3-")
-	req.Header.Set("If-Range", first.Header.Get("Last-Modified"))
+	req.Header.Set("If-Range", ifRange)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK || string(b) != "<p>bbbbbbbb</p>" {
-		t.Fatalf("If-Range with a stale date = %d %q, want 200 with the whole new body", resp.StatusCode, b)
+	return resp.StatusCode, string(b)
+}
+
+// TestIfRangeDateAfterSameSecondRepublish: a resumed download that carries
+// If-Range with the old Last-Modified must not get a partial response of
+// different bytes when the republish lands in the same second, so both writes
+// are retried until their Last-Modified dates match. An If-Range with the
+// current strong ETag still gets the range; a stale or weak one gets the whole
+// body.
+func TestIfRangeDateAfterSameSecondRepublish(t *testing.T) {
+	ts := newTestServer(t, "")
+	var url string
+	var first, second *http.Response
+	for attempt := 0; ; attempt++ {
+		url = publish(t, ts, "?slug=resume", "<p>aaaaaaaa</p>")
+		first, _ = get(t, url)
+		publish(t, ts, "?slug=resume", "<p>bbbbbbbb</p>")
+		second, _ = get(t, url)
+		if first.Header.Get("Last-Modified") == second.Header.Get("Last-Modified") {
+			break
+		}
+		if attempt == 5 {
+			t.Fatal("could not land two writes in one second")
+		}
+	}
+	if code, body := rangeGet(t, url, first.Header.Get("Last-Modified")); code != http.StatusOK || body != "<p>bbbbbbbb</p>" {
+		t.Fatalf("If-Range with a same-second date = %d %q, want 200 with the whole new body", code, body)
+	}
+	if code, body := rangeGet(t, url, first.Header.Get("ETag")); code != http.StatusOK || body != "<p>bbbbbbbb</p>" {
+		t.Fatalf("If-Range with the old ETag = %d %q, want 200 with the whole new body", code, body)
+	}
+	if code, body := rangeGet(t, url, "W/"+second.Header.Get("ETag")); code != http.StatusOK || body != "<p>bbbbbbbb</p>" {
+		t.Fatalf("If-Range with a weak ETag = %d %q, want 200 with the whole new body", code, body)
+	}
+	if code, body := rangeGet(t, url, second.Header.Get("ETag")); code != http.StatusPartialContent || body != "bbbbbbbb</p>" {
+		t.Fatalf("If-Range with the current ETag = %d %q, want 206 with the range", code, body)
 	}
 }

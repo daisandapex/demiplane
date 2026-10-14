@@ -62,7 +62,10 @@ func TestPublishPathGuard_FIFOAtOpen(t *testing.T) {
 		if w, err := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
 			w.Close()
 		}
-		<-done
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+		}
 		t.Fatal("publish blocked opening a FIFO")
 	}
 }

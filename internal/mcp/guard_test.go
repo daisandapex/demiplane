@@ -238,3 +238,42 @@ func TestLoadTokenFile(t *testing.T) {
 		t.Fatal("missing token file: want error")
 	}
 }
+
+// TestLoadTokenFileIdentityFromDescriptor: the token file is replaced between
+// LoadTokenFile's open and its reads. Both the token and the recorded identity
+// must come from the file that was opened, so a hardlink to it is refused. An
+// implementation that reads the path and then stats it again fails here.
+func TestLoadTokenFileIdentityFromDescriptor(t *testing.T) {
+	dir := t.TempDir()
+	tf := filepath.Join(dir, "token")
+	if err := os.WriteFile(tf, []byte("SECRET-TOKEN"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hard := filepath.Join(dir, "hard.html")
+	if err := os.Link(tf, hard); err != nil {
+		t.Skipf("hardlink unsupported: %v", err)
+	}
+	tokenFileOpened = func() {
+		repl := filepath.Join(dir, "token.new")
+		if err := os.WriteFile(repl, []byte("OTHER-TOKEN"), 0o600); err != nil {
+			t.Error(err)
+		}
+		if err := os.Rename(repl, tf); err != nil {
+			t.Error(err)
+		}
+	}
+	defer func() { tokenFileOpened = nil }()
+
+	c, f := newGuardClient(t, "")
+	if err := c.LoadTokenFile(tf); err != nil {
+		t.Fatal(err)
+	}
+	if c.Token != "SECRET-TOKEN" {
+		t.Fatalf("token = %q, want the opened file's bytes", c.Token)
+	}
+	setPublishRoot(t, c, dir)
+	rerr, body := publishPathCall(t, c, f, hard)
+	if rerr == nil || strings.Contains(body, "SECRET-TOKEN") {
+		t.Fatalf("hardlink to the opened token file was published (err %+v)", rerr)
+	}
+}

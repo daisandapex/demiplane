@@ -7,7 +7,7 @@ package mcp
 
 import "os"
 
-// openNoBlock is zero where opening a special file does not block on a peer.
+// openNoBlock is zero outside Unix, where there is no O_NONBLOCK open flag.
 const openNoBlock = 0
 
 // onPseudoFS has no pseudo filesystems to refuse outside Unix.
