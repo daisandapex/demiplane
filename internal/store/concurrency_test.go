@@ -274,10 +274,11 @@ func TestRebakeRetriesAfterOutOfProcessPublish(t *testing.T) {
 	}
 }
 
-// TestModifiedAtAdvancesWithinOneSecond: every write moves the modified time
-// forward, even several writes inside one second, so an HTTP Last-Modified
-// validator always changes with the bytes.
-func TestModifiedAtAdvancesWithinOneSecond(t *testing.T) {
+// TestModifiedAtTracksWallClock: rapid writes never move the modified time
+// past the wall clock (HTTP forbids a Last-Modified later than the response),
+// and never move it backwards. Writes inside one second share a modified time;
+// the version (ETag) is what tells them apart.
+func TestModifiedAtTracksWallClock(t *testing.T) {
 	s := newTestStore(t)
 	var last time.Time
 	for i, write := range []func() Artifact{
@@ -297,14 +298,19 @@ func TestModifiedAtAdvancesWithinOneSecond(t *testing.T) {
 			}
 			return a
 		},
+		func() Artifact { return mustPut(t, s, PutOptions{Slug: "m"}, "e") },
 	} {
 		a := write()
+		now := time.Now()
 		stored, _ := readBack(t, s, "m")
 		if !stored.ModifiedAt.Equal(a.ModifiedAt) {
 			t.Fatalf("write %d: returned modified %v, stored %v", i, a.ModifiedAt, stored.ModifiedAt)
 		}
-		if i > 0 && !stored.LastModified().After(last) {
-			t.Fatalf("write %d: modified time %v did not advance past %v", i, stored.LastModified(), last)
+		if stored.LastModified().After(now) {
+			t.Fatalf("write %d: modified time %v is ahead of the wall clock %v", i, stored.LastModified(), now)
+		}
+		if stored.LastModified().Before(last) {
+			t.Fatalf("write %d: modified time %v moved back from %v", i, stored.LastModified(), last)
 		}
 		last = stored.LastModified()
 	}

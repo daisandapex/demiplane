@@ -4,6 +4,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -112,5 +113,65 @@ func TestRepublishChangesLastModified(t *testing.T) {
 	resp, body := conditionalGet(t, url, cached)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "two") {
 		t.Fatalf("If-Modified-Since revalidation after republish = %d %q, want 200 with new bytes", resp.StatusCode, body)
+	}
+}
+
+// TestLastModifiedNotAheadAfterRecreate: rapid writes must not push
+// Last-Modified past the response's Date, and a client holding the
+// Last-Modified of a deleted artifact must get the recreated artifact's bytes,
+// not a 304 for bytes it never saw.
+func TestLastModifiedNotAheadAfterRecreate(t *testing.T) {
+	ts := newTestServer(t, "")
+	var url string
+	for i := 0; i < 5; i++ {
+		url = publish(t, ts, "?slug=churn", fmt.Sprintf("<p>old %d</p>", i))
+	}
+	resp, _ := get(t, url)
+	lm, err := http.ParseTime(resp.Header.Get("Last-Modified"))
+	if err != nil {
+		t.Fatalf("Last-Modified %q: %v", resp.Header.Get("Last-Modified"), err)
+	}
+	date, err := http.ParseTime(resp.Header.Get("Date"))
+	if err != nil {
+		t.Fatalf("Date %q: %v", resp.Header.Get("Date"), err)
+	}
+	if lm.After(date) {
+		t.Errorf("Last-Modified %v is later than Date %v", lm, date)
+	}
+	cached := http.Header{}
+	cached.Set("Last-Modified", resp.Header.Get("Last-Modified"))
+
+	if code, _ := do(t, http.MethodDelete, url, "", ""); code != http.StatusNoContent {
+		t.Fatalf("DELETE status = %d", code)
+	}
+	url = publish(t, ts, "?slug=churn", "<p>fresh</p>")
+	got, body := conditionalGet(t, url, cached)
+	if got.StatusCode != http.StatusOK || !strings.Contains(body, "fresh") {
+		t.Fatalf("If-Modified-Since after delete and recreate = %d %q, want 200 with the new bytes", got.StatusCode, body)
+	}
+}
+
+// TestIfRangeDateAfterSameSecondRepublish: a resumed download that carries
+// If-Range with the old Last-Modified must not get a partial response of
+// different bytes when the republish lands in the same second.
+func TestIfRangeDateAfterSameSecondRepublish(t *testing.T) {
+	ts := newTestServer(t, "")
+	url := publish(t, ts, "?slug=resume", "<p>aaaaaaaa</p>")
+	first, _ := get(t, url)
+	publish(t, ts, "?slug=resume", "<p>bbbbbbbb</p>")
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Range", "bytes=3-")
+	req.Header.Set("If-Range", first.Header.Get("Last-Modified"))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(b) != "<p>bbbbbbbb</p>" {
+		t.Fatalf("If-Range with a stale date = %d %q, want 200 with the whole new body", resp.StatusCode, b)
 	}
 }

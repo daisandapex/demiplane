@@ -552,9 +552,9 @@ type priorGen struct {
 
 // swapMeta inserts or, for an existing (named) slug, overwrites the metadata
 // row in place, pointing it at a.Version's bytes and sourceGen's source. The
-// stored modified time is at least one second past the previous one, so an
-// HTTP Last-Modified validator changes even for two writes in one second;
-// a.ModifiedAt is set to the stored value. Owner
+// stored modified time is a.ModifiedAt, the wall-clock time of the write: never
+// later than now, so Last-Modified stays a valid HTTP date. Two writes in one
+// second share it; the version (the ETag) is what tells them apart. Owner
 // is preserved on overwrite; privacy, password, and expiry are replaced with the
 // new publish's values (re-publishing resets them). It returns the generations
 // the row named before, read in the same transaction, so the caller removes
@@ -582,7 +582,7 @@ ON CONFLICT(slug) DO UPDATE SET
     render_spec   = excluded.render_spec,
     blob_gen      = excluded.blob_gen,
     source_gen    = excluded.source_gen,
-    modified_at   = MAX(excluded.modified_at, artifacts.modified_at + 1)
+    modified_at   = excluded.modified_at
 RETURNING modified_at;`
 	tx, err := s.db.Begin()
 	if err != nil {

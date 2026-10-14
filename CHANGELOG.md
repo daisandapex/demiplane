@@ -41,9 +41,12 @@ All notable changes to demiplane are documented here. The format follows
   now serialized, and a rebake that loses to a publish starts over from the new
   source.
 - **A rebake reaches browsers that cached the old page.** `GET /{slug}` now sends
-  an `ETag` that changes on every write and a `Last-Modified` that `POST
-  /rerender` advances, so a revalidating browser gets the new rendering instead
-  of `304`.
+  an `ETag` that changes on every write, and a revalidating browser gets the new
+  rendering instead of `304`. The `ETag` alone decides conditional requests:
+  `If-Modified-Since` never earns a `304` and an `If-Range` date sends the whole
+  body, because a date cannot tell apart two writes in one second or a deleted
+  page from its recreation. `Last-Modified` is the wall-clock write time and is
+  never later than the response.
 - **Rendered pages share one left edge.** The document column measure was
   `70ch` per child, and `ch` follows each element's own font-size, so headings,
   the lead and blockquotes got wider centred boxes than the body and hung left

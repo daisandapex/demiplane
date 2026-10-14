@@ -619,15 +619,33 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	// 304 when unchanged and fresh bytes after a re-publish or a rebake.
 	w.Header().Set("Cache-Control", "no-cache")
 	// The version changes on every write of the bytes, including two writes in
-	// the same second, which Last-Modified cannot tell apart. ServeContent
-	// checks If-None-Match before If-Modified-Since.
+	// the same second, and differs between a deleted artifact and its
+	// recreation. A date cannot tell those apart, so whenever there is an ETag
+	// it alone decides: If-Modified-Since never earns a 304 (ServeContent
+	// already ignores it beside If-None-Match), and an If-Range carrying a date
+	// sends the whole body rather than a range of possibly different bytes.
+	lastModified := art.LastModified()
+	if now := time.Now(); lastModified.After(now) {
+		// Rows written while modified times could run ahead of the clock.
+		lastModified = now
+	}
 	if art.Version != "" {
 		w.Header().Set("ETag", `"`+art.Version+`"`)
+		r.Header.Del("If-Modified-Since")
+		if ir := r.Header.Get("If-Range"); ir != "" && !isEntityTag(ir) {
+			r.Header.Del("Range")
+		}
 	}
 	// ServeContent handles Range requests, conditional GETs, and keeps the
-	// content-type we set above. LastModified advances on every re-publish and
-	// every rebake.
-	http.ServeContent(w, r, art.Filename, art.LastModified(), f)
+	// content-type we set above.
+	http.ServeContent(w, r, art.Filename, lastModified, f)
+}
+
+// isEntityTag reports whether an If-Range value is an entity tag rather than
+// an HTTP date.
+func isEntityTag(v string) bool {
+	v = strings.TrimSpace(v)
+	return strings.HasPrefix(v, `"`) || strings.HasPrefix(v, "W/")
 }
 
 // openUpload returns a reader over the uploaded bytes plus a filename hint. It

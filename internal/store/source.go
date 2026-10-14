@@ -260,11 +260,12 @@ func (s *Store) replaceBodyLocked(slug string, expect *string, r io.Reader) (Art
 	if err != nil {
 		return Artifact{}, err
 	}
-	// The modified time moves at least one second forward, so Last-Modified
-	// changes even when the rebake lands in the same second as the publish.
+	// The modified time is the wall clock, never ahead of it. A rebake in the
+	// same second as the publish keeps the same Last-Modified; the new version
+	// (ETag) is what marks the change.
 	var modified int64
 	err = s.db.QueryRow(
-		`UPDATE artifacts SET size = ?, blob_gen = ?, modified_at = MAX(?, modified_at + 1)
+		`UPDATE artifacts SET size = ?, blob_gen = ?, modified_at = ?
 		  WHERE slug = ? AND blob_gen = ? RETURNING modified_at`,
 		size, gen, time.Now().Unix(), slug, cur,
 	).Scan(&modified)
