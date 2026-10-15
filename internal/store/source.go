@@ -4,12 +4,12 @@
 package store
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -24,8 +24,9 @@ import (
 // gone for good. That is data loss, not a missing feature, and the fix is for the
 // store to keep the input it was given.
 //
-// Shape: source bytes are a sidecar blob under <root>/sources/<slug>, alongside
-// the baked artifact in <root>/blobs/<slug>, and the render parameters that
+// Shape: source bytes are a sidecar file under <root>/sources/, alongside the
+// baked artifact under <root>/blobs/ (both named by generation, see
+// generation.go), and the render parameters that
 // produced the page are an opaque string in the artifacts row (render_spec). The
 // store deliberately does not parse that string — it is the render caller's
 // business (internal/server owns the schema), which keeps the store ignorant of
@@ -43,6 +44,10 @@ import (
 // sourceDirName is the sidecar directory under the store root.
 const sourceDirName = "sources"
 
+// beforeSourceRead, when set by a test, runs between Source's row read and its
+// file read, to place a concurrent write in that window.
+var beforeSourceRead func()
+
 // ErrNoSource means the artifact exists but no source was retained for it —
 // either it was never a rendered publish, or it predates source retention.
 // Callers treat this as "nothing to do", not as a failure.
@@ -54,18 +59,16 @@ type SourceRecord struct {
 	Body      []byte    // the original document bytes (markdown)
 	Spec      string    // opaque render parameters captured at publish
 	CreatedAt time.Time // the artifact's publish time, for a stable colophon
+	// Version is the artifact's bytes version when the source was read, so a
+	// rebake can refuse to overwrite bytes that changed meanwhile.
+	Version string
 }
 
-// sourcePath is the sidecar path for slug. Only ever called with a slug that
-// already has a metadata row, which means it passed slug validation on the way
-// in — a caller-supplied path segment never reaches the filesystem unresolved.
-func (s *Store) sourcePath(slug string) string {
-	return filepath.Join(s.sourceDir, slug)
-}
-
-// writeSource stores body as slug's retained source, atomically (temp + rename)
-// so a crash mid-write cannot leave a truncated source behind a valid artifact.
-func (s *Store) writeSource(slug string, body []byte) error {
+// writeSource stores body at path (a file in the source directory) atomically
+// (temp + rename) so a crash mid-write cannot leave a truncated source behind a
+// valid artifact. Only called with a path built from a slug that passed
+// validation, so a caller-supplied path segment never reaches the filesystem.
+func (s *Store) writeSource(path string, body []byte) error {
 	tmp, err := os.CreateTemp(s.sourceDir, ".tmp-*")
 	if err != nil {
 		return fmt.Errorf("create temp source: %w", err)
@@ -80,18 +83,9 @@ func (s *Store) writeSource(slug string, body []byte) error {
 		os.Remove(tmpName)
 		return fmt.Errorf("close source: %w", err)
 	}
-	if err := os.Rename(tmpName, s.sourcePath(slug)); err != nil {
+	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
 		return fmt.Errorf("commit source: %w", err)
-	}
-	return nil
-}
-
-// removeSource deletes slug's retained source if one exists. A missing sidecar
-// is success: most artifacts never had one.
-func (s *Store) removeSource(slug string) error {
-	if err := os.Remove(s.sourcePath(slug)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove source: %w", err)
 	}
 	return nil
 }
@@ -105,31 +99,58 @@ func (s *Store) removeSource(slug string) error {
 // directory: a row exists only for a slug that passed validation at publish.
 func (s *Store) Source(slug string) (SourceRecord, error) {
 	var (
-		created int64
-		spec    string
+		created   int64
+		spec      string
+		blobGen   string
+		sourceGen string
 	)
 	err := s.db.QueryRow(
-		`SELECT created_at, render_spec FROM artifacts WHERE slug = ?`, slug,
-	).Scan(&created, &spec)
+		`SELECT created_at, render_spec, blob_gen, source_gen FROM artifacts WHERE slug = ?`, slug,
+	).Scan(&created, &spec, &blobGen, &sourceGen)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SourceRecord{}, ErrNotFound
 	}
 	if err != nil {
 		return SourceRecord{}, fmt.Errorf("lookup source metadata: %w", err)
 	}
-
-	body, err := os.ReadFile(s.sourcePath(slug))
-	if err != nil {
-		if os.IsNotExist(err) {
+	var body []byte
+	for attempt := 1; ; attempt++ {
+		if sourceGen == noSourceGen {
 			return SourceRecord{}, ErrNoSource
 		}
-		return SourceRecord{}, fmt.Errorf("read source: %w", err)
+		if beforeSourceRead != nil {
+			beforeSourceRead()
+		}
+		body, err = os.ReadFile(s.sourceFile(slug, sourceGen))
+		if err == nil {
+			break
+		}
+		if !os.IsNotExist(err) {
+			return SourceRecord{}, fmt.Errorf("read source: %w", err)
+		}
+		// Either there is no retained source (a legacy artifact), or another
+		// process committed a write after the row read and removed the
+		// generation that row named. Only a changed row means the latter.
+		prev := sourceGen
+		err = s.db.QueryRow(
+			`SELECT created_at, render_spec, blob_gen, source_gen FROM artifacts WHERE slug = ?`, slug,
+		).Scan(&created, &spec, &blobGen, &sourceGen)
+		if errors.Is(err, sql.ErrNoRows) {
+			return SourceRecord{}, ErrNotFound
+		}
+		if err != nil {
+			return SourceRecord{}, fmt.Errorf("lookup source metadata: %w", err)
+		}
+		if sourceGen == prev || attempt == getAttempts {
+			return SourceRecord{}, ErrNoSource
+		}
 	}
 	return SourceRecord{
 		Slug:      slug,
 		Body:      body,
 		Spec:      spec,
 		CreatedAt: time.Unix(created, 0).UTC(),
+		Version:   blobGen,
 	}, nil
 }
 
@@ -165,8 +186,9 @@ func (s *Store) Slugs(owner string) ([]string, error) {
 }
 
 // ReplaceBody swaps an existing artifact's bytes in place and returns its
-// updated metadata. Only the size changes: slug, filename, content-type, owner,
-// privacy, password, expiry, series, and publish time all survive.
+// updated metadata. Only the bytes, size, version and modified time change:
+// slug, filename, content-type, owner, privacy, password, expiry, series, and
+// publish time all survive.
 //
 // This is deliberately NOT Put with a named slug. Put is a publish — it resets
 // the password, the TTL, and created_at from the incoming request, which is
@@ -174,21 +196,95 @@ func (s *Store) Slugs(owner string) ([]string, error) {
 // silently unlock a password-gated artifact, extend an expiring one, or move it
 // to the top of the gallery. A rebake changes the rendering, nothing else.
 func (s *Store) ReplaceBody(slug string, r io.Reader) (Artifact, error) {
-	art, f, err := s.Get(slug)
-	if err != nil {
-		return Artifact{}, err
-	}
-	// Only the existence check was wanted; the bytes are about to be replaced.
-	f.Close()
+	unlock := s.locks.lock(slug)
+	defer unlock()
+	return s.replaceBodyLocked(slug, nil, r)
+}
 
-	_, size, err := s.writeBlob(slug, r)
+// rebakeAttempts bounds how often Rebake starts over after another process
+// changed the artifact between its source read and its write.
+const rebakeAttempts = 3
+
+// ErrConcurrentWrite means a rebake kept losing to concurrent writes of the
+// same artifact and gave up; retrying later is safe.
+var ErrConcurrentWrite = errors.New("artifact kept changing during the rebake")
+
+// Rebake re-renders slug from its retained source and swaps the result in as
+// ReplaceBody does. It holds slug's write lock from the source read to the body
+// write, so a publish cannot land in between and be overwritten by a rendering
+// of the older source. The write is also conditional on the bytes version the
+// source was read with, which covers a publish from another process; on a
+// mismatch the rebake starts over from the new source. It returns ErrNotFound or
+// ErrNoSource as Source does, and whatever error render returns.
+func (s *Store) Rebake(slug string, render func(SourceRecord) ([]byte, error)) (Artifact, error) {
+	unlock := s.locks.lock(slug)
+	defer unlock()
+	for i := 0; i < rebakeAttempts; i++ {
+		rec, err := s.Source(slug)
+		if err != nil {
+			return Artifact{}, err
+		}
+		body, err := render(rec)
+		if err != nil {
+			return Artifact{}, err
+		}
+		art, err := s.replaceBodyLocked(slug, &rec.Version, bytes.NewReader(body))
+		if errors.Is(err, errGenConflict) {
+			continue
+		}
+		return art, err
+	}
+	return Artifact{}, ErrConcurrentWrite
+}
+
+// replaceBodyLocked writes r as slug's bytes at a fresh generation and points
+// the row at it. With expect set, the row is updated only if it still names
+// that version (errGenConflict otherwise). The caller holds slug's lock.
+func (s *Store) replaceBodyLocked(slug string, expect *string, r io.Reader) (Artifact, error) {
+	art, err := s.lookup(slug)
 	if err != nil {
 		return Artifact{}, err
 	}
-	if _, err := s.db.Exec(`UPDATE artifacts SET size = ? WHERE slug = ?`, size, slug); err != nil {
-		return Artifact{}, fmt.Errorf("update size: %w", err)
+	if !art.ExpiresAt.IsZero() && !art.ExpiresAt.After(time.Now()) {
+		return Artifact{}, ErrNotFound
 	}
+	cur := art.Version
+	if expect != nil && *expect != cur {
+		return Artifact{}, errGenConflict
+	}
+	gen, err := newGen()
+	if err != nil {
+		return Artifact{}, err
+	}
+	_, size, err := s.writeBlob(s.blobFile(slug, gen), r)
+	if err != nil {
+		return Artifact{}, err
+	}
+	// The modified time is the wall clock, never ahead of it. A rebake in the
+	// same second as the publish keeps the same Last-Modified; the new version
+	// (ETag) is what marks the change.
+	var modified int64
+	err = s.db.QueryRow(
+		`UPDATE artifacts SET size = ?, blob_gen = ?, modified_at = ?
+		  WHERE slug = ? AND blob_gen = ? RETURNING modified_at`,
+		size, gen, time.Now().Unix(), slug, cur,
+	).Scan(&modified)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		os.Remove(s.blobFile(slug, gen))
+		return Artifact{}, fmt.Errorf("update body: %w", err)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		// Deleted or republished by another process since the lookup.
+		os.Remove(s.blobFile(slug, gen))
+		if _, lerr := s.lookup(slug); errors.Is(lerr, ErrNotFound) {
+			return Artifact{}, ErrNotFound
+		}
+		return Artifact{}, errGenConflict
+	}
+	s.dropReplacedGen(slug, cur, noSourceGen)
 	art.Size = size
+	art.Version = gen
+	art.ModifiedAt = time.Unix(modified, 0).UTC()
 	// Same notification a publish fires, so a ?live tab watching this slug picks
 	// the new rendering up without a manual reload.
 	s.notify(slug)

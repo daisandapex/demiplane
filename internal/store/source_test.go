@@ -111,8 +111,8 @@ func TestRepublishWithoutSourceDropsRetained(t *testing.T) {
 	if art.RenderSpec != "" {
 		t.Errorf("render spec survived a sourceless overwrite: %q", art.RenderSpec)
 	}
-	if _, err := os.Stat(filepath.Join(s.root, sourceDirName, "notes")); !os.IsNotExist(err) {
-		t.Errorf("source sidecar still on disk: %v", err)
+	if left := slugFiles(t, s.sourceDir, "notes"); len(left) != 0 {
+		t.Errorf("source sidecar still on disk: %v", left)
 	}
 }
 
@@ -146,8 +146,8 @@ func TestDeleteRemovesSource(t *testing.T) {
 	if err := s.Delete("notes"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(s.root, sourceDirName, "notes")); !os.IsNotExist(err) {
-		t.Errorf("source survived Delete: %v", err)
+	if left := slugFiles(t, s.sourceDir, "notes"); len(left) != 0 {
+		t.Errorf("source survived Delete: %v", left)
 	}
 }
 
@@ -167,8 +167,8 @@ func TestSweepExpiredRemovesSource(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("swept %d artifacts, want 1", n)
 	}
-	if _, err := os.Stat(filepath.Join(s.root, sourceDirName, art.Slug)); !os.IsNotExist(err) {
-		t.Errorf("source survived expiry: %v", err)
+	if left := slugFiles(t, s.sourceDir, art.Slug); len(left) != 0 {
+		t.Errorf("source survived expiry: %v", left)
 	}
 }
 

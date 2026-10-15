@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -35,12 +37,86 @@ type Client struct {
 	ControlURL string
 	ContentURL string
 	Token      string
-	// TokenFile, when set, is the resolved absolute path of the file the bearer
-	// token was read from. The publish tool refuses to read-and-publish this path
-	// so a prompt-injected model cannot use `path` to exfiltrate the token file to
-	// a public slug (invariant 4: the token is never rendered to a page).
-	TokenFile string
-	HTTP      *http.Client
+	HTTP       *http.Client
+
+	// tokenFile and tokenID identify the file the bearer token was read from
+	// (LoadTokenFile). The publish tool refuses to read-and-publish it, compared
+	// by file identity, so a prompt-injected model cannot use `path` to
+	// exfiltrate the token to a public slug (invariant 4: the token is never
+	// rendered to a page).
+	tokenFile string
+	tokenID   os.FileInfo
+	// publishRoot is the directory the publish tool's `path` argument must
+	// resolve inside, opened once (SetPublishRoot) so later changes to the
+	// path that named it cannot move it. nil disables publishing by `path`.
+	publishRoot     *os.Root
+	publishRootPath string
+}
+
+// tokenFileOpened, when set by a test, runs between LoadTokenFile's open and
+// its reads, to replace the token file inside that window.
+var tokenFileOpened func()
+
+// LoadTokenFile reads the bearer token from path and records the file it came
+// from. The token and the file identity (device and inode) are both taken from
+// one open descriptor, so a replacement of the path at any point cannot leave
+// the client holding one file's token and another file's identity. A later
+// rename or replacement of the path does not let a hardlink to the original
+// file through either.
+func (c *Client) LoadTokenFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("read token file: %w", err)
+	}
+	defer f.Close()
+	if tokenFileOpened != nil {
+		tokenFileOpened()
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("read token file: %w", err)
+	}
+	b, err := io.ReadAll(f)
+	if err != nil {
+		return fmt.Errorf("read token file: %w", err)
+	}
+	tok := strings.TrimSpace(string(b))
+	if tok == "" {
+		return fmt.Errorf("token file %q is empty", path)
+	}
+	// The resolved path backs the secondary "whatever the path names now"
+	// check; the identity above is the one that matters.
+	name := path
+	if abs, err := filepath.Abs(path); err == nil {
+		name = abs
+		if real, err := filepath.EvalSymlinks(abs); err == nil {
+			name = real
+		}
+	}
+	c.Token = tok
+	c.tokenFile = name
+	c.tokenID = fi
+	return nil
+}
+
+// SetPublishRoot confines the publish tool's `path` argument to dir. The
+// directory is resolved and opened here, once; every later read goes through
+// that open directory.
+func (c *Client) SetPublishRoot(dir string) error {
+	resolved, err := resolveDir(dir)
+	if err != nil {
+		return fmt.Errorf("publish root: %w", err)
+	}
+	r, err := os.OpenRoot(resolved)
+	if err != nil {
+		return fmt.Errorf("publish root: %w", err)
+	}
+	if c.publishRoot != nil {
+		c.publishRoot.Close()
+	}
+	c.publishRoot = r
+	c.publishRootPath = resolved
+	return nil
 }
 
 // NewClient builds a Client with sane defaults. controlURL is required;

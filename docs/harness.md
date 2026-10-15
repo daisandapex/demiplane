@@ -57,7 +57,10 @@ demiplane publish --url http://demiplane.your-mesh:8891 --token-file ~/.config/d
 ```
 
 The token is read from `--token-file`/`$DEMIPLANE_TOKEN` **locally** and is never
-placed on a command line, in a URL, or on the `/connect` page. See
+placed on a command line, in a URL, or on the `/connect` page. The MCP
+`publish` tool's `path` argument only reads files under the MCP process's working
+directory; pass `--publish-root <dir>` (or set `DEMIPLANE_PUBLISH_ROOT`) to choose
+another directory. See
 [`companion/README.md`](../companion/README.md) for the full harness matrix and the
 Claude Code capture hook.
 

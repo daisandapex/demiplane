@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"os"
@@ -51,13 +52,29 @@ type Artifact struct {
 	// source later (see source.go). "" = nothing retained. The store never
 	// interprets it.
 	RenderSpec string
+	// ModifiedAt is when the stored bytes last changed: the publish, or a later
+	// rebake. Zero for rows written before it was recorded.
+	ModifiedAt time.Time
+	// Version is an opaque token that changes on every write of the bytes, for
+	// use as an HTTP entity tag. "" for rows whose bytes predate it.
+	Version string
+}
+
+// LastModified is when the stored bytes last changed, falling back to the
+// publish time for rows that predate ModifiedAt.
+func (a Artifact) LastModified() time.Time {
+	if a.ModifiedAt.IsZero() {
+		return a.CreatedAt
+	}
+	return a.ModifiedAt
 }
 
 // HasPassword reports whether the artifact is gated by a view password.
 func (a Artifact) HasPassword() bool { return a.PasswordHash != "" }
 
 // Store is a content store rooted at a directory. It is safe for concurrent
-// use: SQLite serializes writes and blob writes are atomic renames.
+// use: writers to one slug are serialized, and the metadata row names the
+// exact bytes file it describes (see generation.go).
 type Store struct {
 	root    string
 	blobDir string
@@ -69,12 +86,24 @@ type Store struct {
 	// successful Put so the SSE live-reload feature can push a reload event. See
 	// notify.go. nil = no notifications (default).
 	notifier Notifier
+	// locks serializes writers to the same slug (generation.go).
+	locks slugLocks
 }
 
-// Open opens (creating if needed) a store rooted at dir.
+// Open opens (creating if needed) a store rooted at dir. The store root, its
+// content directories and the metadata database are created owner-only, and an
+// existing store with group or world bits on any of them is tightened (and the
+// change logged): the database holds capability slugs and password hashes, and
+// the blobs and sources hold the bytes of password-gated artifacts.
 func Open(dir string) (*Store, error) {
 	blobDir := filepath.Join(dir, "blobs")
 	sourceDir := filepath.Join(dir, sourceDirName)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create store dir: %w", err)
+	}
+	if err := tightenStorePerms(dir); err != nil {
+		return nil, err
+	}
 	// 0700, not 0755: blobs include password-gated artifacts, so other local
 	// users must not be able to read them off disk and bypass the view gate.
 	// This also blocks traversal into the store dir (and thus meta.db).
@@ -87,8 +116,18 @@ func Open(dir string) (*Store, error) {
 		return nil, fmt.Errorf("create source dir: %w", err)
 	}
 	dbPath := filepath.Join(dir, "meta.db")
+	// Create the database file 0600 before SQLite does (it would use 0644 under
+	// the usual umask). SQLite gives the -wal and -shm files the database file's
+	// mode, so they start owner-only too.
+	dbFile, err := os.OpenFile(dbPath, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("create metadata db: %w", err)
+	}
+	dbFile.Close()
 	// _pragma busy_timeout avoids spurious "database is locked" under concurrency.
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	// _txlock=immediate takes the write lock at BEGIN, so a transaction that
+	// reads a row and then rewrites it cannot fail on the lock upgrade.
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("open metadata db: %w", err)
 	}
@@ -98,6 +137,48 @@ func Open(dir string) (*Store, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// storePerms lists the store paths that must be owner-only and the mode each
+// must have. Paths that do not exist yet are skipped; they are created
+// owner-only when first needed.
+var storePerms = []struct {
+	name string
+	mode os.FileMode
+}{
+	{"", 0o700},
+	{"blobs", 0o700},
+	{sourceDirName, 0o700},
+	{"sites", 0o700},
+	{"meta.db", 0o600},
+	{"meta.db-wal", 0o600},
+	{"meta.db-shm", 0o600},
+}
+
+// tightenStorePerms sets the store root, its content directories and the
+// metadata database files to exactly the modes in storePerms, logging each path
+// it changes. Exact rather than masked, so a file left without its owner bits
+// is repaired too instead of failing later.
+func tightenStorePerms(dir string) error {
+	for _, e := range storePerms {
+		p := filepath.Join(dir, e.name)
+		fi, err := os.Stat(p)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect %s: %w", p, err)
+		}
+		perm := fi.Mode().Perm()
+		if perm == e.mode {
+			continue
+		}
+		if err := os.Chmod(p, e.mode); err != nil {
+			return fmt.Errorf("set mode of %s: %w", p, err)
+		}
+		log.Printf("store: set mode of %s from %04o to %04o", p, perm, e.mode)
+	}
+	return nil
 }
 
 // Close releases the metadata database handle.
@@ -137,6 +218,13 @@ CREATE TABLE IF NOT EXISTS artifacts (
 		// defaulting to '', so every pre-existing artifact reads back as "no
 		// retained source" instead of needing a backfill.
 		{"render_spec", "ALTER TABLE artifacts ADD COLUMN render_spec TEXT NOT NULL DEFAULT ''"},
+		// Generations of the bytes and retained source files the row describes
+		// (generation.go). '' is the pre-generation file name, so existing rows
+		// keep pointing at their existing files.
+		{"blob_gen", "ALTER TABLE artifacts ADD COLUMN blob_gen TEXT NOT NULL DEFAULT ''"},
+		{"source_gen", "ALTER TABLE artifacts ADD COLUMN source_gen TEXT NOT NULL DEFAULT ''"},
+		// When the bytes last changed (publish or rebake); 0 = not recorded.
+		{"modified_at", "ALTER TABLE artifacts ADD COLUMN modified_at INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, col := range added {
 		if err := s.addColumnIfMissing(col.name, col.ddl); err != nil {
@@ -212,7 +300,7 @@ type PutOptions struct {
 //
 // The body is streamed to disk — it is never fully buffered in memory.
 func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
-	slug, overwrite, err := s.resolveSlug(opts.Slug, opts.Private)
+	slug, _, err := s.resolveSlug(opts.Slug, opts.Private)
 	if err != nil {
 		return Artifact{}, err
 	}
@@ -225,9 +313,29 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 		}
 	}
 
-	sniffed, size, err := s.writeBlob(slug, r)
+	// The bytes and source go to files of a fresh generation, which nothing
+	// references until the row is committed below, so a reader keeps getting
+	// the previous publish (bytes and metadata together) until then.
+	gen, err := newGen()
 	if err != nil {
 		return Artifact{}, err
+	}
+	sniffed, size, err := s.writeBlob(s.blobFile(slug, gen), r)
+	if err != nil {
+		return Artifact{}, err
+	}
+
+	// Source retention. A publish that carries a source retains it at the new
+	// generation; one that does not records that there is none, and the
+	// replaced generation's sidecar is removed with its bytes, so stale source
+	// can never describe bytes that no longer exist.
+	sourceGen := noSourceGen
+	if opts.Source != nil {
+		sourceGen = gen
+		if err := s.writeSource(s.sourceFile(slug, sourceGen), opts.Source); err != nil {
+			os.Remove(s.blobFile(slug, gen))
+			return Artifact{}, err
+		}
 	}
 
 	contentType := inferContentType(opts.Filename, sniffed)
@@ -254,34 +362,19 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 		ExpiresAt:    expiresAt,
 		Series:       opts.Series,
 		RenderSpec:   opts.RenderSpec,
+		ModifiedAt:   now,
+		Version:      gen,
 	}
 
-	// Source retention. A publish that carries a source writes the sidecar; one
-	// that does not DROPS any sidecar already at this slug, so an overwrite (a
-	// plain HTML publish landing on a slug that used to be a rendered page) can
-	// never leave stale source describing bytes that no longer exist.
-	if opts.Source != nil {
-		if err := s.writeSource(slug, opts.Source); err != nil {
-			if !overwrite {
-				os.Remove(filepath.Join(s.blobDir, slug))
-			}
-			return Artifact{}, err
-		}
-	} else if err := s.removeSource(slug); err != nil {
-		if !overwrite {
-			os.Remove(filepath.Join(s.blobDir, slug))
-		}
+	unlock := s.locks.lock(slug)
+	defer unlock()
+	prior, err := s.swapMeta(&art, sourceGen)
+	if err != nil {
+		_ = s.removeGenFiles(slug, gen, sourceGen)
 		return Artifact{}, err
 	}
-
-	if err := s.upsertMeta(art); err != nil {
-		// Best-effort rollback of the blob we just wrote on a fresh slug; for an
-		// overwrite we leave the new bytes (the row still points at a valid file).
-		if !overwrite {
-			os.Remove(filepath.Join(s.blobDir, slug))
-			_ = s.removeSource(slug)
-		}
-		return Artifact{}, err
+	if prior.exists {
+		s.dropReplacedGen(slug, prior.blobGen, prior.sourceGen)
 	}
 	// Fire the publish notification (guarded no-op when no notifier is set) so a
 	// live-preview tab on this slug can reload. Emitted only after the metadata
@@ -406,10 +499,10 @@ func (s *Store) exists(slug string) (bool, error) {
 	return true, nil
 }
 
-// writeBlob streams r to <blobDir>/<slug> atomically (temp file + rename) and
-// returns the sniffed content-type and total byte count. Only the first
-// sniffLen bytes are held in memory; the rest is copied straight through.
-func (s *Store) writeBlob(slug string, r io.Reader) (sniffed string, size int64, err error) {
+// writeBlob streams r to final (a file in blobDir) atomically (temp file +
+// rename) and returns the sniffed content-type and total byte count. Only the
+// first sniffLen bytes are held in memory; the rest is copied straight through.
+func (s *Store) writeBlob(final string, r io.Reader) (sniffed string, size int64, err error) {
 	tmp, err := os.CreateTemp(s.blobDir, ".tmp-*")
 	if err != nil {
 		return "", 0, fmt.Errorf("create temp blob: %w", err)
@@ -444,7 +537,6 @@ func (s *Store) writeBlob(slug string, r io.Reader) (sniffed string, size int64,
 		err = fmt.Errorf("close blob: %w", cerr)
 		return "", 0, err
 	}
-	final := filepath.Join(s.blobDir, slug)
 	if rerr := os.Rename(tmpName, final); rerr != nil {
 		err = fmt.Errorf("commit blob: %w", rerr)
 		return "", 0, err
@@ -452,13 +544,25 @@ func (s *Store) writeBlob(slug string, r io.Reader) (sniffed string, size int64,
 	return sniffed, size, nil
 }
 
-// upsertMeta inserts or, for an existing (named) slug, overwrites the metadata
-// row in place. Owner is preserved on overwrite; privacy, password, and expiry
-// are replaced with the new publish's values (re-publishing resets them).
-func (s *Store) upsertMeta(a Artifact) error {
+// priorGen is what a row named before swapMeta replaced it.
+type priorGen struct {
+	exists             bool
+	blobGen, sourceGen string
+}
+
+// swapMeta inserts or, for an existing (named) slug, overwrites the metadata
+// row in place, pointing it at a.Version's bytes and sourceGen's source. The
+// stored modified time is a.ModifiedAt, the wall-clock time of the write: never
+// later than now, so Last-Modified stays a valid HTTP date. Two writes in one
+// second share it; the version (the ETag) is what tells them apart. Owner
+// is preserved on overwrite; privacy, password, and expiry are replaced with the
+// new publish's values (re-publishing resets them). It returns the generations
+// the row named before, read in the same transaction, so the caller removes
+// exactly the files this write replaced.
+func (s *Store) swapMeta(a *Artifact, sourceGen string) (priorGen, error) {
 	const q = `
-INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, source_gen, modified_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(slug) DO UPDATE SET
     filename      = excluded.filename,
     content_type  = excluded.content_type,
@@ -475,15 +579,38 @@ ON CONFLICT(slug) DO UPDATE SET
     series        = excluded.series,
     -- Follows the bytes: a re-publish with no retained source clears the spec
     -- along with the sidecar file Put just removed.
-    render_spec   = excluded.render_spec;`
-	_, err := s.db.Exec(q,
+    render_spec   = excluded.render_spec,
+    blob_gen      = excluded.blob_gen,
+    source_gen    = excluded.source_gen,
+    modified_at   = excluded.modified_at
+RETURNING modified_at;`
+	tx, err := s.db.Begin()
+	if err != nil {
+		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
+	}
+	defer tx.Rollback()
+	var p priorGen
+	err = tx.QueryRow(`SELECT blob_gen, source_gen FROM artifacts WHERE slug = ?`, a.Slug).Scan(&p.blobGen, &p.sourceGen)
+	switch {
+	case err == nil:
+		p.exists = true
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
+	}
+	var modified int64
+	if err := tx.QueryRow(q,
 		a.Slug, a.Filename, a.ContentType, a.Size, a.CreatedAt.Unix(), a.Owner,
 		boolToInt(a.Private), a.PasswordHash, unixOrZero(a.ExpiresAt), a.Series, a.RenderSpec,
-	)
-	if err != nil {
-		return fmt.Errorf("upsert metadata: %w", err)
+		a.Version, sourceGen, unixOrZero(a.ModifiedAt),
+	).Scan(&modified); err != nil {
+		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 	}
-	return nil
+	if err := tx.Commit(); err != nil {
+		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
+	}
+	a.ModifiedAt = time.Unix(modified, 0).UTC()
+	return p, nil
 }
 
 func boolToInt(b bool) int {
@@ -504,76 +631,97 @@ func unixOrZero(t time.Time) int64 {
 // ErrNotFound is returned by Get when no artifact has the given slug.
 var ErrNotFound = errors.New("artifact not found")
 
+// getAttempts bounds how often Get re-reads a row whose bytes file was
+// replaced between the row read and the open.
+const getAttempts = 3
+
 // Get returns an artifact's metadata and an open reader for its bytes. The
 // caller must Close the reader. A past-TTL artifact is treated as not found and
 // is deleted lazily (the background sweeper is the primary reclaimer; this just
 // guarantees an expired artifact is never served even between sweeps).
+//
+// The reader is always the bytes file the returned metadata names, so bytes
+// from one publish are never paired with another publish's password, privacy
+// or expiry.
 func (s *Store) Get(slug string) (Artifact, *os.File, error) {
-	var (
-		a       Artifact
-		created int64
-		expires int64
-		private int
-	)
-	err := s.db.QueryRow(
-		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec
-		   FROM artifacts WHERE slug = ?`,
-		slug,
-	).Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Artifact{}, nil, ErrNotFound
-	}
-	if err != nil {
-		return Artifact{}, nil, fmt.Errorf("lookup metadata: %w", err)
-	}
-	a.CreatedAt = time.Unix(created, 0).UTC()
-	a.Private = private != 0
-	if expires > 0 {
-		a.ExpiresAt = time.Unix(expires, 0).UTC()
-		if !a.ExpiresAt.After(time.Now()) {
+	for attempt := 1; ; attempt++ {
+		a, err := s.lookup(slug)
+		if err != nil {
+			return Artifact{}, nil, err
+		}
+		if !a.ExpiresAt.IsZero() && !a.ExpiresAt.After(time.Now()) {
 			// Predicate-guarded reclaim: if a concurrent re-publish renewed the
 			// TTL between this read and now, reapIfExpired is a no-op and the
 			// renewed artifact survives (it still 404s for THIS request).
 			_, _ = s.reapIfExpired(slug, time.Now())
 			return Artifact{}, nil, ErrNotFound
 		}
-	}
-
-	f, err := os.Open(filepath.Join(s.blobDir, slug))
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Metadata without bytes is a corrupt store, not a normal 404.
-			return Artifact{}, nil, fmt.Errorf("blob missing for slug %q: %w", slug, err)
+		f, err := os.Open(s.blobFile(slug, a.Version))
+		if err == nil {
+			return a, f, nil
 		}
-		return Artifact{}, nil, fmt.Errorf("open blob: %w", err)
+		if !os.IsNotExist(err) {
+			return Artifact{}, nil, fmt.Errorf("open blob: %w", err)
+		}
+		// A write or delete committed between the row read and the open and
+		// removed the generation that row named. Read the row again.
+		if attempt == getAttempts {
+			// Metadata without bytes is a corrupt store, not a normal 404.
+			return Artifact{}, nil, errors.New("blob missing for artifact")
+		}
 	}
-	return a, f, nil
 }
 
-// Delete removes an artifact's metadata row and its blob. It returns
-// ErrNotFound if no such slug exists. The metadata row is removed first so a
-// concurrent Get cannot observe a row whose blob is already gone.
+// lookup reads slug's metadata row.
+func (s *Store) lookup(slug string) (Artifact, error) {
+	var (
+		a        Artifact
+		created  int64
+		expires  int64
+		modified int64
+		private  int
+	)
+	err := s.db.QueryRow(
+		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, modified_at
+		   FROM artifacts WHERE slug = ?`,
+		slug,
+	).Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec, &a.Version, &modified)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Artifact{}, ErrNotFound
+	}
+	if err != nil {
+		return Artifact{}, fmt.Errorf("lookup metadata: %w", err)
+	}
+	a.CreatedAt = time.Unix(created, 0).UTC()
+	a.Private = private != 0
+	if expires > 0 {
+		a.ExpiresAt = time.Unix(expires, 0).UTC()
+	}
+	if modified > 0 {
+		a.ModifiedAt = time.Unix(modified, 0).UTC()
+	}
+	return a, nil
+}
+
+// Delete removes an artifact's metadata row, its bytes and its retained source.
+// It returns ErrNotFound if no such slug exists. The row is removed first, so a
+// concurrent Get either sees the whole artifact or none of it.
 func (s *Store) Delete(slug string) error {
-	res, err := s.db.Exec(`DELETE FROM artifacts WHERE slug = ?`, slug)
-	if err != nil {
-		return fmt.Errorf("delete metadata: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("delete metadata: %w", err)
-	}
-	if n == 0 {
+	unlock := s.locks.lock(slug)
+	defer unlock()
+	var blobGen, sourceGen string
+	err := s.db.QueryRow(
+		`DELETE FROM artifacts WHERE slug = ? RETURNING blob_gen, source_gen`, slug,
+	).Scan(&blobGen, &sourceGen)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
-	if err := os.Remove(filepath.Join(s.blobDir, slug)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("delete blob: %w", err)
+	if err != nil {
+		return fmt.Errorf("delete metadata: %w", err)
 	}
-	// The retained source goes with it — a deleted artifact must not leave its
+	// The retained source goes with it: a deleted artifact must not leave its
 	// plaintext behind on disk.
-	if err := s.removeSource(slug); err != nil {
-		return err
-	}
-	return nil
+	return s.removeGenFiles(slug, blobGen, sourceGen)
 }
 
 // List returns owner's artifacts, newest first, excluding any already past TTL
@@ -679,25 +827,22 @@ func (s *Store) SweepExpired(now time.Time) (int, error) {
 // cleared the TTL leaves the artifact intact (RowsAffected == 0). Returns
 // whether an artifact was reaped.
 func (s *Store) reapIfExpired(slug string, now time.Time) (bool, error) {
-	res, err := s.db.Exec(
-		`DELETE FROM artifacts WHERE slug = ? AND expires_at > 0 AND expires_at <= ?`,
+	unlock := s.locks.lock(slug)
+	defer unlock()
+	var blobGen, sourceGen string
+	err := s.db.QueryRow(
+		`DELETE FROM artifacts WHERE slug = ? AND expires_at > 0 AND expires_at <= ? RETURNING blob_gen, source_gen`,
 		slug, now.Unix(),
-	)
-	if err != nil {
-		return false, fmt.Errorf("reap expired: %w", err)
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("reap expired: %w", err)
-	}
-	if affected == 0 {
+	).Scan(&blobGen, &sourceGen)
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
-	if err := os.Remove(filepath.Join(s.blobDir, slug)); err != nil && !os.IsNotExist(err) {
-		return false, fmt.Errorf("reap blob: %w", err)
+	if err != nil {
+		return false, fmt.Errorf("reap expired: %w", err)
 	}
-	// An expired artifact's retained source expires with it.
-	if err := s.removeSource(slug); err != nil {
+	// An expired artifact's retained source expires with it. Only the
+	// generation the deleted row named is removed, never a newer publish's.
+	if err := s.removeGenFiles(slug, blobGen, sourceGen); err != nil {
 		return false, err
 	}
 	return true, nil

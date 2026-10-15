@@ -4,7 +4,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -203,14 +202,24 @@ func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 // swaps the result in. A missing source is reported as a skip (nil error); only a
 // genuinely unknown slug (store.ErrNotFound) and real I/O failures are errors.
 func (s *Server) rerenderSlug(r *http.Request, slug string) (rerenderResult, error) {
-	rec, err := s.store.Source(slug)
+	// Rebake holds the slug's write lock from the source read to the body write,
+	// so a publish landing meanwhile is never overwritten by a rendering of the
+	// source it replaced.
+	art, err := s.store.Rebake(slug, func(rec store.SourceRecord) ([]byte, error) {
+		return s.renderRetained(r, slug, rec), nil
+	})
 	if errors.Is(err, store.ErrNoSource) {
 		return rerenderResult{Slug: slug, Reason: noSourceReason}, nil
 	}
 	if err != nil {
 		return rerenderResult{}, err
 	}
+	return rerenderResult{Slug: slug, Rerendered: true, Size: art.Size}, nil
+}
 
+// renderRetained renders a retained source with the current renderer
+// configuration and the render parameters captured at publish.
+func (s *Server) renderRetained(r *http.Request, slug string, rec store.SourceRecord) []byte {
 	var spec renderSpec
 	if rec.Spec != "" {
 		if uerr := json.Unmarshal([]byte(rec.Spec), &spec); uerr != nil {
@@ -226,7 +235,7 @@ func (s *Server) rerenderSlug(r *http.Request, slug string) (rerenderResult, err
 		published = rec.CreatedAt
 	}
 
-	html := render.Markdown(rec.Body, render.Options{
+	return render.Markdown(rec.Body, render.Options{
 		Theme:       s.renderTheme,
 		CSS:         s.renderCSS,
 		Title:       spec.NamedSlug,
@@ -243,10 +252,4 @@ func (s *Server) rerenderSlug(r *http.Request, slug string) (rerenderResult, err
 		ContentBase: s.contentBase(r),
 		IndexURL:    s.requestBase(r) + "/gallery",
 	})
-
-	art, err := s.store.ReplaceBody(slug, bytes.NewReader(html))
-	if err != nil {
-		return rerenderResult{}, err
-	}
-	return rerenderResult{Slug: slug, Rerendered: true, Size: art.Size}, nil
 }

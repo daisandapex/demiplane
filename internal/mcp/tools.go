@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // contentBlock is one MCP content item. Only the text type is used.
@@ -139,12 +141,9 @@ func callPublish(ctx context.Context, c *Client, raw json.RawMessage) (*toolResu
 	if hasContent {
 		body = []byte(*a.Content)
 	} else {
-		if rerr := guardPublishPath(c, a.Path); rerr != nil {
+		b, rerr := readPublishPath(c, a.Path)
+		if rerr != nil {
 			return nil, rerr
-		}
-		b, err := os.ReadFile(a.Path)
-		if err != nil {
-			return nil, &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf("read path: %v", err)}
 		}
 		body = b
 		if filename == "" {
@@ -180,43 +179,109 @@ func callPublish(ctx context.Context, c *Client, raw json.RawMessage) (*toolResu
 	return textResult(res.URL), nil
 }
 
-// guardPublishPath vets a model-supplied `path` before the publish tool reads it.
-// Tool arguments are attacker-influenceable (a prompt-injected model chooses this
-// value, unlike the human-chosen CLI path), so the file read here is a potential
-// arbitrary-file-read-and-publish primitive. Two defenses:
+// readPublishPath reads a model-supplied `path` for the publish tool. Tool
+// arguments are attacker-influenceable (a prompt-injected model chooses this
+// value, unlike the human-chosen CLI path), so this read is a potential
+// arbitrary-file-read-and-publish primitive. Every check below applies whether
+// the token came from a file or from the environment:
 //
-//   - Reject non-regular files (symlinks, devices, fifos, sockets) via Lstat, so
-//     `path` cannot follow a symlink to a secret or block on a device.
-//   - Refuse the configured token file. Publishing it would render the bearer
-//     token to a world-readable slug, defeating invariant 4. The comparison is on
-//     the fully symlink-resolved absolute path of both sides, so an alias to the
-//     token file is caught too.
+//   - A client with no publish root refuses `path` outright.
+//   - The given path must not itself be a symlink or special file (Lstat).
+//   - The symlink-resolved path must lie under the publish root, and the file is
+//     opened through the os.Root opened on that directory at startup, so neither
+//     a component swapped for a symlink after the check nor a replaced root
+//     directory can move the read outside it.
+//   - The file is opened non-blocking, so a FIFO swapped in after the checks
+//     cannot stall the request loop before the descriptor checks refuse it.
+//   - The opened file must be a regular file that does not live on the /proc,
+//     /sys or /dev filesystems (compared by device, so an alias path does not
+//     help), which keeps the process environment and kernel state out.
+//   - The opened file must not be the configured token file, compared by file
+//     identity (device and inode) against both the file recorded at startup and
+//     whatever the path names now, so a symlink or hardlink to it is refused
+//     even after the original path is renamed or replaced.
 //
-// `path` still reads any OTHER regular file the process can read; that mirrors the
-// CLI's file publish and is the operator's responsibility to scope (documented in
-// README/SECURITY). The token file is the one path we hard-refuse.
-func guardPublishPath(c *Client, p string) *rpcError {
+// All identity checks run on the opened descriptor, so the bytes read are the
+// bytes that were checked.
+func readPublishPath(c *Client, p string) ([]byte, *rpcError) {
+	refuse := func(format string, args ...any) *rpcError {
+		return &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf(format, args...)}
+	}
+	if c.publishRoot == nil {
+		return nil, refuse("publishing by `path` is disabled: no publish root is configured (use `content`, or start `demiplane mcp` with --publish-root)")
+	}
 	fi, err := os.Lstat(p)
 	if err != nil {
-		return &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf("read path: %v", err)}
+		return nil, refuse("read path: %v", err)
 	}
 	if !fi.Mode().IsRegular() {
-		return &rpcError{Code: codeInvalidParams, Message: "path must be a regular file (symlinks and special files are refused)"}
+		return nil, refuse("path must be a regular file (symlinks and special files are refused)")
 	}
-	if c.TokenFile == "" {
-		return nil
-	}
-	resolved, err := filepath.EvalSymlinks(p)
+	abs, err := filepath.Abs(p)
 	if err != nil {
-		return &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf("resolve path: %v", err)}
+		return nil, refuse("resolve path: %v", err)
 	}
-	if abs, err := filepath.Abs(resolved); err == nil {
-		resolved = abs
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return nil, refuse("resolve path: %v", err)
 	}
-	if resolved == c.TokenFile {
-		return &rpcError{Code: codeInvalidParams, Message: "refusing to publish the bearer token file"}
+	rel, err := filepath.Rel(c.publishRootPath, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return nil, refuse("path is outside the publish root")
 	}
-	return nil
+
+	// Opened non-blocking: the file at rel can be swapped for a FIFO after the
+	// checks above, and a blocking open would then wait for a writer forever.
+	// The descriptor checks below refuse anything but a regular file, and
+	// reads from a regular file never return EAGAIN, so the flag is harmless
+	// for the read itself. os.Root already opens the final component with
+	// O_NOFOLLOW and resolves any symlink inside the root.
+	f, err := c.publishRoot.OpenFile(rel, os.O_RDONLY|openNoBlock, 0)
+	if err != nil {
+		return nil, refuse("read path: %v", err)
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, refuse("read path: %v", err)
+	}
+	if !st.Mode().IsRegular() {
+		return nil, refuse("path must be a regular file (symlinks and special files are refused)")
+	}
+	if onPseudoFS(st) {
+		return nil, refuse("refusing to publish a file from /proc, /sys or /dev")
+	}
+	if c.isTokenFile(st) {
+		return nil, refuse("refusing to publish the bearer token file")
+	}
+	b, err := io.ReadAll(f)
+	if err != nil {
+		return nil, refuse("read path: %v", err)
+	}
+	return b, nil
+}
+
+// isTokenFile reports whether fi is the token file recorded at startup or the
+// file its path names now.
+func (c *Client) isTokenFile(fi os.FileInfo) bool {
+	if c.tokenID != nil && os.SameFile(fi, c.tokenID) {
+		return true
+	}
+	if c.tokenFile != "" {
+		if cur, err := os.Stat(c.tokenFile); err == nil && os.SameFile(fi, cur) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveDir returns dir as an absolute, symlink-free path.
+func resolveDir(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(abs)
 }
 
 func callList(ctx context.Context, c *Client) (*toolResult, *rpcError) {

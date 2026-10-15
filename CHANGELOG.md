@@ -6,8 +6,47 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- **MCP `publish` paths are confined to a publish root.** The tool's `path`
+  argument must resolve inside `--publish-root` / `DEMIPLANE_PUBLISH_ROOT`
+  (default: the working directory of `demiplane mcp`) and is opened through that
+  root. Files on `/proc`, `/sys` and `/dev`, and the token file matched by file
+  identity, are refused whether the token came from a file or from
+  `DEMIPLANE_TOKEN`. A working directory of `/` disables `path` publishing unless
+  `/` is set explicitly.
+- **The store is owner-only.** The store root, `blobs/`, `sources/`, `sites/`
+  and `meta.db` with its `-wal` and `-shm` files are created or tightened to
+  `0700`/`0600` at startup, and each change is logged.
+- **A republish never serves new bytes under the previous metadata.** Each
+  write goes to a new file and the metadata row names the file it describes, so
+  adding a password, making a page private or changing its expiry takes effect
+  together with the new bytes.
+
+### Changed
+
+- **Upgrade note: `demiplane mcp` refuses `path` outside its publish root.** An
+  MCP client that publishes files from outside the directory it starts
+  `demiplane mcp` in (a scratch or temp directory, another repository) now gets
+  an error. Pass `--publish-root <dir>` (or set `DEMIPLANE_PUBLISH_ROOT`) in the
+  MCP server config, or send the page as `content` instead of `path`. Pick the
+  narrowest directory that holds what you publish: every readable regular file
+  under the root can be published.
+
 ### Fixed
 
+- **Concurrent writes to one slug no longer corrupt it.** A publish racing a
+  delete, the expiry sweeper or a rebake could leave a row with no bytes (a
+  permanent 500) or a page rendered from an older source. Writers to a slug are
+  now serialized, and a rebake that loses to a publish starts over from the new
+  source.
+- **A rebake reaches browsers that cached the old page.** `GET /{slug}` now sends
+  an `ETag` that changes on every write, and a revalidating browser gets the new
+  rendering instead of `304`. The `ETag` alone decides conditional requests:
+  `If-Modified-Since` never earns a `304` and an `If-Range` date sends the whole
+  body, because a date cannot tell apart two writes in one second or a deleted
+  page from its recreation. `Last-Modified` is the wall-clock write time and is
+  never later than the response.
 - **Rendered pages share one left edge.** The document column measure was
   `70ch` per child, and `ch` follows each element's own font-size, so headings,
   the lead and blockquotes got wider centred boxes than the body and hung left

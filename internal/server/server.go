@@ -611,16 +611,41 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Disposition",
 			fmt.Sprintf("attachment; filename=%q", sanitizeFilename(art.Filename)))
 	}
-	// Artifacts are mutable (re-publishing a slug overwrites in place), so a
-	// browser must revalidate rather than serve a heuristically-cached stale
-	// copy — otherwise ?live reloads, and any re-view of an updated artifact,
-	// show old bytes. no-cache pairs with the Last-Modified below: a conditional
-	// GET returns 304 when unchanged and fresh bytes when re-published.
+	// Artifacts are mutable (re-publishing a slug overwrites in place, and a
+	// rebake replaces the bytes without a publish), so a browser must
+	// revalidate rather than serve a heuristically-cached stale copy —
+	// otherwise ?live reloads, and any re-view of an updated artifact, show old
+	// bytes. no-cache pairs with the validators below: a conditional GET returns
+	// 304 when unchanged and fresh bytes after a re-publish or a rebake.
 	w.Header().Set("Cache-Control", "no-cache")
+	// The version changes on every write of the bytes, including two writes in
+	// the same second, and differs between a deleted artifact and its
+	// recreation. A date cannot tell those apart, so whenever there is an ETag
+	// it alone decides: If-Modified-Since never earns a 304 (ServeContent
+	// already ignores it beside If-None-Match), and an If-Range carrying a date
+	// sends the whole body rather than a range of possibly different bytes.
+	lastModified := art.LastModified()
+	if now := time.Now(); lastModified.After(now) {
+		// Rows written while modified times could run ahead of the clock.
+		lastModified = now
+	}
+	if art.Version != "" {
+		w.Header().Set("ETag", `"`+art.Version+`"`)
+		r.Header.Del("If-Modified-Since")
+		if ir := r.Header.Get("If-Range"); ir != "" && !isEntityTag(ir) {
+			r.Header.Del("Range")
+		}
+	}
 	// ServeContent handles Range requests, conditional GETs, and keeps the
-	// content-type we set above. CreatedAt is the publish time we recorded,
-	// which advances on every re-publish and drives the Last-Modified header.
-	http.ServeContent(w, r, art.Filename, art.CreatedAt, f)
+	// content-type we set above.
+	http.ServeContent(w, r, art.Filename, lastModified, f)
+}
+
+// isEntityTag reports whether an If-Range value is an entity tag rather than
+// an HTTP date.
+func isEntityTag(v string) bool {
+	v = strings.TrimSpace(v)
+	return strings.HasPrefix(v, `"`) || strings.HasPrefix(v, "W/")
 }
 
 // openUpload returns a reader over the uploaded bytes plus a filename hint. It
