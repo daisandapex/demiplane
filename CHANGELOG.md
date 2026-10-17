@@ -149,6 +149,13 @@ All notable changes to demiplane are documented here. The format follows
   replaced or deleted file that a download still holds open keeps its quota
   charge until the download ends.
 - **TTL values are at most 64 bytes,** refused before they are parsed.
+- **Temporary files stay charged until they are removed.** An upload's
+  temporary file, or a scratch file used for a site archive or a render, that
+  cannot be removed keeps its storage quota charge, and the failure is
+  logged; such leftovers, and any left by a crash, are counted until the
+  hourly reconcile removes them.
+- **IPv6 clients with an interface zone are grouped by /64** for per-client
+  limits, like other IPv6 clients.
 - **Render uploads are spooled to disk.** A `?render=md` body is received
   into a scratch file charged to the store quota and rendered only once
   complete, under a render slot held through the store write, so

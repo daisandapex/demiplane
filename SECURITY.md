@@ -292,10 +292,11 @@ inherits the posture above and was reviewed adversarially before release.
   more than 4,096 entries or a central directory over 2 MiB is refused, the
   central-directory read is limited even when the end record understates it,
   and archive/tar reads a tar through a limit that allows at most 64 KiB of
-  reads to reach each entry (its PAX, global PAX and GNU long-name or
-  long-link headers with their data, any sparse map, and its own header;
-  unread entry data is skipped, not read), so every header it acts on is
-  bounded, whatever sizes the archive declares. Two archives are parsed at a time;
+  reads to reach each entry, counted from its first header block (its PAX,
+  global PAX and GNU long-name or long-link headers with their data and
+  padding, any sparse map, and its own header; the previous entry's padding
+  is not counted, and unread entry data is skipped, not read), so every
+  header it acts on is bounded, whatever sizes the archive declares. Two archives are parsed at a time;
   another waits up to five seconds and is then refused with `503`.
   Served assets keep the flat-artifact posture (global `nosniff`, the
   per-document sandbox, `script-src 'none'` on SVG/XML). Sites have no privacy,
@@ -503,8 +504,11 @@ Notes on the limits:
 - **Storage quota.** Not counted: the metadata database's actual size (each
   artifact instead counts a fixed 4 KiB allowance, and its per-row fields are
   bounded), the filesystem cost of a site entry beyond its 4 KiB allowance,
-  module data (replies, TLS material), filesystem block overhead and files
-  left behind by a crash.
+  module data (replies, TLS material) and filesystem block overhead.
+  Temporary files that a failed cleanup or a crash left in the store are
+  counted until the hourly reconcile removes them, an hour after they were
+  last written; a temporary file `demiplane receive` is still writing counts
+  toward the server's usage too.
   An overwrite or rebake needs room for the new copy while the old one still
   exists; a site publish needs room for its archive plus the extracted files.
   A replaced or deleted file that a download still holds open stays charged
