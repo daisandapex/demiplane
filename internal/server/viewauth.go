@@ -155,11 +155,12 @@ func (g *viewGate) remember(k [32]byte, now time.Time) {
 	g.ok[k] = now.Add(verifiedTTL)
 }
 
-// check verifies the request's Basic password against art. The result says
-// whether to serve, ask for a password, or push back; wait is the Retry-After
-// hint for the push-back results.
-func (g *viewGate) check(ctx context.Context, r *http.Request, art store.Artifact) (res module.ViewAccess, wait time.Duration) {
-	if !art.HasPassword() {
+// check verifies the request's Basic password against the stored hash. The
+// result says whether to serve, ask for a password, or push back; wait is the
+// Retry-After hint for the push-back results. The per-target bucket is keyed
+// by the hash, which every publish of an artifact replaces.
+func (g *viewGate) check(ctx context.Context, r *http.Request, hash string) (res module.ViewAccess, wait time.Duration) {
+	if hash == "" {
 		return module.ViewOK, 0
 	}
 	_, pass, ok := r.BasicAuth()
@@ -167,14 +168,14 @@ func (g *viewGate) check(ctx context.Context, r *http.Request, art store.Artifac
 		return module.ViewNeedPassword, 0
 	}
 	now := time.Now()
-	ck := g.credKey(art.PasswordHash, pass)
+	ck := g.credKey(hash, pass)
 	if g.remembered(ck, now) {
 		return module.ViewOK, 0
 	}
 	charges := []limit.Charge{
 		{L: g.global, Key: ""},
 		{L: g.client, Key: limit.ClientKey(r)},
-		{L: g.target, Key: art.Slug},
+		{L: g.target, Key: hash},
 	}
 	if allowed, w := limit.AllowAll(charges...); !allowed {
 		return module.ViewThrottled, w
@@ -183,7 +184,7 @@ func (g *viewGate) check(ctx context.Context, r *http.Request, art store.Artifac
 		limit.RefundAll(charges...)
 		return module.ViewBusy, time.Second
 	}
-	match := verifyPassword(art.PasswordHash, pass)
+	match := verifyPassword(hash, pass)
 	g.kdf.Release()
 	if !match {
 		return module.ViewNeedPassword, 0
@@ -197,7 +198,29 @@ func (g *viewGate) check(ctx context.Context, r *http.Request, art store.Artifac
 // runs, so a module serving or accepting writes for an artifact enforces its
 // view password with the same limits.
 func (s *Server) CheckView(r *http.Request, art store.Artifact) (module.ViewAccess, time.Duration) {
-	return s.views.check(r.Context(), r, art)
+	return s.views.check(r.Context(), r, art.PasswordHash)
+}
+
+// serverCtxKey carries the *Server handling a request (set by
+// withRequestLimits), so passwordOK can reach its limits from any handler.
+type serverCtxKey struct{}
+
+// fallbackViews gates password checks on a request that did not come through
+// a Server's handler (none in production; a guard against a new route that
+// skips the middleware getting no limits at all).
+var fallbackViews = newViewGate(PasswordLimits{}, viewKey())
+
+// passwordOK reports whether r carries HTTP Basic credentials whose password
+// matches hash (the username is ignored), through the same rate and
+// concurrency limits as CheckView. Every view-password check goes through
+// here or CheckView; a refusal for load (429/503 in CheckView) reads false.
+func passwordOK(r *http.Request, hash string) bool {
+	g := fallbackViews
+	if s, ok := r.Context().Value(serverCtxKey{}).(*Server); ok && s.views != nil {
+		g = s.views
+	}
+	res, _ := g.check(r.Context(), r, hash)
+	return res == module.ViewOK
 }
 
 // writeViewDenied writes the response for a refused view check. It returns

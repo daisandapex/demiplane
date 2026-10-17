@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -112,6 +113,7 @@ func (s *Server) withRequestLimits(next http.Handler) http.Handler {
 	inflight := limit.NewGate(l.MaxRequests)
 	perClient := newClientGates(l.MaxRequestsPerClient)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(context.WithValue(r.Context(), serverCtxKey{}, s))
 		rc := http.NewResponseController(w)
 		now := time.Now()
 		sse := isSSE(r)

@@ -268,3 +268,42 @@ func TestKDFWaitHonorsCancellation(t *testing.T) {
 		t.Fatalf("waited %v despite a cancelled request", el)
 	}
 }
+
+// TestPasswordOKSharesTheServersLimits: the plain passwordOK helper (used by
+// routes other than GET /{slug}) draws on the same buckets as CheckView.
+func TestPasswordOKSharesTheServersLimits(t *testing.T) {
+	calls, _ := countKDF(t, 0)
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	art, err := st.Put(store.PutOptions{Slug: "locked", Password: "letmein"}, strings.NewReader("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(st, Config{Password: PasswordLimits{
+		PerTarget: limit.Rate{Every: time.Hour, Burst: 3},
+		PerClient: limit.Rate{Every: -1},
+		Global:    limit.Rate{Every: -1},
+	}})
+	var ok int
+	h := s.withRequestLimits(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if passwordOK(r, art.PasswordHash) {
+			ok++
+		}
+	}))
+	for i := 0; i < 10; i++ {
+		serve(h, basicReq("locked", "wrong", "192.0.2.1:1"))
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("passwordOK ran the KDF %d times for 10 wrong attempts, want 3 (the target burst)", got)
+	}
+	// The same budget is spent for GET /{slug}.
+	if w := serve(s.Handler(), basicReq("locked", "wrong", "192.0.2.1:1")); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("GET after passwordOK spent the budget = %d, want 429", w.Code)
+	}
+	if ok != 0 {
+		t.Fatal("a wrong password passed")
+	}
+}
