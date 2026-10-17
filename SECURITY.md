@@ -437,10 +437,16 @@ Notes on the limits:
   apart: every sandboxed page posts with `Origin: null`, a page can omit its
   Referer, and the browser may attach the viewer's cached password for the
   target. What binds a browser submission to its target is the submission
-  token every reply form carries: an HMAC of the slug and the issue time under
-  a key in the store's metadata database, required on every browser
-  submission (one carrying `Origin` or `Sec-Fetch-Site`) and refused if it
-  names another slug or predates the artifact's current publish. A sandboxed
+  token every reply form carries: an HMAC of the slug and the artifact's
+  publish identifier under a key in the store's metadata database, required
+  on every browser submission (one carrying `Origin` or `Sec-Fetch-Site`) and
+  refused unless it names exactly that slug and its current publish. Every
+  publish, including one that only changes the password or privacy, gets a
+  new random identifier (a rebake keeps it), and a reply is recorded only if
+  the slug still names the publish it was checked against, so a republish
+  that lands while a submission is in flight refuses it (`409`). A republish
+  landing between that last check and the insert into the reply database is
+  not caught. A sandboxed
   page cannot read another artifact's page to learn its token. Admission also
   needs the per-artifact opt-in, the view password and the reply limits. Not
   covered: with `--unsafe-no-sandbox` a page can read others' tokens, and

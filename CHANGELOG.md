@@ -72,7 +72,9 @@ All notable changes to demiplane are documented here. The format follows
   with a key kept in the store, and a browser submission to `/answer/{slug}` or
   `/reply/{slug}` needs a valid token for exactly that slug, so another page on
   the instance cannot submit a reply as a viewer who holds the target's
-  password. Clients that are not browsers need none. Reply retention runs in an
+  password. Clients that are not browsers need none. Tokens are bound to a
+  random identifier each publish gets, so any republish invalidates earlier
+  ones, and a submission racing a republish is refused (`409`). Reply retention runs in an
   hourly background sweep, never on the submit path. Reply hooks run on a
   bounded pool, in their own process group, with output capped while it
   streams.
