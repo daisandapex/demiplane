@@ -137,6 +137,7 @@ alternative of an origin per artifact, are in [DESIGN.md](DESIGN.md#content-isol
 - **Password realms.** Each artifact challenges with its own Basic realm (a
   short hash of the slug, not the slug), so a browser does not answer one
   artifact's challenge with credentials it cached for another.
+- **Live-reload streams** are authorized like the artifact (see below).
 
 **What remains:**
 
@@ -213,9 +214,17 @@ inherits the posture above and was reviewed adversarially before release.
   under a strict per-response CSP nonce (`default-src 'none'`, `script-src` the
   nonce only, no `unsafe-inline`/`eval`); the sole reflected value (the slug) is
   regex-constrained and HTML-escaped, and the artifact renders in a same-origin
-  iframe. The SSE endpoint caps subscribers **per-slug and globally** to bound
-  file-descriptor/memory use, sends periodic heartbeats, and drops consumers on a
-  write deadline / context cancel.
+  iframe. The SSE endpoint is authorized like the artifact it watches: the slug
+  must name an existing, unexpired artifact, and a password-protected one needs
+  its password over HTTP Basic (a refusal is a `401` with that artifact's realm,
+  and the `?live` wrapper takes the same password first, so the browser answers
+  from the credentials the viewer just entered). The grant is re-checked on every republish
+  and every heartbeat, so deleting or expiring the artifact, or changing its
+  password, ends the stream. Subscribers are capped **per slug, per client
+  address** (an IPv4 address or IPv6 /64; behind a proxy all clients share the
+  proxy's address) **and globally** to bound file-descriptor/memory use; the
+  stream sends periodic heartbeats and drops consumers on a write deadline /
+  context cancel.
 - **Multi-file archive ingest (`POST /publish?site=`).** Tar, zip, and multipart
   bundles are accepted behind the publish token. Every entry path is
   traversal-checked (`..`, absolute paths, and backslashes rejected; each segment

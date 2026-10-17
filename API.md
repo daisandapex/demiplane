@@ -233,7 +233,12 @@ cannot read other artifacts, use storage, or register a service worker (see
 - The reload stream itself is a Server-Sent Events endpoint at
   `GET /_events/{slug}` on the content origin. It emits `event: reload` on each
   re-publish and a heartbeat comment about every 25s. Note the literal-first
-  shape: it is `/_events/{slug}`, not `/{slug}/_events`.
+  shape: it is `/_events/{slug}`, not `/{slug}/_events`. The stream is
+  authorized like the artifact: an unknown or expired slug is `404`, a
+  password-protected artifact needs its password over HTTP Basic (`401`
+  without it; its `?live` wrapper needs it too), and the stream ends if the
+  artifact is deleted, expires or changes password. Too many streams for one
+  slug or one client is `503`.
 
 ### Get: worked examples
 
@@ -244,7 +249,7 @@ curl "$CONTENT/reports"
 # a password-gated artifact: password over HTTP Basic
 curl -u any:hunter2 "$CONTENT/q3"
 
-# subscribe to reload events (SSE)
+# subscribe to reload events (SSE); add -u any:<pw> for a password-gated one
 curl -N "$CONTENT/_events/reports"
 ```
 
@@ -658,8 +663,9 @@ token, like `GET /list`.
 | `204 No Content` | Delete or ack succeeded. |
 | `304 Not Modified` | Conditional `GET /{slug}` whose `If-None-Match` or `If-Modified-Since` still matches. |
 | `302 Found` | Forward-flow redirect once a `?next` slug exists. |
-| `400 Bad Request` | Invalid or reserved slug, `private` + named slug, password in the URL query, bad `ttl`, or a malformed reply/site. |
-| `401 Unauthorized` | Missing or invalid bearer token (write/list/delete/reply admin), or a wrong view password (read). |
+| `400 Bad Request` | Invalid or reserved slug, `private` + named slug, password in the URL query, bad `ttl`, a site upload asking for `?private`/`?ttl`/a password, or a malformed reply/site. |
+| `401 Unauthorized` | Missing or invalid bearer token (write/list/delete/reply admin, `/gallery` without `--browse`), or a wrong view password (read, `?live`, live-reload stream). |
+| `403 Forbidden` | A service-worker script fetch (never permitted), or a cross-origin write to the control plane. |
 | `404 Not Found` | No such artifact or reply, or it expired. |
 | `405 Method Not Allowed` | Wrong method for a known path (for example `POST /list`). |
 | `413 Payload Too Large` | Upload exceeds `--max-upload`, or a reply/site exceeds its cap. |

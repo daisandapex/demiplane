@@ -382,7 +382,7 @@ func TestLiveHubNotifyIsNonBlocking(t *testing.T) {
 	// Notify must never block on a full/absent consumer: a subscriber that never
 	// drains its channel still leaves Notify returning promptly.
 	h := newLiveHub()
-	ch, ok := h.subscribe("s")
+	ch, ok := h.subscribe("s", "c")
 	if !ok {
 		t.Fatal("subscribe failed")
 	}
@@ -400,7 +400,7 @@ func TestLiveHubNotifyIsNonBlocking(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Notify blocked on a non-draining subscriber")
 	}
-	h.unsubscribe("s", ch)
+	h.unsubscribe("s", "c", ch)
 }
 
 func TestLiveHubConcurrentSubscribeNotify(t *testing.T) {
@@ -412,18 +412,18 @@ func TestLiveHubConcurrentSubscribeNotify(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
-				ch, ok := h.subscribe("hot")
+				ch, ok := h.subscribe("hot", "c")
 				if !ok {
 					continue
 				}
 				h.Notify("hot")
-				h.unsubscribe("hot", ch)
+				h.unsubscribe("hot", "c", ch)
 			}
 		}()
 	}
 	wg.Wait()
-	if h.total != 0 {
-		t.Fatalf("hub leaked %d subscribers", h.total)
+	if h.total != 0 || len(h.perClient) != 0 {
+		t.Fatalf("hub leaked %d subscribers (%d client entries)", h.total, len(h.perClient))
 	}
 }
 

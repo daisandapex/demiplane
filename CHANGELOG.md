@@ -23,6 +23,9 @@ All notable changes to demiplane are documented here. The format follows
   the archive is read; previously the options were ignored.
 - **`/gallery` follows `--browse`.** Without `--browse` it needs the bearer
   token, like `/list`.
+- **Live-reload streams are authorized.** `GET /_events/{slug}` requires an
+  existing, unexpired artifact and its password, re-checks on every republish
+  and heartbeat, and caps streams per client.
 - **`demiplane receive` refuses route names.** Route names are reserved when a
   route registers, not when the HTTP handlers are built, so SSH ingest can no
   longer create an artifact a route shadows (`gallery`, `connect`, `answer`
