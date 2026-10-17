@@ -253,3 +253,23 @@ func TestProxiesMappedIPv4(t *testing.T) {
 		t.Error("a mapped prefix shorter than /96 was accepted")
 	}
 }
+
+// TestAddrKeyGroupsScopedIPv6: a link-local peer with an interface zone is
+// grouped by /64 like any other IPv6 peer, and the zone does not split it.
+func TestAddrKeyGroupsScopedIPv6(t *testing.T) {
+	a := AddrKey("[fe80::1%eth0]:5000")
+	b := AddrKey("[fe80::ffff:2%eth0]:6000")
+	c := AddrKey("[fe80::3%eth1]:6000")
+	if a != b || a != c {
+		t.Errorf("one link-local /64 got keys %q, %q, %q", a, b, c)
+	}
+	if AddrKey("[fe80:0:0:1::1%eth0]:1") == a {
+		t.Error("two link-local /64s share a key")
+	}
+	if got := AddrKey("192.0.2.1:1"); got != "192.0.2.1" {
+		t.Errorf("IPv4 key %q", got)
+	}
+	if AddrKey("[2001:db8:1:2::1]:1") != AddrKey("[2001:db8:1:2:ffff::9]:1") {
+		t.Error("two addresses in one global /64 got different keys")
+	}
+}

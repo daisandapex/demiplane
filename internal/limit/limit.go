@@ -419,14 +419,18 @@ func AddrKey(addr string) string {
 	if h, _, err := net.SplitHostPort(addr); err == nil {
 		host = h
 	}
-	ip := net.ParseIP(host)
-	if ip == nil {
+	// netip parses an IPv6 zone ("fe80::1%eth0"), which net.ParseIP refuses;
+	// the zone is dropped so a link-local client is grouped by /64 like any
+	// other, whatever interface it arrived on.
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
 		return host
 	}
-	if v4 := ip.To4(); v4 != nil {
-		return v4.String()
+	ip = ip.WithZone("").Unmap()
+	if ip.Is4() {
+		return ip.String()
 	}
-	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
+	return netip.PrefixFrom(ip, 64).Masked().String()
 }
 
 // RetryAfter formats a wait as a Retry-After header value (whole seconds,
