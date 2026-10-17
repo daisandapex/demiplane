@@ -102,6 +102,8 @@ type Store struct {
 	locks slugLocks
 	// quota is the optional aggregate storage accounting (quota.go).
 	quota quotaState
+	// open counts readers of open store files (readers.go).
+	open openFiles
 	// formKey signs reply-form submission tokens (secret.go).
 	formKey []byte
 }
@@ -821,7 +823,7 @@ const getAttempts = 3
 // The reader is always the bytes file the returned metadata names, so bytes
 // from one publish are never paired with another publish's password, privacy
 // or expiry.
-func (s *Store) Get(slug string) (Artifact, *os.File, error) {
+func (s *Store) Get(slug string) (Artifact, *File, error) {
 	for attempt := 1; ; attempt++ {
 		a, err := s.lookup(slug)
 		if err != nil {
@@ -834,7 +836,18 @@ func (s *Store) Get(slug string) (Artifact, *os.File, error) {
 			_, _ = s.reapIfExpired(slug, time.Now())
 			return Artifact{}, nil, ErrNotFound
 		}
-		f, err := os.Open(s.blobFile(slug, a.Version))
+		f, _, err := s.openTracked(func() (*os.File, os.FileInfo, error) {
+			f, err := os.Open(s.blobFile(slug, a.Version))
+			if err != nil {
+				return nil, nil, err
+			}
+			fi, err := f.Stat()
+			if err != nil {
+				f.Close()
+				return nil, nil, err
+			}
+			return f, fi, nil
+		})
 		if err == nil {
 			return a, f, nil
 		}

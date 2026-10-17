@@ -178,9 +178,9 @@ func (s *Store) reclaimStagingTrees(now time.Time) (int, error) {
 			continue
 		}
 		s.beginTransition()
-		bytes, entries, err := removeTreeCounted(filepath.Join(root, e.Name()))
-		s.endSiteTransition(0, bytes+entries*metaAllowance, 0, entries)
-		removed += int(entries)
+		r, err := s.removeTreeCounted(filepath.Join(root, e.Name()))
+		s.endChange(r.change())
+		removed += int(r.entries)
 		if err != nil {
 			log.Printf("store: could not remove an abandoned site staging tree, will retry: %s", logsafe.Err(err))
 		}

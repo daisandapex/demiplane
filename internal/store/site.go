@@ -348,14 +348,15 @@ func (w *SiteWriter) Abort() error {
 	w.done = true
 	s := w.store
 	s.beginTransition()
-	bytes, entries, err := removeTreeCounted(w.tmpDir)
-	released := bytes + entries*metaAllowance
+	// Nothing in a staging tree is served, so nothing removed is retired.
+	r, err := s.removeTreeCounted(w.tmpDir)
+	released := r.bytes + r.retired + r.entries*metaAllowance
 	s.release(released)
-	s.releaseSiteEntries(entries)
+	s.releaseSiteEntries(r.entries)
 	s.unregisterStaging(filepath.Base(w.tmpDir))
 	// The survivors' charge moves from in flight to live, where a recount
 	// now measures them.
-	s.endSiteTransition(max(w.charged-released, 0), 0, max(w.entries-entries, 0), 0)
+	s.endSiteTransition(max(w.charged-released, 0), 0, max(w.entries-r.entries, 0), 0)
 	w.charged, w.entries = 0, 0
 	return err
 }
@@ -405,7 +406,7 @@ func (s *Store) DeleteSite(site string) error {
 // check), and each component's Lstat is compared with the identity of what
 // was actually opened, so a swap between the check and the open is detected
 // rather than served.
-func (s *Store) OpenSiteFile(site, relpath string) (*os.File, string, time.Time, error) {
+func (s *Store) OpenSiteFile(site, relpath string) (*File, string, time.Time, error) {
 	if err := ValidateNamedSlug(site); err != nil {
 		return nil, "", time.Time{}, err
 	}
@@ -413,7 +414,9 @@ func (s *Store) OpenSiteFile(site, relpath string) (*os.File, string, time.Time,
 	if err != nil {
 		return nil, "", time.Time{}, err
 	}
-	f, fi, err := s.openSitePath(site, strings.Split(clean, "/"))
+	f, fi, err := s.openTracked(func() (*os.File, os.FileInfo, error) {
+		return s.openSitePath(site, strings.Split(clean, "/"))
+	})
 	if err != nil {
 		return nil, "", time.Time{}, err
 	}

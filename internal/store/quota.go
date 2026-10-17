@@ -60,6 +60,7 @@ type quotaState struct {
 	limit     int64
 	committed int64 // bytes of live files on disk
 	inflight  int64 // bytes charged to writes not yet committed
+	retired   int64 // bytes of removed files a reader still holds open (readers.go)
 	// active counts filesystem transitions in progress (a file becoming live
 	// or being removed, plus its accounting), and gen changes whenever one
 	// starts or ends. A recount applies its walk only if no transition
@@ -82,7 +83,7 @@ type quotaState struct {
 func (s *Store) SetQuota(limit int64) error {
 	if limit <= 0 {
 		s.quota.mu.Lock()
-		s.quota.limit, s.quota.committed, s.quota.inflight = 0, 0, 0
+		s.quota.limit, s.quota.committed, s.quota.inflight, s.quota.retired = 0, 0, 0, 0
 		s.quota.mu.Unlock()
 		return nil
 	}
@@ -102,7 +103,7 @@ func (s *Store) SetQuota(limit int64) error {
 func (s *Store) Usage() (used, limit int64) {
 	s.quota.mu.Lock()
 	defer s.quota.mu.Unlock()
-	return s.quota.committed + s.quota.inflight, s.quota.limit
+	return s.quota.committed + s.quota.inflight + s.quota.retired, s.quota.limit
 }
 
 // recountAttempts and recountBackoff bound how long a recount waits for a
@@ -170,13 +171,25 @@ func (s *Store) beginTransition() {
 // file was deleted). The floor at zero covers removing a file another process
 // wrote after the last measurement.
 func (s *Store) endTransition(settled, removed int64) {
-	s.endSiteTransition(settled, removed, 0, 0)
+	s.endChange(change{settled: settled, removed: removed})
 }
 
 // endSiteTransition is endTransition for a site tree, which also settles or
-// removes site entries (siteentry.go). Entries are kept with or without a
-// quota; bytes only with one.
+// removes site entries (siteentry.go).
 func (s *Store) endSiteTransition(settled, removed, settledEntries, removedEntries int64) {
+	s.endChange(change{settled: settled, removed: removed, settledEntries: settledEntries, removedEntries: removedEntries})
+}
+
+// change is the accounting a transition applies when it ends. Retired bytes
+// leave the live count for the retired one (readers.go). Entries are kept
+// with or without a quota; bytes only with one.
+type change struct {
+	settled, removed, retired      int64
+	settledEntries, removedEntries int64
+}
+
+func (s *Store) endChange(c change) {
+	settled, removed, settledEntries, removedEntries := c.settled, c.removed, c.settledEntries, c.removedEntries
 	q := &s.quota
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -199,6 +212,25 @@ func (s *Store) endSiteTransition(settled, removed, settledEntries, removedEntri
 	if removed > 0 {
 		q.committed = max(q.committed-removed, 0)
 	}
+	if c.retired > 0 {
+		q.committed = max(q.committed-c.retired, 0)
+		q.retired += c.retired
+	}
+}
+
+// releaseRetired releases the bytes of a removed file whose last reader
+// closed it.
+func (s *Store) releaseRetired(n int64) {
+	if n <= 0 {
+		return
+	}
+	q := &s.quota
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.limit <= 0 {
+		return
+	}
+	q.retired = max(q.retired-n, 0)
 }
 
 // commitRename renames a fully written temp file or directory into place and
@@ -309,7 +341,7 @@ func (s *Store) charge(n int64) error {
 	if q.limit <= 0 {
 		return nil
 	}
-	if q.committed+q.inflight+n > q.limit {
+	if q.committed+q.inflight+q.retired+n > q.limit {
 		return ErrQuota
 	}
 	q.inflight += n
@@ -341,25 +373,13 @@ func (s *Store) removeLive(path string) error {
 // file (false when it was already gone).
 func (s *Store) removeLiveFile(path string) (bool, error) {
 	s.beginTransition()
-	var removed int64
-	defer func() { s.endTransition(0, removed) }()
-	fi, err := os.Lstat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
+	size, removed, retired, err := s.unlinkFile(path)
+	c := change{removed: size}
+	if retired {
+		c = change{retired: size}
 	}
-	if err := os.Remove(path); err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
-	}
-	if fi.Mode().IsRegular() {
-		removed = fi.Size()
-	}
-	return true, nil
+	s.endChange(c)
+	return removed, err
 }
 
 // removeLiveTree removes a live site tree and releases exactly what it
@@ -367,25 +387,31 @@ func (s *Store) removeLiveFile(path string) (bool, error) {
 // Whatever survives, measured or not, stays charged.
 func (s *Store) removeLiveTree(dir string) error {
 	s.beginTransition()
-	bytes, entries, err := removeTreeCounted(dir)
-	s.endSiteTransition(0, bytes+entries*metaAllowance, 0, entries)
+	r, err := s.removeTreeCounted(dir)
+	s.endChange(r.change())
 	return err
 }
 
+// treeRemoval is what removeTreeCounted removed: the bytes freed, the bytes
+// of removed files a reader still holds (retired), and the entries.
+type treeRemoval struct{ bytes, retired, entries int64 }
+
+// change is the accounting for a removal of live entries: their allowances
+// and freed bytes leave the live count, held bytes move to the retired one.
+func (r treeRemoval) change() change {
+	return change{removed: r.bytes + r.entries*metaAllowance, retired: r.retired, removedEntries: r.entries}
+}
+
 // removeTreeCounted removes dir and everything under it, deepest first, one
-// entry at a time, and returns the bytes of the regular files and the number
-// of entries (dir included) this call removed. A directory it cannot read is
-// left with its unseen contents, and the error is returned; an entry already
-// gone counts for nothing (whoever removed it accounts for it). A missing dir
-// is not an error.
-func removeTreeCounted(dir string) (bytes, entries int64, err error) {
-	type entry struct {
-		path string
-		size int64
-	}
+// entry at a time, and returns what this call removed (treeRemoval). A
+// directory it cannot read is left with its unseen contents, and the error is
+// returned; an entry already gone counts for nothing (whoever removed it
+// accounts for it). A missing dir is not an error.
+func (s *Store) removeTreeCounted(dir string) (treeRemoval, error) {
 	var (
-		list []entry
+		list []string
 		errs []error
+		r    treeRemoval
 	)
 	werr := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -398,29 +424,28 @@ func removeTreeCounted(dir string) (bytes, entries int64, err error) {
 			}
 			return nil
 		}
-		var size int64
-		if d.Type().IsRegular() {
-			if fi, err := d.Info(); err == nil {
-				size = fi.Size()
-			}
-		}
-		list = append(list, entry{p, size})
+		list = append(list, p)
 		return nil
 	})
 	if werr != nil {
 		errs = append(errs, werr)
 	}
 	for i := len(list) - 1; i >= 0; i-- {
-		if err := os.Remove(list[i].path); err != nil {
-			if !os.IsNotExist(err) {
-				errs = append(errs, err)
-			}
+		size, removed, retired, err := s.unlinkFile(list[i])
+		if err != nil {
+			errs = append(errs, err)
+		}
+		if !removed {
 			continue
 		}
-		bytes += list[i].size
-		entries++
+		if retired {
+			r.retired += size
+		} else {
+			r.bytes += size
+		}
+		r.entries++
 	}
-	return bytes, entries, errors.Join(errs...)
+	return r, errors.Join(errs...)
 }
 
 // chargedWriter charges each write against the quota before passing it on. It

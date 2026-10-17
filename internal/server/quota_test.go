@@ -6,6 +6,7 @@ package server
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/daisandapex/demiplane/internal/store"
 )
@@ -371,5 +373,52 @@ func TestSitePublishEntryLimit507(t *testing.T) {
 	}
 	if n := siteEntryCount(t, st); n != 9 {
 		t.Fatalf("%d site entries on disk, want 9", n)
+	}
+}
+
+// TestStalledDownloadKeepsReplacedBytesCharged: while a slow reader holds an
+// old generation open its bytes stay on disk, so they stay charged, and
+// repeated replacement cannot take the store past its quota.
+func TestStalledDownloadKeepsReplacedBytesCharged(t *testing.T) {
+	const size = 32 << 20
+	limit := int64(size*5/2) + store.MetaAllowance
+	ts, st := newQuotaServer(t, limit, Config{})
+	body := strings.Repeat("z", size)
+	if code, b := do(t, http.MethodPost, ts.URL+"/publish?slug=big", "", body); code != http.StatusCreated {
+		t.Fatalf("publish = %d %q", code, b)
+	}
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	resp, err := client.Get(ts.URL + "/big")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	if _, err := io.ReadFull(resp.Body, make([]byte, 1024)); err != nil {
+		t.Fatal(err)
+	}
+	// The handler is still sending the first generation.
+	if code, b := do(t, http.MethodPost, ts.URL+"/publish?slug=big", "", body); code != http.StatusCreated {
+		t.Fatalf("first replace = %d %q", code, b)
+	}
+	used, _ := st.Usage()
+	t.Logf("usage with the first generation still being served: %d (quota %d)", used, limit)
+	code, b := do(t, http.MethodPost, ts.URL+"/publish?slug=big", "", body)
+	if code != http.StatusInsufficientStorage {
+		t.Fatalf("replace with an open old generation = %d %q, want 507", code, b)
+	}
+	resp.Body.Close()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		used, _ := st.Usage()
+		if used == size+store.MetaAllowance {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("usage after the reader went away = %d, want %d", used, size+store.MetaAllowance)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if code, b := do(t, http.MethodPost, ts.URL+"/publish?slug=big", "", body); code != http.StatusCreated {
+		t.Fatalf("replace after the reader went away = %d %q", code, b)
 	}
 }
