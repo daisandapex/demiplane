@@ -265,8 +265,10 @@ inherits the posture above and was reviewed adversarially before release.
   per client (16), per artifact (16) and in all (256), with clients keyed by
   IPv4 address or IPv6 /64 (behind a `--trusted-proxy`, the forwarded client).
   When an artifact or the instance is full, a new client takes the place of
-  the oldest stream of the client holding the most, so one client cannot keep
-  others out. The stream sends periodic heartbeats and drops consumers on a
+  the oldest stream of a client holding at least two more streams than it
+  does; otherwise it gets `503`. An ended stream keeps its slot until its
+  connection closes (at most the 10s write timeout). So no client holds more
+  than its share while others wait. The stream sends periodic heartbeats and drops consumers on a
   write deadline or context cancel.
 - **Multi-file archive ingest (`POST /publish?site=`).** Tar, zip, and multipart
   bundles are accepted behind the publish token. Every entry path is
@@ -383,7 +385,7 @@ only in `-tags reply` builds.
 | View password | one client's failed attempts on one artifact / on any artifact; past it `429` without hashing | 10 / 20 a minute (bursts 10, 10) | `--password-rate-client-target`, `--password-rate-client` |
 | View password | all clients' failed attempts on one artifact / in all; once spent, clients that failed recently get `429` without hashing | 10 / 120 a minute (bursts 10, 30) | `--password-rate-target`, `--password-rate-global` |
 | Live reload | streams per client on one artifact / per client in all; past it `503` | 2 / 16 | `--live-max-per-client-slug`, `--live-max-per-client` |
-| Live reload | streams per artifact / in all; when full, a new client replaces the oldest stream of the client holding the most | 16 / 256 | `--live-max-per-slug`, `--live-max-total` |
+| Live reload | streams per artifact / in all; when full, a new client replaces the oldest stream of a client holding at least two more streams, otherwise `503` | 16 / 256 | `--live-max-per-slug`, `--live-max-total` |
 | Request body | non-upload body must arrive within; uploads: grace and longest stall | 30s | `--body-timeout` |
 | Request body | upload average rate after the grace; slower gets `408` | 16 KiB/s | `--upload-min-rate` |
 | Response | write deadline per response; an upload's starts at its longest allowed body time plus this, and tightens to this once the body is read | 60s | `--response-timeout` |
@@ -409,7 +411,8 @@ Notes on the limits:
   HMAC of the stored hash and the password under a per-process key) until it
   goes unused for 10 minutes. A client that keeps failing is refused before
   hashing, but a viewer with no recent failures is always verified, so other
-  clients' guesses cannot lock it out. Guessing spread over many fresh
+  clients' guesses cannot lock it out. Only completed failures count; a
+  client's own attempt still being checked does not. Guessing spread over many fresh
   addresses is bounded by the KDF concurrency and work factor rather than by
   a rate; use a strong password. Behind a proxy, set `--trusted-proxy`, or
   every user shares the proxy's budget. Reply routes, the `?live` wrapper and

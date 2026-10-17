@@ -37,8 +37,8 @@ All notable changes to demiplane are documented here. The format follows
   republish and heartbeat. Its password checks, including the re-check after a
   republish, go through the view-password limits. Streams are shared fairly: a
   client holds at most two per artifact by default, and when an artifact or the
-  instance is full a new client takes the place of the oldest stream of the
-  client holding the most (`--live-max-*` flags).
+  instance is full a new client takes the place of the oldest stream of a
+  client holding at least two more (`--live-max-*` flags).
 - **`demiplane receive` refuses route names.** Route names are reserved when a
   route registers, not when the HTTP handlers are built, so SSH ingest can no
   longer create an artifact a route shadows (`gallery`, `connect`, `answer`
