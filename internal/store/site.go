@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -30,6 +31,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/daisandapex/demiplane/internal/logsafe"
 )
 
 // maxSiteFilenameSegments bounds path depth defensively; a legitimate site is
@@ -151,7 +154,14 @@ func (s *Store) NewSiteWriter(site string) (*SiteWriter, error) {
 	if err := w.chargeEntry(); err != nil {
 		return nil, err
 	}
-	tmpDir, err := os.MkdirTemp(root, ".tmp-"+site+"-")
+	// Created and registered in one transition, so a recount never counts it
+	// as abandoned while it is also charged in flight.
+	s.beginTransition()
+	tmpDir, err := os.MkdirTemp(root, tempPrefix+site+"-")
+	if err == nil {
+		s.registerStaging(filepath.Base(tmpDir))
+	}
+	s.endTransition(0, 0)
 	if err != nil {
 		w.releaseEntry()
 		return nil, fmt.Errorf("create site scratch dir: %w", err)
@@ -159,6 +169,10 @@ func (s *Store) NewSiteWriter(site string) (*SiteWriter, error) {
 	w.tmpDir = tmpDir
 	return w, nil
 }
+
+// siteLockKey is the per-slug lock key that serialises a site's commit and
+// delete; the prefix keeps it apart from artifact slugs.
+func siteLockKey(site string) string { return "\x00site/" + site }
 
 // AddFile streams one archive entry into the scratch tree at its (validated)
 // relative path, creating parent directories as needed. relpath is traversal-
@@ -180,56 +194,61 @@ func (w *SiteWriter) AddFile(relpath string, r io.Reader) error {
 	if err := w.mkdirs(clean); err != nil {
 		return err
 	}
-	// A path staged twice replaces the earlier file and keeps its entry.
+	// A path staged twice replaces the earlier file. Either way the temp file
+	// is a new entry, reserved before it is created; a replaced file's entry
+	// is returned once the rename has removed it.
 	var (
-		replaced int64
-		newEntry bool
+		replaced  int64
+		replacing bool
 	)
 	switch fi, err := os.Lstat(dest); {
 	case err == nil && fi.Mode().IsRegular():
-		replaced = fi.Size()
+		replaced, replacing = fi.Size(), true
 	case err == nil:
 		return inputErrorf("site entry %q is both a file and a directory", relpath)
 	case os.IsNotExist(err):
-		if err := w.chargeEntry(); err != nil {
-			return err
-		}
-		newEntry = true
 	default:
 		return fmt.Errorf("stat site file %q: %w", clean, err)
 	}
-	fail := func(err error) error {
-		if newEntry {
-			w.releaseEntry()
-		}
+	if err := w.chargeEntry(); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(dest), ".w-*")
 	if err != nil {
-		return fail(fmt.Errorf("create site temp file: %w", err))
+		w.releaseEntry()
+		return fmt.Errorf("create site temp file: %w", err)
 	}
 	tmpName := tmp.Name()
 	// Decompressed bytes are charged as they are written, so an archive that
 	// expands past the store quota stops here.
 	cw := &chargedWriter{s: w.store, w: tmp}
+	// fail removes the temp file and returns its charge, or, if it cannot be
+	// removed, keeps the charge with the tree for Abort to settle.
+	fail := func(err error) error {
+		if rerr := os.Remove(tmpName); rerr != nil && !os.IsNotExist(rerr) {
+			w.charged += cw.charged
+			return errors.Join(err, fmt.Errorf("remove site temp file: %w", rerr))
+		}
+		w.store.release(cw.charged)
+		w.releaseEntry()
+		return err
+	}
 	if _, err := io.Copy(cw, r); err != nil {
 		tmp.Close()
-		os.Remove(tmpName)
-		w.store.release(cw.charged)
 		return fail(fmt.Errorf("write site file %q: %w", clean, err))
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		w.store.release(cw.charged)
 		return fail(fmt.Errorf("close site file %q: %w", clean, err))
 	}
 	if err := os.Rename(tmpName, dest); err != nil {
-		os.Remove(tmpName)
-		w.store.release(cw.charged)
 		return fail(fmt.Errorf("commit site file %q: %w", clean, err))
 	}
-	w.store.release(replaced)
-	w.charged += cw.charged - replaced
+	w.charged += cw.charged
+	if replacing {
+		w.store.release(replaced)
+		w.charged -= replaced
+		w.releaseEntry()
+	}
 	w.count++
 	return nil
 }
@@ -276,14 +295,22 @@ func (w *SiteWriter) Commit() (int, error) {
 		w.Abort()
 		return 0, inputErrorf("site archive contained no publishable files")
 	}
+	s := w.store
+	unlock := s.locks.lock(siteLockKey(w.site))
+	defer unlock()
 	// Both renames and the accounting are one quota transition, so a
 	// concurrent usage recount never walks the tree halfway through the swap.
-	w.store.beginTransition()
+	// The replaced tree moves to a staging name, owned until it is removed;
+	// one that cannot be removed is left abandoned, still charged, for
+	// Reconcile.
+	s.beginTransition()
 	var backup string
 	if _, err := os.Stat(w.finalDir); err == nil {
-		backup = w.finalDir + ".old-" + filepath.Base(w.tmpDir)
+		backup = filepath.Join(filepath.Dir(w.finalDir), tempPrefix+"old-"+strings.TrimPrefix(filepath.Base(w.tmpDir), tempPrefix))
+		s.registerStaging(filepath.Base(backup))
 		if err := os.Rename(w.finalDir, backup); err != nil {
-			w.store.endTransition(0, 0)
+			s.unregisterStaging(filepath.Base(backup))
+			s.endTransition(0, 0)
 			w.Abort()
 			return 0, fmt.Errorf("stage site replace: %w", err)
 		}
@@ -292,32 +319,49 @@ func (w *SiteWriter) Commit() (int, error) {
 		if backup != "" {
 			// Restore the previous site; best-effort.
 			_ = os.Rename(backup, w.finalDir)
+			s.unregisterStaging(filepath.Base(backup))
 		}
-		w.store.endTransition(0, 0)
+		s.endTransition(0, 0)
 		w.Abort()
 		return 0, fmt.Errorf("commit site: %w", err)
 	}
 	w.done = true
-	w.store.endSiteTransition(w.charged, 0, w.entries, 0)
+	s.unregisterStaging(filepath.Base(w.tmpDir))
+	s.endSiteTransition(w.charged, 0, w.entries, 0)
 	if backup != "" {
-		_ = w.store.removeLiveTree(backup)
+		if err := s.removeLiveTree(backup); err != nil {
+			log.Printf("store: could not remove a replaced site tree, will retry: %s", logsafe.Err(err))
+		}
+		s.unregisterStaging(filepath.Base(backup))
 	}
 	return w.count, nil
 }
 
 // Abort discards the scratch directory. It is safe to call after Commit (no-op)
-// and safe to defer unconditionally.
+// and safe to defer unconditionally. It releases exactly what it removed;
+// whatever it cannot remove stays charged as an abandoned staging tree, which
+// Reconcile retries.
 func (w *SiteWriter) Abort() error {
 	if w.done {
 		return nil
 	}
 	w.done = true
-	err := os.RemoveAll(w.tmpDir)
-	w.store.release(w.charged)
-	w.store.releaseSiteEntries(w.entries)
+	s := w.store
+	s.beginTransition()
+	bytes, entries, err := removeTreeCounted(w.tmpDir)
+	released := bytes + entries*metaAllowance
+	s.release(released)
+	s.releaseSiteEntries(entries)
+	s.unregisterStaging(filepath.Base(w.tmpDir))
+	// The survivors' charge moves from in flight to live, where a recount
+	// now measures them.
+	s.endSiteTransition(max(w.charged-released, 0), 0, max(w.entries-entries, 0), 0)
 	w.charged, w.entries = 0, 0
 	return err
 }
+
+// beforeSiteRemove is a test hook run by DeleteSite before it removes the tree.
+var beforeSiteRemove func()
 
 // SiteExists reports whether the named site has been published.
 func (s *Store) SiteExists(site string) bool {
@@ -334,9 +378,14 @@ func (s *Store) DeleteSite(site string) error {
 	if err := ValidateNamedSlug(site); err != nil {
 		return err
 	}
+	unlock := s.locks.lock(siteLockKey(site))
+	defer unlock()
 	dir := filepath.Join(s.siteRoot(), site)
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return ErrNotFound
+	}
+	if beforeSiteRemove != nil {
+		beforeSiteRemove()
 	}
 	if err := s.removeLiveTree(dir); err != nil {
 		return fmt.Errorf("delete site: %w", err)

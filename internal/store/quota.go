@@ -70,6 +70,10 @@ type quotaState struct {
 	// or without a byte quota: they are capped by entryLimit.
 	entries, entriesInflight int64
 	entryLimit               int64
+	// staging holds the names of the site staging trees under sites/ that a
+	// writer in this process owns (siteentry.go). They are charged in flight;
+	// any other ".tmp-" tree there is abandoned, counted as live and reclaimed.
+	staging map[string]struct{}
 }
 
 // SetQuota sets the aggregate storage quota in bytes and measures the bytes
@@ -228,7 +232,7 @@ func (s *Store) measureUsage() (used, siteEntries int64, err error) {
 		}
 		total += n
 	}
-	n, entries, err := treeStats(s.siteRoot())
+	n, entries, err := s.siteStats()
 	if err != nil {
 		return 0, 0, fmt.Errorf("measure store usage: %w", err)
 	}
@@ -358,29 +362,65 @@ func (s *Store) removeLiveFile(path string) (bool, error) {
 	return true, nil
 }
 
-// removeLiveTree removes a live site tree and releases the size of the files
-// it held and its entries, dir itself included, with their allowances. On a
-// partial failure only what is gone is released.
+// removeLiveTree removes a live site tree and releases exactly what it
+// removed: each file's size and each entry's allowance, dir itself included.
+// Whatever survives, measured or not, stays charged.
 func (s *Store) removeLiveTree(dir string) error {
 	s.beginTransition()
-	var removed, removedEntries int64
-	defer func() { s.endSiteTransition(0, removed, 0, removedEntries) }()
-	before, beforeEntries, err := treeStats(dir)
-	if err != nil {
-		return err
+	bytes, entries, err := removeTreeCounted(dir)
+	s.endSiteTransition(0, bytes+entries*metaAllowance, 0, entries)
+	return err
+}
+
+// removeTreeCounted removes dir and everything under it, deepest first, one
+// entry at a time, and returns the bytes of the regular files and the number
+// of entries (dir included) this call removed. A directory it cannot read is
+// left with its unseen contents, and the error is returned; an entry already
+// gone counts for nothing (whoever removed it accounts for it). A missing dir
+// is not an error.
+func removeTreeCounted(dir string) (bytes, entries int64, err error) {
+	type entry struct {
+		path string
+		size int64
 	}
-	beforeEntries++ // dir itself
-	rerr := os.RemoveAll(dir)
-	var after, afterEntries int64
-	if rerr != nil {
-		if _, err := os.Lstat(dir); err == nil {
-			after, afterEntries, _ = treeStats(dir)
-			afterEntries++
+	var (
+		list []entry
+		errs []error
+	)
+	werr := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			errs = append(errs, err)
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir // listed already; its contents stay
+			}
+			return nil
 		}
+		var size int64
+		if d.Type().IsRegular() {
+			if fi, err := d.Info(); err == nil {
+				size = fi.Size()
+			}
+		}
+		list = append(list, entry{p, size})
+		return nil
+	})
+	if werr != nil {
+		errs = append(errs, werr)
 	}
-	removedEntries = beforeEntries - afterEntries
-	removed = before - after + removedEntries*metaAllowance
-	return rerr
+	for i := len(list) - 1; i >= 0; i-- {
+		if err := os.Remove(list[i].path); err != nil {
+			if !os.IsNotExist(err) {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		bytes += list[i].size
+		entries++
+	}
+	return bytes, entries, errors.Join(errs...)
 }
 
 // chargedWriter charges each write against the quota before passing it on. It

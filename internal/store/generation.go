@@ -328,6 +328,11 @@ func (s *Store) Reconcile(now time.Time) (int, error) {
 	if err != nil {
 		return removed, err
 	}
+	trees, err := s.reclaimStagingTrees(now)
+	removed += trees
+	if err != nil {
+		return removed, err
+	}
 	cutoff := now.Add(-orphanGrace)
 	for _, dir := range []struct {
 		path   string

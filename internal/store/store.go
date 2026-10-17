@@ -161,6 +161,12 @@ func Open(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// Staging trees a crash left behind; younger ones are counted below and
+	// reclaimed by a later Reconcile.
+	if _, err := s.reclaimStagingTrees(time.Now()); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := s.measureSiteEntries(); err != nil {
 		db.Close()
 		return nil, err
