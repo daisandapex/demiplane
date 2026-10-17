@@ -200,6 +200,12 @@ inherits the posture above and was reviewed adversarially before release.
   through a character allowlist first, so a crafted Host header cannot inject
   content into those surfaces. Setting `--base-url` removes the reflection
   entirely.
+- **Deletion is durable.** Delete, expiry and overwrite record the files they
+  stop referencing in the same transaction that drops the reference. A file
+  that cannot be unlinked (a read-only or failing disk) is logged and retried
+  on every sweep instead of being orphaned, and an hourly reconcile removes
+  any generation file no row names once it is an hour old, so a deleted or
+  expired page's bytes and retained source are always reclaimed.
 - **Store permissions.** The store root, `blobs/`, `sources/`, `sites/` and the
   metadata database (`meta.db` and its `-wal`/`-shm` files) are owner-only
   (directories `0700`, files `0600`). The database holds capability slugs and

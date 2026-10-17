@@ -431,9 +431,14 @@ func plural(n int) string {
 	return "s"
 }
 
+// reconcileInterval is how often the sweeper also scans the store for
+// orphaned files (store.Reconcile). Pending deletions are retried on every
+// sweep; the directory scan is the slower, rarer backstop.
+const reconcileInterval = time.Hour
+
 // runSweeper periodically reaps past-TTL artifacts until ctx is cancelled. It
-// runs an immediate sweep on start so a restart promptly clears anything that
-// expired while the process was down.
+// runs an immediate sweep and reconcile on start so a restart promptly clears
+// anything that expired, or failed to unlink, while the process was down.
 func runSweeper(ctx context.Context, st *store.Store, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Minute
@@ -448,15 +453,31 @@ func runSweeper(ctx context.Context, st *store.Store, interval time.Duration) {
 			log.Printf("ttl sweep: reaped %d expired artifact(s)", n)
 		}
 	}
+	reconcile := func() {
+		n, err := st.Reconcile(time.Now())
+		if err != nil {
+			log.Printf("store reconcile error: %s", logsafe.Err(err))
+			return
+		}
+		if n > 0 {
+			log.Printf("store reconcile: removed %d orphaned file(s)", n)
+		}
+	}
 	sweep()
+	reconcile()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	lastReconcile := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			sweep()
+			if time.Since(lastReconcile) >= reconcileInterval {
+				reconcile()
+				lastReconcile = time.Now()
+			}
 		}
 	}
 }

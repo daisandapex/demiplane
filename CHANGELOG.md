@@ -8,6 +8,10 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **Deleted and expired files are always reclaimed.** The files a delete,
+  expiry or overwrite stops referencing are recorded in the same transaction;
+  a failed unlink is retried on every sweep, and an hourly reconcile removes
+  unreferenced generation files.
 - **The reply webhook follows no redirects.** A `3xx` from the configured
   endpoint is logged as a failed delivery instead of resending the reply to
   the `Location`.
