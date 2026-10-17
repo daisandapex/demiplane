@@ -12,9 +12,13 @@ All notable changes to demiplane are documented here. The format follows
 - **Published pages are isolated from each other.** HTML, SVG and XML are
   served in a CSP sandbox without `allow-same-origin`, so each page runs in an
   opaque origin and cannot read other artifacts (with or without the viewer's
-  cached credentials) or register a service worker. Service-worker script
-  fetches are refused on both planes. Public module scripts, `crossorigin`
-  stylesheets and fonts stay loadable from sandboxed pages.
+  cached credentials) or register a service worker. Public module scripts,
+  `crossorigin` stylesheets and fonts stay loadable from sandboxed pages.
+- **Service workers registered before this release remove themselves.** A
+  service-worker script fetch on either plane, at any path, is answered with a
+  fixed script that replaces the registered worker, clears Cache Storage,
+  unregisters itself and reloads the pages it controlled. No URL serves any
+  other worker script.
 - **Private and password-protected responses are not cached or referred.**
   They, their `401` and every `?live` wrapper carry `Cache-Control: private,
   no-store` and `Referrer-Policy: no-referrer`, and protected artifacts carry
@@ -29,22 +33,32 @@ All notable changes to demiplane are documented here. The format follows
 - **`/gallery` follows `--browse`.** Without `--browse` it needs the bearer
   token, like `/list`.
 - **Live-reload streams are authorized.** `GET /_events/{slug}` requires an
-  existing, unexpired artifact and its password, re-checks on every republish
-  and heartbeat, and caps streams per client. Its password checks, including
-  the re-check after a republish, go through the view-password limits.
+  existing, unexpired artifact and its password, and re-checks on every
+  republish and heartbeat. Its password checks, including the re-check after a
+  republish, go through the view-password limits. Streams are shared fairly: a
+  client holds at most two per artifact by default, and when an artifact or the
+  instance is full a new client takes the place of the oldest stream of the
+  client holding the most (`--live-max-*` flags).
 - **`demiplane receive` refuses route names.** Route names are reserved when a
   route registers, not when the HTTP handlers are built, so SSH ingest can no
   longer create an artifact a route shadows (`gallery`, `connect`, `answer`
   and the rest).
-- **Resource limits on unauthenticated work.** View-password checks are
-  rate-limited per artifact, per client and globally, run at bounded
-  concurrency, and remember a verified password for 10 minutes. Request bodies
+- **Resource limits on unauthenticated work.** View-password checks run at
+  bounded concurrency, and only failed attempts spend their budgets: a
+  client's own budgets (per client, and per client and artifact) refuse its
+  further guesses with `429` before hashing, while the artifact and instance
+  budgets, once spent, refuse only clients that failed recently, so other
+  clients' wrong guesses cannot lock a viewer out. A verified password stays
+  remembered while it is in use (`--password-*` flags). Request bodies
   have deadlines (uploads a minimum rate), responses have write deadlines,
   and requests and connections in progress are capped per listener and per
   client. Markdown rendering bounds table width, table cells and output size,
   runs in linear time, stops when the client goes away, and runs at bounded
-  concurrency. An optional aggregate storage quota (`--store-quota`) counts
-  uploads in flight, archive scratch and extracted bytes. Limits, defaults and
+  concurrency; the page outline counts against the output budget as it is
+  built, and heading ids are capped at 64 bytes. An optional aggregate storage
+  quota (`--store-quota`) counts uploads in flight, archive scratch, extracted
+  bytes and a fixed 4 KiB per artifact for its metadata; a `filename` hint over
+  255 bytes is a `400`. Limits, defaults and
   flags: [SECURITY.md](SECURITY.md#resource-limits). Behind a reverse proxy
   listed in the new `--trusted-proxy`, per-client limits key on the client
   named in `X-Forwarded-For` instead of the proxy.
@@ -52,9 +66,16 @@ All notable changes to demiplane are documented here. The format follows
   enabled them, the artifact's view password when it has one, and room in
   per-client, per-artifact and global rate limits and in per-artifact and
   aggregate storage limits, checked atomically. The content listener refuses
-  cross-origin browser writes, judged against the content origin; a sandboxed
-  page's own reply form is admitted. Reply hooks run on a bounded pool, in their own
-  process group, with output capped while it streams.
+  cross-origin browser writes, judged against the content origin. Every reply
+  form demiplane serves (the baked `?reply=question` box, `GET /reply/{slug}`)
+  carries a submission token bound to its artifact and current publish, signed
+  with a key kept in the store, and a browser submission to `/answer/{slug}` or
+  `/reply/{slug}` needs a valid token for exactly that slug, so another page on
+  the instance cannot submit a reply as a viewer who holds the target's
+  password. Clients that are not browsers need none. Reply retention runs in an
+  hourly background sweep, never on the submit path. Reply hooks run on a
+  bounded pool, in their own process group, with output capped while it
+  streams.
 - **New `--allowed-hosts` accepted-host policy.** When set, requests for any
   other `Host` (beyond the `--base-url` and `--content-base-url` hosts) get
   `421` on both planes. With `--base-url` set and no `--content-base-url`,
@@ -133,8 +154,30 @@ All notable changes to demiplane are documented here. The format follows
   for any other page you collect replies on, republish it with `?reply=form`.
   A republish without `?reply` turns replies off. Replying to a
   password-protected page now needs its password.
-- **Upgrade note: replies older than 90 days are deleted** by default. Set
-  `reply_retention = 0` to keep them, or another duration such as `365d`.
+- **Reply retention is off by default.** Existing replies are kept. Set
+  `reply_retention` (for example `90d`) to have an hourly background sweep
+  delete older replies.
+- **Upgrade note: rebake reply pages.** Pages published with `?reply=question`
+  before this release have no submission token, and browser answers to them
+  are refused with a message saying the page must be rebuilt. Run
+  `POST /rerender` after upgrading, or republish any page without retained
+  source. A tool that posts replies from a browser must send the form's
+  `token` field (JSON: `"token"`).
+- **Upgrade note: old service workers are cleaned up on first visit.** A
+  browser that had a worker registered on the content origin removes it the
+  next time it loads a page there, and those pages reload once. No operator
+  action is needed.
+- **Upgrade note: each artifact counts 4 KiB toward `--store-quota`,** and
+  `?filename=` is capped at 255 bytes. Size the quota with that in mind; a
+  store already near its quota may refuse new artifacts with `507`.
+- **Upgrade note: a client gets at most two live-reload streams per
+  artifact** (`--live-max-per-client-slug`). A third tab of the same `?live`
+  preview gets `503` until one closes. Behind a reverse proxy set
+  `--trusted-proxy` so each user is counted separately.
+- **Upgrade note: heading anchors longer than 64 bytes change.** Ids built
+  from very long headings are cut at 64 bytes; links to such anchors need
+  updating after a rebake. Masthead outline markup changed (`data-sec` names
+  a section index); a theme that styles it may need adjusting.
 - **Upgrade note: reply hooks.** A hook's process group is killed when its
   shell exits (or after `reply_hook_timeout`, default 5m); a hook that leaves a
   plain background job running must detach it with `systemd-run` or `setsid`.

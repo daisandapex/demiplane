@@ -149,8 +149,9 @@ alternative of an origin per artifact, are in [DESIGN.md](DESIGN.md#content-isol
 - **Service workers.** An opaque origin cannot register one. Independently,
   every HTML, SVG and XML document carries `worker-src 'none'`, and any request
   carrying a `Service-Worker` header (the browser's marker for a worker script
-  fetch) is refused with `403` on both planes, so no URL can become a worker
-  even with the sandbox off.
+  fetch), on either plane and at any path, is answered with one fixed script
+  that removes itself (see below), so no URL can become any other worker, even
+  with the sandbox off.
 - **Framing.** `frame-ancestors 'self'` never matches an opaque parent, so a
   sandboxed page cannot embed another artifact at all.
 - **Confidential responses.** Responses for private (capability URL) and
@@ -194,18 +195,23 @@ alternative of an origin per artifact, are in [DESIGN.md](DESIGN.md#content-isol
   including another site's sandboxed frame, can therefore read public JS, CSS
   and fonts, much as any page can already run or apply them. Keep secrets out
   of public scripts and stylesheets.
-- **A service worker registered before this release** is not removed. Its
-  update checks now get `403`, so it is never replaced, but a browser keeps an
-  installed worker until the registration is cleared. A viewer who opened a
-  hostile page on an older release should clear site data for the content
-  origin; an operator can also move the content origin to a new port or
-  hostname.
+- **A service worker registered before this release** is removed the next
+  time the browser checks it for an update, which it does when it loads a page
+  in the worker's scope: every service-worker script fetch gets a fixed script
+  that replaces the old worker, deletes Cache Storage, unregisters itself and
+  reloads the pages it controlled. Until the viewer next loads a page on the
+  content origin, the old worker stays installed but idle. Only Cache Storage
+  is cleared; other storage a hostile page wrote under an older release is
+  left in place and is unreachable from sandboxed pages. `Clear-Site-Data` is
+  not sent: with `--unsafe-no-sandbox` pages use storage legitimately, and any
+  page could trigger it.
 - **Content-plane pages demiplane writes itself** (the `?live` wrapper, the
   themed 404, the reply confirmation) run unsandboxed in the content origin.
   They carry no uploaded script.
 - **Writes from pages.** A sandboxed page can still submit forms, for example
   to the reply endpoint `POST /answer/{slug}`; its request arrives with
-  `Origin: null`.
+  `Origin: null`. A reply needs the submission token from the target's own
+  form, which another page cannot read (see Resource limits, "Replies").
 
 ## New surfaces in v1.2
 
@@ -255,11 +261,13 @@ inherits the posture above and was reviewed adversarially before release.
   the re-check after a republish re-salts the hash, goes through the
   view-password limits ([Resource limits](#resource-limits)), so open streams
   cannot multiply KDF work; a check refused for load is a `429` or `503`, and
-  ends an open stream. Subscribers are capped **per slug, per client
-  address** (an IPv4 address or IPv6 /64; behind a proxy all clients share the
-  proxy's address) **and globally** to bound file-descriptor/memory use; the
-  stream sends periodic heartbeats and drops consumers on a write deadline /
-  context cancel.
+  ends an open stream. Subscribers are capped per client per artifact (2),
+  per client (16), per artifact (16) and in all (256), with clients keyed by
+  IPv4 address or IPv6 /64 (behind a `--trusted-proxy`, the forwarded client).
+  When an artifact or the instance is full, a new client takes the place of
+  the oldest stream of the client holding the most, so one client cannot keep
+  others out. The stream sends periodic heartbeats and drops consumers on a
+  write deadline or context cancel.
 - **Multi-file archive ingest (`POST /publish?site=`).** Tar, zip, and multipart
   bundles are accepted behind the publish token. Every entry path is
   traversal-checked (`..`, absolute paths, and backslashes rejected; each segment
@@ -371,8 +379,11 @@ only in `-tags reply` builds.
 
 | Surface | Limit | Default | Knob |
 |---|---|---|---|
-| View password | KDF runs at once; more wait up to 5s, then `503` | half the cores, 1 to 4 | (code) |
-| View password | failed attempts per artifact, per client, in all; past it `429` without hashing | 10, 20, 120 a minute (bursts 10, 10, 30) | (code) |
+| View password | KDF runs at once; more wait up to 5s, then `503` | half the cores, 1 to 4 | `--password-concurrency` |
+| View password | one client's failed attempts on one artifact / on any artifact; past it `429` without hashing | 10 / 20 a minute (bursts 10, 10) | `--password-rate-client-target`, `--password-rate-client` |
+| View password | all clients' failed attempts on one artifact / in all; once spent, clients that failed recently get `429` without hashing | 10 / 120 a minute (bursts 10, 30) | `--password-rate-target`, `--password-rate-global` |
+| Live reload | streams per client on one artifact / per client in all; past it `503` | 2 / 16 | `--live-max-per-client-slug`, `--live-max-per-client` |
+| Live reload | streams per artifact / in all; when full, a new client replaces the oldest stream of the client holding the most | 16 / 256 | `--live-max-per-slug`, `--live-max-total` |
 | Request body | non-upload body must arrive within; uploads: grace and longest stall | 30s | `--body-timeout` |
 | Request body | upload average rate after the grace; slower gets `408` | 16 KiB/s | `--upload-min-rate` |
 | Response | write deadline per response; an upload's starts at its longest allowed body time plus this, and tightens to this once the body is read | 60s | `--response-timeout` |
@@ -380,26 +391,33 @@ only in `-tags reply` builds.
 | Admission | requests in progress per listener / per client; excess `503` | 256 / 32 | `--max-requests`, `--max-requests-per-client` |
 | Admission | open connections per listener (further ones wait) / per client (further ones are closed) | 1024 / 64 | `--max-conns`, `--max-conns-per-client` |
 | Rendering | table columns; table body cells per document (rows times header width) | 128; 1,000,000 | (code) |
-| Rendering | rendered page size; over it `413`, nothing stored | 32 MiB | `--render-max-output` |
+| Rendering | rendered page size, page chrome and outline included; over it `413`, nothing stored | 32 MiB | `--render-max-output` |
 | Rendering | renders at once; one that waits 5s gets `503` | GOMAXPROCS, at most 4 | `--render-concurrency` |
-| Storage | bytes of artifacts, retained sources and sites, including in-flight uploads, scratch and extracted archive bytes; over it `507` | unlimited | `--store-quota` |
+| Storage | bytes of artifacts, retained sources and sites, including in-flight uploads, scratch and extracted archive bytes, plus 4 KiB per artifact for its metadata; over it `507` | unlimited | `--store-quota` |
+| Metadata | filename hint length; longer is `400` | 255 bytes | (code) |
 | Replies | submissions per client / per artifact / in all; past it `429` | 10 / 60 / 300 a minute | `reply_rate_client`, `reply_rate_target`, `reply_rate_global` |
 | Replies | submit body must arrive within | 10s | (code) |
 | Replies | replies per artifact (`429`); replies and reply text in all (`507`) | 1000; 100,000 and 64 MiB | `reply_max_per_artifact`, `reply_max_total`, `reply_max_bytes` |
-| Replies | replies older than this are deleted | 90 days | `reply_retention` (`0` keeps them) |
+| Replies | replies older than this are deleted, by an hourly sweep | off (kept) | `reply_retention` |
 | Reply hooks | events running at once / admitted and waiting; a full pool refuses the reply with `503` | 2 / 32 | `reply_hook_workers`, `reply_hook_queue` |
 | Reply hooks | exec run time; the hook's process group is killed when the shell exits or this passes | 5m | `reply_hook_timeout` |
 
 Notes on the limits:
 
-- **Password checks.** PBKDF2 keeps its 600,000-iteration work factor. A
-  correct password is refunded and remembered for 10 minutes (keyed by an
-  HMAC of the stored hash and the password under a per-process key), so a
-  viewer who has authenticated is not affected by a flood of wrong guesses
-  against the same page; a new viewer of that page may get `429` until the
-  per-artifact budget refills. Reply submit and form routes, the `?live`
-  wrapper and the live-reload stream (including its re-checks) run the same
-  check.
+- **Password checks.** PBKDF2 keeps its 600,000-iteration work factor. Only
+  failures spend budget. A correct password is refunded and remembered (an
+  HMAC of the stored hash and the password under a per-process key) until it
+  goes unused for 10 minutes. A client that keeps failing is refused before
+  hashing, but a viewer with no recent failures is always verified, so other
+  clients' guesses cannot lock it out. Guessing spread over many fresh
+  addresses is bounded by the KDF concurrency and work factor rather than by
+  a rate; use a strong password. Behind a proxy, set `--trusted-proxy`, or
+  every user shares the proxy's budget. Reply routes, the `?live` wrapper and
+  the live-reload stream (including its re-checks) run the same check.
+- **Rendering.** The output budget covers the whole page, including the
+  outline built from its headings, which is checked as it grows. Heading ids
+  are capped at 64 bytes, so a long heading cannot make every reference to it
+  long.
 - **Order of checks.** Body and write deadlines are set first, so they also
   bound a request refused before routing (a service-worker fetch, an unknown
   `Host`, an ambiguous path). Admission counts only requests that pass those
@@ -412,11 +430,18 @@ Notes on the limits:
   host and port), except from an opaque origin (`Origin: null`, which is what
   a sandboxed artifact page sends) whose `Referer` is absent or names the
   content origin. Behind a proxy, set the base URLs so the public origin is
-  the one compared. That check is defence in
-  depth only: another site can post from a sandboxed frame with no Referer,
-  and no origin check can tell apart two pages on the same content origin.
-  The per-artifact opt-in, the view password and the reply limits are what
-  admission rests on.
+  the one compared. That guard cannot tell two pages on the content origin
+  apart: every sandboxed page posts with `Origin: null`, a page can omit its
+  Referer, and the browser may attach the viewer's cached password for the
+  target. What binds a browser submission to its target is the submission
+  token every reply form carries: an HMAC of the slug and the issue time under
+  a key in the store's metadata database, required on every browser
+  submission (one carrying `Origin` or `Sec-Fetch-Site`) and refused if it
+  names another slug or predates the artifact's current publish. A sandboxed
+  page cannot read another artifact's page to learn its token. Admission also
+  needs the per-artifact opt-in, the view password and the reply limits. Not
+  covered: with `--unsafe-no-sandbox` a page can read others' tokens, and
+  clients that send no browser headers are treated as non-browser clients.
   The per-artifact cap and the aggregate limits are checked and the reply
   inserted in one transaction, so concurrent submissions cannot overshoot.
 - **Reply hooks.** A submission takes its place in the hook pool before the
@@ -425,8 +450,10 @@ Notes on the limits:
   reach the log only with `reply_hook_log_output = on`. Work
   meant to outlive a hook must detach (`systemd-run`, `setsid`); a plain
   background child is killed with the hook's process group.
-- **Storage quota.** Not counted: the metadata database, module data (replies,
-  TLS material), filesystem block overhead and files left behind by a crash.
+- **Storage quota.** Not counted: the metadata database's actual size (each
+  artifact instead counts a fixed 4 KiB allowance, and its per-row fields are
+  bounded), module data (replies, TLS material), filesystem block overhead
+  and files left behind by a crash.
   An overwrite or rebake needs room for the new copy while the old one still
   exists; a site publish needs room for its archive plus the extracted files.
   `demiplane receive` runs as a separate process and enforces the quota

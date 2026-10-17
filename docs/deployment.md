@@ -121,7 +121,12 @@ reverse proxy, set `--trusted-proxy <ip-or-cidr,...>` to the proxy's addresses s
 per-client limits are keyed by the client in `X-Forwarded-For` (read from the right, past
 trusted hops); without it every client shares the proxy's address. The proxy must set or
 append `X-Forwarded-For`, and `--max-conns-per-client` still counts the proxy's
-connections, so raise it or set it to `0`. See [SECURITY.md](../SECURITY.md#resource-limits). Content-type
+connections, so raise it or set it to `0`. View-password limits: `--password-concurrency`
+[0 = half the cores, 1 to 4] and failure rates written `N` or `N:BURST` a minute (`0` turns
+one off): `--password-rate-client-target` [`10:10`], `--password-rate-client` [`20:10`],
+`--password-rate-target` [`10:10`], `--password-rate-global` [`120:30`]. Live-reload stream
+caps (each at least 1): `--live-max-per-client-slug` [2], `--live-max-per-client` [16],
+`--live-max-per-slug` [16], `--live-max-total` [256]. See [SECURITY.md](../SECURITY.md#resource-limits). Content-type
 is inferred from the filename extension, then sniffed from the bytes; known web types
 serve **inline**, everything else as a download.
 

@@ -677,7 +677,7 @@ token, like `GET /list`.
 | `307 Temporary Redirect` | A non-canonical path (`//`, `/./`, `/../`); `Location` is the canonical path with its escaping and query kept. |
 | `400 Bad Request` | Invalid or reserved slug, `private` + named slug, password in the URL query, bad `ttl`, a malformed publish query string, a site upload asking for `?private`/`?ttl`/a password, a malformed reply/site, or an ambiguous path (a segment that decodes to `.` or `..`, or holds an encoded `/` or `\`, or a control character). |
 | `401 Unauthorized` | Missing or invalid bearer token (write/list/delete/reply admin, `/gallery` without `--browse`), or a missing or wrong view password (read, `?live`, live-reload stream, reply). |
-| `403 Forbidden` | A service-worker script fetch (never permitted), or a cross-origin browser write (another site posting through a visitor's browser). |
+| `403 Forbidden` | A cross-origin browser write (another site posting through a visitor's browser), or a browser reply submission without a valid form token. A service-worker script fetch is answered `200` with a fixed script that removes itself. |
 | `404 Not Found` | No such artifact or reply, or it expired. |
 | `405 Method Not Allowed` | Wrong method for a known path (for example `POST /list`). |
 | `408 Request Timeout` | The request body arrived too slowly (`--body-timeout`, `--upload-min-rate`). |
