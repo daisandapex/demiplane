@@ -425,7 +425,8 @@ only in `-tags reply` builds.
 | Rendering | series members a page navigates (its tree and prev/next row); a larger series renders without them | 1,000 | (code) |
 | Rendering | frontmatter rendered as the meta-header: fields / block size / key / value; over it `413` | 256 / 64 KiB / 256 B / 8 KiB | (code) |
 | Rendering | renders at once; one that waits 5s gets `503` | GOMAXPROCS, at most 4 | `--render-concurrency` |
-| Storage | bytes of artifacts, retained sources and sites, including in-flight uploads, scratch and extracted archive bytes, removed files a download still holds open, and abandoned site staging trees, plus 4 KiB per artifact for its metadata and 4 KiB per site file or directory; over it `507` | unlimited | `--store-quota` |
+| Storage | bytes of artifacts, retained sources and sites, including in-flight uploads, scratch and extracted archive bytes, removed files a download still holds open, and abandoned site staging trees, plus 4 KiB per artifact for its metadata, 4 KiB per site file or directory and 4 KiB per replaced version waiting to be removed; over it `507` | unlimited | `--store-quota` |
+| Storage | replaced or deleted versions waiting for the server to remove them; past it a replacing write is refused (`507`, or an error from `receive`) | 10,000 | (code) |
 | Storage | site files and directories in all, sites being published included; over it `507` | 100,000 | (code) |
 | Metadata | filename hint length; longer is `400` | 255 bytes | (code) |
 | Replies | submissions per client / per artifact / in all; past it `429` | 10 / 60 / 300 a minute | `reply_rate_client`, `reply_rate_target`, `reply_rate_global` |
@@ -528,7 +529,9 @@ Notes on the limits:
   cannot see the server's downloads, so it leaves the files of a replaced
   artifact for the server's sweep to remove; until then they stay on disk and
   counted, for up to `--sweep-interval` (a minute by default), or until a
-  server next starts. Leftovers of a failed site publish or a crash stay
+  server next starts. Each such version counts 4 KiB until it is removed,
+  and at most 10,000 may be waiting, so `receive` cannot pile them up
+  without limit when no server is running. Leftovers of a failed site publish or a crash stay
   charged until startup or the hourly reconcile removes them, an hour after
   they were last written; a cleanup releases only what it actually removed.
   `demiplane receive` runs as a separate process and enforces the quota

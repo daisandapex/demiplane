@@ -162,6 +162,12 @@ All notable changes to demiplane are documented here. The format follows
   cannot be removed keeps its storage quota charge, and the failure is
   logged; such leftovers, and any left by a crash, are counted until the
   hourly reconcile removes them.
+- **Generations left for the server count against the quota and are
+  capped.** Each replaced or deleted version that `demiplane receive` leaves
+  for the server to remove counts 4 KiB toward `--store-quota` until the
+  server's sweep removes it. At most 10,000 may be waiting; past that, a
+  publish through `receive` that would replace an artifact is refused until
+  the server has swept. Deletes are never refused.
 - **Multipart publish headers are limited to 16 KiB.** At most 16 KiB may
   precede a multipart publish's file part body (preamble, earlier form
   fields and the part's headers); more is refused with `431`.
