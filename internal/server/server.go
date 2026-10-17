@@ -245,7 +245,7 @@ func (s *Server) registerControlRoutes(mux *http.ServeMux) {
 // ingest path, agents — no Sec-Fetch/Origin headers) pass untouched.
 func (s *Server) guardCrossOriginWrites(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isCrossOriginWrite(r) {
+		if s.isCrossOriginWrite(r) {
 			http.Error(w, "cross-origin write rejected", http.StatusForbidden)
 			return
 		}
@@ -258,9 +258,11 @@ func (s *Server) guardCrossOriginWrites(next http.Handler) http.Handler {
 // authoritative when present (every modern browser sends it): only same-origin
 // and none (a top-level/user-initiated load) are allowed; same-site (e.g. a
 // different port — our content origin) and cross-site are rejected. When
-// Sec-Fetch-Site is absent, fall back to comparing the Origin header to the
-// listener's own host. No header at all ⇒ a non-browser client ⇒ allowed.
-func isCrossOriginWrite(r *http.Request) bool {
+// Sec-Fetch-Site is absent, fall back to comparing the Origin header, as a
+// full origin (scheme, host and port), with the --base-url origin when one is
+// configured, else with the request's own origin. No header at all ⇒ a
+// non-browser client ⇒ allowed.
+func (s *Server) isCrossOriginWrite(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return false // reads/preflights don't change state
@@ -274,13 +276,52 @@ func isCrossOriginWrite(r *http.Request) bool {
 		}
 	}
 	if origin := r.Header.Get("Origin"); origin != "" {
-		u, err := url.Parse(origin)
-		if err != nil || u.Host == "" {
-			return true // unparseable Origin on a write ⇒ refuse
+		got, ok := normalizeOrigin(origin)
+		if !ok {
+			return true // opaque ("null") or unparseable Origin on a write ⇒ refuse
 		}
-		return !strings.EqualFold(u.Host, r.Host)
+		// With --base-url set its origin is authoritative: behind a
+		// TLS-terminating proxy the listener sees plain HTTP from the proxy,
+		// so an origin inferred from the request would accept an http://
+		// page writing to the https:// control plane.
+		if s.baseURL != "" {
+			base, ok := normalizeOrigin(s.baseURL)
+			return !ok || got != base
+		}
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		self, ok := normalizeOrigin(scheme + "://" + r.Host)
+		return !ok || got != self
 	}
 	return false // no browser signals ⇒ non-browser client (curl/SSH/agent)
+}
+
+// normalizeOrigin reduces a URL or serialized origin to scheme://host:port,
+// lowercased, with the scheme's default port filled in, so origins compare
+// as the browser defines them. It fails for anything without an http(s)
+// scheme and a host, including the opaque origin "null".
+func normalizeOrigin(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil {
+		return "", false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	port := u.Port()
+	switch scheme {
+	case "http":
+		if port == "" {
+			port = "80"
+		}
+	case "https":
+		if port == "" {
+			port = "443"
+		}
+	default:
+		return "", false
+	}
+	return scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port), true
 }
 
 // frameAncestorsSelf is the framing policy on every response: only same-origin

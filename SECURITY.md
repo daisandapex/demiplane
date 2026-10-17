@@ -92,7 +92,13 @@ from reading any control-plane response (`/list` enumeration, capability URLs),
 and a **cross-origin write guard** (an `Origin`/`Sec-Fetch-Site` check on the
 control plane) blocks fire-and-forget cross-origin `POST`/`DELETE` — so a
 published page's script can neither exfiltrate the artifact inventory nor publish
-a worm. This holds on bare loopback with no DNS, certs, or proxy.
+a worm. This holds on bare loopback with no DNS, certs, or proxy. When a browser
+sends no `Sec-Fetch-Site`, the `Origin` fallback compares the **full origin**
+(scheme, host and port, default ports normalized) with the `--base-url` origin
+when one is set, else with the listener's own origin; an `http://` page cannot
+write to an `https://` control plane on the same host and port, or the reverse.
+Behind a TLS-terminating proxy, set `--base-url` so the browser's `https://`
+origin is the one accepted.
 
 A defense-in-depth layer also refuses to relabel a non-HTML body to `text/html`
 via `?filename=` (closing the content-type-confusion vector that bypassed the

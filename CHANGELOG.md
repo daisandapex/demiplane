@@ -8,6 +8,10 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **The control-plane write guard compares full origins.** Its `Origin`
+  fallback now matches scheme, host and port (default ports normalized)
+  against the `--base-url` origin when set, else the listener's own origin,
+  instead of host and port alone.
 - **Request paths are canonicalized before routing.** Non-canonical paths
   redirect to their canonical form with the original escaping (previously the
   redirect re-escaped `%` signs), and paths with encoded dot segments,
