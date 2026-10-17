@@ -435,10 +435,10 @@ func (s *Store) reclaimStaleWrites(now time.Time) (int, error) {
 				if err != nil || referenced {
 					continue
 				}
-				if err := os.Remove(f.path); err == nil {
-					removed++
-				} else if !os.IsNotExist(err) {
+				if gone, err := s.removeLiveFile(f.path); err != nil {
 					log.Printf("store: could not remove an abandoned write's file: %s", logsafe.Err(err, in.slug))
+				} else if gone {
+					removed++
 				}
 			}
 		}()
@@ -486,7 +486,7 @@ func (s *Store) removeOrphan(path, slug, gen string, source bool, now time.Time)
 	if err != nil || referenced {
 		return false
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if _, err := s.removeLiveFile(path); err != nil {
 		log.Printf("store: could not remove an orphaned artifact file: %s", logsafe.Err(err, slug))
 		return false
 	}

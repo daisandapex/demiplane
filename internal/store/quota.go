@@ -275,26 +275,33 @@ func (s *Store) release(n int64) {
 // removeLive removes a live file and releases its size. A file already gone is
 // not an error (and releases nothing).
 func (s *Store) removeLive(path string) error {
+	_, err := s.removeLiveFile(path)
+	return err
+}
+
+// removeLiveFile is removeLive that also reports whether this call removed the
+// file (false when it was already gone).
+func (s *Store) removeLiveFile(path string) (bool, error) {
 	s.beginTransition()
 	var removed int64
 	defer func() { s.endTransition(0, removed) }()
 	fi, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return false, nil
 		}
-		return err
+		return false, err
 	}
 	if fi.Mode().IsRegular() {
 		removed = fi.Size()
 	}
-	return nil
+	return true, nil
 }
 
 // removeLiveTree removes a live directory tree and releases the size of the

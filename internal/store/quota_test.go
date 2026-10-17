@@ -495,3 +495,40 @@ func TestQuotaRecountSkipsInFlight(t *testing.T) {
 		t.Errorf("usage with an in-flight scratch after a recount = %d, want 700", used)
 	}
 }
+
+// TestReconcileReleasesQuota: files Reconcile removes (an orphan with no
+// intent, and the file of a stale write intent) were counted when usage was
+// measured, so removing them releases their bytes at once, not only at the
+// next recount.
+func TestReconcileReleasesQuota(t *testing.T) {
+	s := newTestStore(t)
+	old := time.Now().Add(-2 * orphanGrace)
+	orphan := filepath.Join(s.blobDir, "gone"+genSep+"00112233aabbccdd")
+	abandoned := filepath.Join(s.blobDir, "ghost"+genSep+"8899aabbccddeeff")
+	for _, p := range []string{orphan, abandoned} {
+		if err := os.WriteFile(p, payload(700), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.Exec(`INSERT INTO pending_writes (slug, gen, started_at) VALUES ('ghost', '8899aabbccddeeff', ?)`,
+		time.Now().Add(-2*staleWriteAge).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetQuota(10_000); err != nil {
+		t.Fatal(err)
+	}
+	if used, _ := s.Usage(); used != 1400 {
+		t.Fatalf("usage before reconcile = %d, want 1400", used)
+	}
+	n, err := s.Reconcile(time.Now())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("Reconcile removed %d files, want 2", n)
+	}
+	assertAccounted(t, s)
+}
