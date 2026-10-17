@@ -8,6 +8,10 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **Request paths are canonicalized before routing.** Non-canonical paths
+  redirect to their canonical form with the original escaping (previously the
+  redirect re-escaped `%` signs), and paths with encoded dot segments,
+  separators inside a segment or control characters get `400`.
 - **Site files are opened through `os.Root` with no symlinks followed.** A
   symlink anywhere on a served site path (the site directory, an
   intermediate directory or the file) is a 404, and the check cannot race

@@ -182,6 +182,12 @@ inherits the posture above and was reviewed adversarially before release.
   site cannot frame a hosted page or the control UI. Same-origin framing stays
   allowed because the `?live` preview wrapper legitimately iframes the artifact's
   own URL.
+- **Path canonicalization.** Both planes resolve path ambiguity before
+  routing. A non-canonical path (`//`, `/./`, `/../`) is redirected (`307`) to
+  its canonical form with its original escaping and query kept, never
+  re-escaped and never to a `//host` reference. A path segment that decodes to
+  `.` or `..`, contains an encoded or literal `/` or `\`, or carries a control
+  character is refused with `400`.
 - **Referrer leakage.** Every response carries
   `Referrer-Policy: strict-origin-when-cross-origin`, so a capability URL
   (`?private=true` slug) is not disclosed in the `Referer` header when a hosted

@@ -161,7 +161,7 @@ func (s *Server) ModuleDataDir(name string) (string, error) {
 func (s *Server) ControlHandler() http.Handler {
 	mux := http.NewServeMux()
 	s.registerControlRoutes(mux)
-	return withSecurityHeaders(s.guardCrossOriginWrites(mux))
+	return withSecurityHeaders(canonicalPaths(s.guardCrossOriginWrites(mux)))
 }
 
 // ContentHandler returns the artifact-serving handler: GET /{slug} only. It is
@@ -183,7 +183,7 @@ func (s *Server) ContentHandler() http.Handler {
 	// The bare content root has no landing on this plane (the landing lives on the
 	// control origin); serve the themed 404 rather than ServeMux's plaintext one.
 	mux.HandleFunc("GET /{$}", s.serveContentNotFound)
-	return withSecurityHeaders(mux)
+	return withSecurityHeaders(canonicalPaths(mux))
 }
 
 // Handler returns a single combined handler that serves BOTH the control plane
@@ -200,7 +200,7 @@ func (s *Server) Handler() http.Handler {
 	s.mountCoreContentRoutes(mux)
 	s.mountContentRouteModules(mux)
 	mux.HandleFunc("GET /{slug}", s.handleGet)
-	return withSecurityHeaders(mux)
+	return withSecurityHeaders(canonicalPaths(mux))
 }
 
 // registerControlRoutes mounts every route except the artifact catch-all
