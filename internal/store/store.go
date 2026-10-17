@@ -324,9 +324,10 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	); err != nil {
 		return fmt.Errorf("create list index: %w", err)
 	}
-	// Index series membership for the per-series counts.
+	// Index series membership for the per-series counts. Not partial: the
+	// planner cannot tell that "series IN (...)" excludes ''.
 	if _, err := s.db.Exec(
-		`CREATE INDEX IF NOT EXISTS idx_artifacts_series ON artifacts(owner, series) WHERE series <> ''`,
+		`CREATE INDEX IF NOT EXISTS idx_artifacts_series ON artifacts(owner, series)`,
 	); err != nil {
 		return fmt.Errorf("create series index: %w", err)
 	}
