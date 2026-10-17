@@ -285,7 +285,7 @@ func TestSitePublishOversizeArchive413(t *testing.T) {
 
 func TestSitePublishFileCountCap413(t *testing.T) {
 	ts := newTestServer(t, "")
-	files := make([]srcFile, maxSiteFiles+5)
+	files := make([]srcFile, maxSiteEntries+5)
 	for i := range files {
 		files[i] = srcFile{name: fmt.Sprintf("f%d.txt", i), body: "x"}
 	}

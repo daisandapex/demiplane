@@ -13,7 +13,9 @@ import (
 	"log"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/store"
@@ -27,8 +29,10 @@ import (
 //     traversal-checked (store.cleanSiteRelPath via SiteWriter.AddFile); non-
 //     regular entries (dirs, symlinks, devices) are skipped; the whole archive is
 //     bounded by --max-upload and a decompressed-bytes budget (zip-bomb defense)
-//     plus a file-count cap. The publish is transactional: a mid-upload failure
-//     leaves any previously published site intact.
+//     plus a cap on entries of every kind, and its structure is checked with
+//     bounded parsing before archive/zip or archive/tar reads it, a few
+//     archives at a time (sitearchive.go). The publish is transactional: a
+//     mid-upload failure leaves any previously published site intact.
 //   - Serve (CONTENT origin): GET /{site}/{path...} resolves a file inside the
 //     site; GET /{site}/ (and a bare /{site}/{path...} with empty path) serves its
 //     index.html. Assets keep the flat-artifact security posture: global nosniff
@@ -53,9 +57,6 @@ func init() {
 }
 
 const (
-	// maxSiteFiles caps how many files one site publish may contain — a coarse
-	// guard against an archive with a pathological number of tiny entries.
-	maxSiteFiles = 4096
 	// defaultSiteArchiveCap bounds the uploaded archive when --max-upload is
 	// unset (0 = "unlimited" for single files). A site publish must always be
 	// bounded because zip ingest buffers the archive to a scratch file.
@@ -69,10 +70,11 @@ const (
 // tests can lower it to exercise the cap cheaply.
 var siteDecompressBudget = store.DefaultDecompressBudget
 
-// errTooManyFiles is the file-count rejection, mapped to 413 by
-// handleSitePublish (a payload-limit condition). The decompressed-bytes overflow
-// is store.ErrDecompressBudget, mapped alongside it in writeSiteExtractError.
-var errTooManyFiles = errors.New("site archive contains too many files")
+// errTooManyFiles is the entry-count and archive-structure rejection, mapped to
+// 413 by handleSitePublish (a payload-limit condition). The decompressed-bytes
+// overflow is store.ErrDecompressBudget, mapped alongside it in
+// writeSiteExtractError.
+var errTooManyFiles = errors.New("site archive contains too many entries")
 
 // handleSitePublish ingests POST /publish?site=<name>. It runs on the control
 // plane (handlePublish delegates before its own body handling), so the returned
@@ -131,6 +133,20 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 
 	format := detectArchiveFormat(q.Get("fmt"), r.Header.Get("Content-Type"), tmp)
 
+	// Parsing is what costs memory, so the slot is taken only once the body
+	// is on disk: a slow upload does not hold one.
+	release, err := s.acquireSiteParse(r.Context())
+	if err != nil {
+		if errors.Is(err, errSiteBusy) {
+			w.Header().Set("Retry-After", strconv.Itoa(int(sitePublishWait/time.Second)))
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		http.Error(w, "publish cancelled", http.StatusServiceUnavailable)
+		return
+	}
+	defer release()
+
 	sw, err := s.store.NewSiteWriter(site)
 	if err != nil {
 		if errors.Is(err, store.ErrQuota) {
@@ -151,7 +167,7 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 	case "zip":
 		err = extractZip(sw, tmp, size)
 	default: // "tar"
-		err = extractTar(sw, tmp)
+		err = extractTar(sw, tmp, size)
 	}
 	if err != nil {
 		s.writeSiteExtractError(w, err)
@@ -201,8 +217,8 @@ func siteQuotaMessage(err error) string {
 // otherwise-malformed archive to 400.
 func (s *Server) writeSiteExtractError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, errTooManyFiles):
-		http.Error(w, "site archive contains too many files", http.StatusRequestEntityTooLarge)
+	case errors.Is(err, errTooManyFiles), errors.Is(err, errTarHeaderTooLarge):
+		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
 	case errors.Is(err, store.ErrDecompressBudget):
 		http.Error(w, "site archive expands beyond the size limit", http.StatusRequestEntityTooLarge)
 	case errors.Is(err, store.ErrQuota):
@@ -244,6 +260,12 @@ func detectArchiveFormat(fmtParam, contentType string, ra io.ReadSeeker) string 
 	return "tar"
 }
 
+// tarSource is the scratch file a tar is read from.
+type tarSource interface {
+	io.ReaderAt
+	io.ReadSeeker
+}
+
 // extractTar streams every regular file from a tar into the site writer.
 // Non-regular entries (dirs, symlinks, hardlinks, devices) are skipped, so a
 // symlink entry can never plant a link in the served tree. The uploaded archive
@@ -252,14 +274,18 @@ func detectArchiveFormat(fmtParam, contentType string, ra io.ReadSeeker) string 
 // expands to attacker-chosen gigabytes of zero-fill through tar.Reader. So the
 // same total-bytes budget the zip path uses is enforced here — otherwise a ~10KB
 // sparse tar would write GBs to the sites scratch dir, defeating the
-// whole-archive size cap.
-func extractTar(sw *store.SiteWriter, ra io.ReadSeeker) error {
+// whole-archive size cap. Every entry, skipped or not, counts toward
+// maxSiteEntries, and the headers are checked first (checkTarHeaders).
+func extractTar(sw *store.SiteWriter, ra tarSource, size int64) error {
+	if err := checkTarHeaders(ra, size); err != nil {
+		return err
+	}
 	if _, err := ra.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind archive: %w", err)
 	}
 	tr := tar.NewReader(ra)
 	budget := siteDecompressBudget
-	for {
+	for entries := 0; ; entries++ {
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
@@ -267,11 +293,11 @@ func extractTar(sw *store.SiteWriter, ra io.ReadSeeker) error {
 		if err != nil {
 			return fmt.Errorf("read tar: %w", err)
 		}
+		if entries >= maxSiteEntries {
+			return errTooManyFiles
+		}
 		if hdr.Typeflag != tar.TypeReg {
 			continue // skip dirs, symlinks, hardlinks, devices
-		}
-		if sw.Files() >= maxSiteFiles {
-			return errTooManyFiles
 		}
 		if err := sw.AddFile(hdr.Name, &store.BudgetReader{R: tr, Remaining: &budget}); err != nil {
 			return err
@@ -283,10 +309,23 @@ func extractTar(sw *store.SiteWriter, ra io.ReadSeeker) error {
 // extractZip extracts every regular file from a zip into the site writer. It
 // enforces a total decompressed-bytes budget across all entries (zip-bomb
 // defense) since a small zip can inflate enormously past the archive size cap.
+// The central directory is checked and its parse bounded first, and every
+// entry, skipped or not, counts toward maxSiteEntries.
 func extractZip(sw *store.SiteWriter, ra io.ReaderAt, size int64) error {
-	zr, err := zip.NewReader(ra, size)
+	if err := checkZipDirectory(ra, size); err != nil {
+		return err
+	}
+	rb := &readBudget{r: ra, armed: true, left: zipOpenReadLimit}
+	zr, err := zip.NewReader(rb, size)
+	rb.armed = false
+	if errors.Is(err, errTooManyFiles) {
+		return errTooManyFiles
+	}
 	if err != nil {
 		return fmt.Errorf("open zip: %w", err)
+	}
+	if len(zr.File) > maxSiteEntries {
+		return errTooManyFiles
 	}
 	budget := siteDecompressBudget
 	for _, f := range zr.File {
@@ -298,9 +337,6 @@ func extractZip(sw *store.SiteWriter, ra io.ReaderAt, size int64) error {
 		// link in the served tree.
 		if !f.Mode().IsRegular() {
 			continue
-		}
-		if sw.Files() >= maxSiteFiles {
-			return errTooManyFiles
 		}
 		rc, err := f.Open()
 		if err != nil {

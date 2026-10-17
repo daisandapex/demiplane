@@ -116,6 +116,7 @@ type Server struct {
 	sandbox          bool                        // per-document CSP sandbox on the content origin (isolation.go)
 	renderLimits     render.Limits               // work and output bounds for ?render=md
 	renderSem        chan struct{}               // render slots (renderlimit.go)
+	siteSem          chan struct{}               // site archive parse slots (sitearchive.go)
 	tokenMAC         []byte                      // random key for constant-time, length-hiding token comparison
 	views            *viewGate                   // view-password rate and concurrency limits
 	reqLimits        RequestLimits               // body, response and admission limits (limits.go), resolved
@@ -156,6 +157,7 @@ func New(st *store.Store, cfg Config) *Server {
 		sandbox:          !cfg.UnsafeNoSandbox,
 		renderLimits:     render.Limits{MaxOutputBytes: cfg.RenderMaxOutput},
 		renderSem:        newRenderSem(cfg.RenderConcurrency),
+		siteSem:          make(chan struct{}, siteParseSlots),
 		tokenMAC:         key,
 		views:            newViewGate(cfg.Password, viewKey()),
 		reqLimits:        cfg.Requests.resolved(),
