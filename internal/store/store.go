@@ -131,9 +131,14 @@ func Open(dir string) (*Store, error) {
 	}
 	dbFile.Close()
 	// _pragma busy_timeout avoids spurious "database is locked" under concurrency.
+	// A write takes the lock up to three times (its intent, the commit, the
+	// replaced generation's deletion record), and SQLite's busy wait is not
+	// first-come first-served, so in a burst of concurrent publishes (which
+	// admission allows) one writer can wait several seconds on a slow disk;
+	// 30s keeps that a delay rather than a failed publish.
 	// _txlock=immediate takes the write lock at BEGIN, so a transaction that
 	// reads a row and then rewrites it cannot fail on the lock upgrade.
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("open metadata db: %w", err)
 	}
