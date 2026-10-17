@@ -181,6 +181,9 @@ All notable changes to demiplane are documented here. The format follows
   64 levels is refused with `413`, as is, with the meta-header on, frontmatter
   of more than 256 fields or 64 KiB, or with a key over 256 bytes or a value
   over 8 KiB.
+- **Upgrade note: a series of more than 1,000 artifacts renders without
+  its series tree and prev/next row.** The server looks up at most that many
+  members instead of listing every artifact on each publish.
 - **Upgrade note: each site file and directory counts 4 KiB toward
   `--store-quota`,** and the sites hold at most 100,000 files and directories
   in all. An existing store over either limit keeps serving, but further site

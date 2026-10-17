@@ -399,6 +399,7 @@ only in `-tags reply` builds.
 | Rendering | table columns; table body cells per document (rows times header width) | 128; 1,000,000 | (code) |
 | Rendering | rendered page size: every byte, meta-header, outline and chrome included, charged as it is produced; over it `413`, nothing stored | 32 MiB | `--render-max-output` |
 | Rendering | input lines / headings / list nesting depth; over it `413` | 2,097,152 / 50,000 / 64 | (code) |
+| Rendering | series members a page navigates (its tree and prev/next row); a larger series renders without them | 1,000 | (code) |
 | Rendering | frontmatter rendered as the meta-header: fields / block size / key / value; over it `413` | 256 / 64 KiB / 256 B / 8 KiB | (code) |
 | Rendering | renders at once; one that waits 5s gets `503` | GOMAXPROCS, at most 4 | `--render-concurrency` |
 | Storage | bytes of artifacts, retained sources and sites, including in-flight uploads, scratch and extracted archive bytes, plus 4 KiB per artifact for its metadata and 4 KiB per site file or directory; over it `507` | unlimited | `--store-quota` |
