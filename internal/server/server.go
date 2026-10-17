@@ -508,6 +508,9 @@ const PasswordHeader = "X-Demiplane-Password"
 // Query params: ?slug= (named), ?private=, ?ttl= (e.g. 30m, 2h, 7d). The view
 // password is supplied via the X-Demiplane-Password header, never the URL.
 func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
+	reqBody := &abandonableBody{r: r.Body}
+	r.Body = reqBody
+	w = &refusingWriter{ResponseWriter: w, body: reqBody}
 	// URL.Query drops any pair it cannot parse, so a malformed ?private or
 	// ?password would vanish and the artifact would be stored without the
 	// protection the caller asked for. Refuse an unparseable query instead.
@@ -1013,16 +1016,75 @@ func openMultipart(r *http.Request) (io.ReadCloser, string, error) {
 	case err != nil:
 		return nil, "", fmt.Errorf("read multipart: %w", err)
 	}
-	hl.armed = false
+	// Checked while the limit is still armed, and the refused part is not
+	// closed: closing a part reads the rest of it.
 	if !filePartWithin(hl.seen, maxMultipartHeaderBytes, params["boundary"]) {
-		part.Close()
 		return nil, "", errMultipartHeaders
 	}
-	hl.seen = nil
+	hl.armed, hl.seen = false, nil
 	name := part.FileName()
 	// Keep only the filename; the part reads its body without its headers.
 	part.Header = nil
 	return &partReadCloser{part: part}, name, nil
+}
+
+// refusingWriter is the publish handler's ResponseWriter. When the handler
+// answers with an error status, the request body is abandoned rather than
+// read to its end: further reads of it in the handler fail at once
+// (abandonableBody), the response says Connection: close, so net/http does
+// not read the remaining body before sending it, and the read deadline is set
+// to now, so the server's own cleanup after the response stops at once too.
+// Otherwise a refusal of a slow or large upload would wait for the rest of
+// it, holding the request's admission slot.
+type refusingWriter struct {
+	http.ResponseWriter
+	body  *abandonableBody
+	wrote bool
+}
+
+func (rw *refusingWriter) WriteHeader(code int) {
+	if !rw.wrote && code >= http.StatusBadRequest {
+		rw.body.abandoned = true
+		rw.Header().Set("Connection", "close")
+		_ = http.NewResponseController(rw.ResponseWriter).SetReadDeadline(time.Now())
+	}
+	rw.wrote = true
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *refusingWriter) Write(b []byte) (int, error) {
+	if !rw.wrote {
+		rw.WriteHeader(http.StatusOK)
+	}
+	return rw.ResponseWriter.Write(b)
+}
+
+// Unwrap lets http.ResponseController reach the underlying writer.
+func (rw *refusingWriter) Unwrap() http.ResponseWriter { return rw.ResponseWriter }
+
+// errBodyAbandoned is what reads of a refused publish's body return.
+var errBodyAbandoned = errors.New("request body abandoned after the publish was refused")
+
+// abandonableBody is a publish request body that refusingWriter can abandon:
+// once abandoned, reads fail without touching the connection and Close
+// leaves the body to net/http, which deals with it after the response.
+type abandonableBody struct {
+	r         io.ReadCloser
+	abandoned bool
+}
+
+func (b *abandonableBody) Read(p []byte) (int, error) {
+	if b.abandoned {
+		return 0, errBodyAbandoned
+	}
+	return b.r.Read(p)
+}
+
+func (b *abandonableBody) Close() error {
+	if b.abandoned {
+		return nil
+	}
+	return b.r.Close()
 }
 
 // partReadCloser adapts a multipart.Part to io.ReadCloser semantics that close
