@@ -474,8 +474,8 @@ Notes on the limits:
   filename is kept while the body streams.
 - **Bulk rerender.** `POST /rerender` is the one response that outlives
   `--response-timeout`: it may run for up to 30 minutes, writing a newline
-  every second. Each of its writes (keep-alive or report) must complete
-  within 10 seconds, or the sweep stops and frees its lock and admission
+  every second, plus up to 10 seconds to send its report. Each of its writes
+  (keep-alive or report) must complete within 10 seconds, or the sweep stops and frees its lock and admission
   slot. `--write-timeout`, when set, still bounds the whole response.
 - **Order of checks.** Body and write deadlines are set first, so they also
   bound a request refused before routing (a service-worker fetch, an unknown

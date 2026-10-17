@@ -523,9 +523,11 @@ every second until the report, so the response may start with blank lines
 disconnects, or stops reading so that a keep-alive or the report cannot be
 sent within 10 seconds, stops the sweep partway; pages already rebaked stay
 rebaked. A sweep
-also stops after 30 minutes: then `complete` is `false` and `next` names the
-last artifact it finished, and `POST /rerender?after=<next>` carries on from
-there. `complete` is also `false`, with an `error`, if reading the store failed
+also stops after 30 minutes: then `complete` is `false` and `next` is a
+continuation cursor, the slug after which the next sweep starts (everything up
+to and including it was rebaked or examined, or it is the `after` the sweep
+was given if it finished nothing), and `POST /rerender?after=<next>` carries
+on from there. The report itself may take up to 10 seconds more to send. `complete` is also `false`, with an `error`, if reading the store failed
 after the status was sent.
 
 Without `Accept: application/json` both routes answer in plain text.
