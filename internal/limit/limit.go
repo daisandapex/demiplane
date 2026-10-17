@@ -346,6 +346,15 @@ func ParseProxies(csv string) (Proxies, error) {
 			continue
 		}
 		if p, err := netip.ParsePrefix(e); err == nil {
+			// Peers are compared unmapped, so an IPv4-mapped prefix becomes
+			// its IPv4 prefix; one shorter than /96 would span non-IPv4
+			// addresses and is refused rather than silently never matching.
+			if p.Addr().Is4In6() {
+				if p.Bits() < 96 {
+					return nil, fmt.Errorf("--trusted-proxy entry %q: an IPv4-mapped prefix must be /96 or longer", e)
+				}
+				p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+			}
 			out = append(out, p.Masked())
 			continue
 		}

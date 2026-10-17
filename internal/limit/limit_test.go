@@ -234,3 +234,22 @@ func TestClientKeyUsesResolvedClient(t *testing.T) {
 		t.Fatalf("resolved request: %q", ClientKey(r))
 	}
 }
+
+// TestProxiesMappedIPv4: an IPv4-mapped IPv6 entry matches the IPv4 peer it
+// names, as a bare address or a prefix of at least /96; a shorter mapped
+// prefix spans more than IPv4 and is refused.
+func TestProxiesMappedIPv4(t *testing.T) {
+	for _, e := range []string{"::ffff:127.0.0.1", "::ffff:127.0.0.1/128", "::ffff:127.0.0.0/104"} {
+		p, err := ParseProxies(e)
+		if err != nil {
+			t.Fatalf("ParseProxies(%q): %v", e, err)
+		}
+		r := &http.Request{RemoteAddr: "127.0.0.1:1", Header: http.Header{"X-Forwarded-For": {"203.0.113.5"}}}
+		if got := p.ClientAddr(r); got != "203.0.113.5" {
+			t.Errorf("%s: ClientAddr = %q, want the forwarded client", e, got)
+		}
+	}
+	if _, err := ParseProxies("::ffff:0:0/80"); err == nil {
+		t.Error("a mapped prefix shorter than /96 was accepted")
+	}
+}
