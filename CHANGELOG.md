@@ -133,8 +133,8 @@ All notable changes to demiplane are documented here. The format follows
   reads only what it shows.
 - **Site archives are checked before they are parsed.** A zip's central
   directory is validated against its end record (at most 4,096 entries and
-  2 MiB) and read through a limit, a tar's headers are walked first (PAX and
-  GNU long-name headers at most 64 KiB), every entry of every kind counts
+  2 MiB) and read through a limit, archive/tar reads a tar through a 64 KiB
+  limit on the headers in front of each entry, every entry of every kind counts
   toward the 4,096-entry cap, and two archives are parsed at a time (`503`
   with `Retry-After` beyond that). A site entry name with a backslash is
   refused (`400`) instead of being read as `/`.
@@ -145,6 +145,14 @@ All notable changes to demiplane are documented here. The format follows
   replaced or deleted file that a download still holds open keeps its quota
   charge until the download ends.
 - **TTL values are at most 64 bytes,** refused before they are parsed.
+- **Render uploads are spooled to disk.** A `?render=md` body is received
+  into a scratch file charged to the store quota and rendered only once
+  complete, under a render slot held through the store write, so
+  `--render-concurrency` bounds the memory renders use.
+- **A replace through `demiplane receive` no longer frees space a download
+  still uses.** `receive` leaves a replaced or removed generation in place,
+  and the server's next sweep removes it, keeping it charged until any
+  download of it ends.
 - **Every accepted TTL expires.** `?ttl=`, `receive --ttl`, the MCP `publish`
   tool and `demiplane publish --ttl` share one parser. Day values must be plain
   decimals and are converted exactly; non-finite, overflowing and sub-second
@@ -256,6 +264,11 @@ All notable changes to demiplane are documented here. The format follows
   reply forms are refused as cross-origin. The new `--allowed-hosts` refuses
   any other `Host` with `421`.
 - **Upgrade note: `/gallery` needs the token unless `--browse` is set.**
+- **Upgrade note: after a replace through `demiplane receive`, the old
+  version's bytes stay on disk until the running server's next sweep**
+  (`--sweep-interval`, a minute by default), or until a server next starts if
+  none is running. This applies to private and password-protected artifacts
+  too.
 - **Upgrade note: `GET /replies` is paged** the same way: at most 100
   replies a response, with `next` to pass back as `?after=`.
 - **Upgrade note: `GET /list` is paged.** A response holds at most 200

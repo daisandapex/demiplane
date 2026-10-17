@@ -291,8 +291,11 @@ inherits the posture above and was reviewed adversarially before release.
   `archive/zip` or `archive/tar` reads it: a zip whose end record declares
   more than 4,096 entries or a central directory over 2 MiB is refused, the
   central-directory read is limited even when the end record understates it,
-  and a tar's headers are walked first, refusing a PAX or GNU long-name header
-  over 64 KiB or more than 12,288 headers. Two archives are parsed at a time;
+  and archive/tar reads a tar through a limit that allows at most 64 KiB of
+  reads to reach each entry (its PAX, global PAX and GNU long-name or
+  long-link headers with their data, any sparse map, and its own header;
+  unread entry data is skipped, not read), so every header it acts on is
+  bounded, whatever sizes the archive declares. Two archives are parsed at a time;
   another waits up to five seconds and is then refused with `503`.
   Served assets keep the flat-artifact posture (global `nosniff`, the
   per-document sandbox, `script-src 'none'` on SVG/XML). Sites have no privacy,
@@ -404,12 +407,13 @@ only in `-tags reply` builds.
 | Response | extra time for an artifact or site file: size at this rate | 16 KiB/s | `--download-min-rate` |
 | Request host | `Host` header length; longer gets `400` before routing | 255 bytes | (code) |
 | Listings | artifacts per `/list` response or `/gallery` page / replies per `/replies` response; more via the `?after=` cursor | 200 / 100 | (code) |
-| Site archives | entries of every kind / zip central directory / tar special header / archives parsed at once (others wait 5s, then `503`) | 4,096 / 2 MiB / 64 KiB / 2 | (code) |
+| Site archives | entries of every kind / zip central directory / tar headers in front of one entry / archives parsed at once (others wait 5s, then `503`) | 4,096 / 2 MiB / 64 KiB / 2 | (code) |
 | TTL | `ttl` value length; longer is `400` before parsing | 64 bytes | (code) |
 | Admission | requests in progress per listener / per client; excess `503` | 256 / 32 | `--max-requests`, `--max-requests-per-client` |
 | Admission | open connections per listener (further ones wait) / per client (further ones are closed) | 1024 / 64 | `--max-conns`, `--max-conns-per-client` |
 | Rendering | table columns; table body cells per document (rows times header width) | 128; 1,000,000 | (code) |
 | Rendering | rendered page size: every byte, meta-header, outline and chrome included, charged as it is produced; over it `413`, nothing stored | 32 MiB | `--render-max-output` |
+| Rendering | markdown document per publish; received into a store scratch file (charged to the quota), then rendered and stored under a render slot | 8 MiB | (code) |
 | Rendering | input lines / headings / list nesting depth; over it `413` | 2,097,152 / 50,000 / 64 | (code) |
 | Rendering | series members a page navigates (its tree and prev/next row); a larger series renders without them | 1,000 | (code) |
 | Rendering | frontmatter rendered as the meta-header: fields / block size / key / value; over it `413` | 256 / 64 KiB / 256 B / 8 KiB | (code) |
@@ -448,7 +452,12 @@ Notes on the limits:
   and lines, headings, list depth and frontmatter fields have the limits in
   the table. Heading ids are capped at 64 bytes, so a long heading cannot make
   every reference to it long. A render's memory stays within a small multiple
-  of the output budget plus the input (tested at the 8 MiB input cap).
+  of the output budget plus the input (tested at the 8 MiB input cap). A
+  `?render=md` body is received into a scratch file in the store while it
+  arrives, so slow or stalled uploads hold neither memory nor a render slot;
+  the document and its rendered page are held in memory only under a render
+  slot, through the store write, so memory for renders is bounded by
+  `--render-concurrency` × (8 MiB + `--render-max-output`).
 - **Order of checks.** Body and write deadlines are set first, so they also
   bound a request refused before routing (a service-worker fetch, an unknown
   `Host`, an ambiguous path). Admission counts only requests that pass those
@@ -498,7 +507,11 @@ Notes on the limits:
   An overwrite or rebake needs room for the new copy while the old one still
   exists; a site publish needs room for its archive plus the extracted files.
   A replaced or deleted file that a download still holds open stays charged
-  until the download ends. Leftovers of a failed site publish or a crash stay
+  until the download ends. `demiplane receive` runs in its own process and
+  cannot see the server's downloads, so it leaves the files of a replaced
+  artifact for the server's sweep to remove; until then they stay on disk and
+  counted, for up to `--sweep-interval` (a minute by default), or until a
+  server next starts. Leftovers of a failed site publish or a crash stay
   charged until startup or the hourly reconcile removes them, an hour after
   they were last written; a cleanup releases only what it actually removed.
   `demiplane receive` runs as a separate process and enforces the quota
