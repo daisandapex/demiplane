@@ -395,8 +395,8 @@ func TestRefusedRequestWithStalledBodyIsClosed(t *testing.T) {
 // rate floor but takes longer than the response timeout still gets its 201.
 func TestSlowValidUploadOutlastsResponseTimeout(t *testing.T) {
 	s, st := limitServer(t, Config{Requests: RequestLimits{
-		BodyTimeout:     time.Second,
-		UploadMinRate:   1000,
+		BodyTimeout:   time.Second,
+		UploadMinRate: 1000,
 		// The body takes three seconds, three times the response timeout; the
 		// second left after it is room for the store write under load.
 		ResponseTimeout: time.Second,
