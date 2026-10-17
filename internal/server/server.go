@@ -249,11 +249,11 @@ func (s *Server) ContentHandler() http.Handler {
 // wrapListener is the middleware every listener's handler sits behind, in
 // order: body and write deadlines (before anything can answer, so refusals
 // are bounded too), the baseline headers and the service-worker refusal, the
-// accepted-host policy, path canonicalization, then admission, which counts
+// Host length cap and the accepted-host policy, path canonicalization, then admission, which counts
 // only requests that will be routed. The cross-origin guard and the mux are
 // inside. One call per listener: admission counts are per listener.
 func (s *Server) wrapListener(guarded http.Handler) http.Handler {
-	return s.withRequestDeadlines(withSecurityHeaders(s.hostPolicy(canonicalPaths(s.withAdmission(guarded)))))
+	return s.withRequestDeadlines(withSecurityHeaders(boundHost(s.hostPolicy(canonicalPaths(s.withAdmission(guarded))))))
 }
 
 // Handler returns a single combined handler that serves BOTH the control plane
@@ -1311,7 +1311,12 @@ func (s *Server) requestBase(r *http.Request) string {
 // Legitimate Host headers pass through untouched; a crafted one cannot smuggle
 // spaces, quotes, angle brackets, or control characters into the plain-text and
 // HTML surfaces that reflect the request host (Shannon finding demiplane-6y9).
+// The result is at most maxHostLen bytes; boundHost already refuses longer
+// Hosts, so the cut only guards callers outside the listener chain.
 func sanitizeHost(host string) string {
+	if len(host) > maxHostLen {
+		host = host[:maxHostLen]
+	}
 	return strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':

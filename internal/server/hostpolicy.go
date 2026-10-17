@@ -104,6 +104,24 @@ func hostAllowed(rules []hostRule, hostport string, tls bool) bool {
 	return false
 }
 
+// maxHostLen bounds the Host header (a DNS name is at most 253 bytes; the
+// rest allows a port). The Host is repeated in every URL demiplane advertises
+// when no base URL is configured, so an unbounded one would multiply each
+// listing's size.
+const maxHostLen = 255
+
+// boundHost refuses a request whose Host is longer than maxHostLen, before
+// the host policy and routing.
+func boundHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.Host) > maxHostLen {
+			http.Error(w, "host too long", http.StatusBadRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // hostPolicy refuses requests for a Host outside the accepted list.
 func (s *Server) hostPolicy(next http.Handler) http.Handler {
 	if s.hostRules == nil {
