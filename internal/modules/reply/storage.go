@@ -59,7 +59,10 @@ func openReplyStore(dir string) (*replyStore, error) {
 	dbPath := filepath.Join(dir, "replies.db")
 	// _txlock=immediate takes the write lock at BEGIN, so the count that
 	// admits a reply and the insert happen under one lock.
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate")
+	// busy_timeout matches core's store (30s): SQLite's busy wait is not first
+	// come first served, so in a burst a writer can wait several seconds, and
+	// waiting is better than failing a submission with a 500.
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(30000)&_pragma=journal_mode(WAL)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("open replies db: %w", err)
 	}
