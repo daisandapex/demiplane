@@ -93,9 +93,12 @@ func TestUnsafeNoSandboxKeepsWorkerBlock(t *testing.T) {
 	}
 }
 
-// TestServiceWorkerScriptFetchRefused: browsers mark a service-worker script
-// fetch with "Service-Worker: script"; no URL on either plane may serve one.
-func TestServiceWorkerScriptFetchRefused(t *testing.T) {
+// TestServiceWorkerScriptFetchGetsKillSwitch: browsers mark a service-worker
+// script fetch with "Service-Worker: script". Every URL on either plane, the
+// stored script included, answers it with the fixed kill-switch worker (so an
+// existing registration's update check replaces and removes it), never with
+// stored bytes. Every path form gets it, before canonicalization.
+func TestServiceWorkerScriptFetchGetsKillSwitch(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -111,8 +114,28 @@ func TestServiceWorkerScriptFetchRefused(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ts := httptest.NewServer(h)
 			defer ts.Close()
-			if resp := getWith(t, ts.URL+"/worker", map[string]string{"Service-Worker": "script"}); resp.StatusCode != http.StatusForbidden {
-				t.Errorf("service-worker fetch = %d, want 403", resp.StatusCode)
+			for _, p := range []string{"/worker", "/missing.js", "/a/../sw.js", "/a%2Fb.js"} {
+				req, _ := http.NewRequest(http.MethodGet, ts.URL+p, nil)
+				req.Header.Set("Service-Worker", "script")
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusOK || string(body) != killSwitchWorker {
+					t.Fatalf("%s: service-worker fetch = %d %q, want 200 with the kill switch", p, resp.StatusCode, body)
+				}
+				for k, want := range map[string]string{
+					"Content-Type":            "application/javascript; charset=utf-8",
+					"Cache-Control":           "no-store",
+					"Content-Security-Policy": "default-src 'none'",
+					"Service-Worker-Allowed":  "/",
+				} {
+					if got := resp.Header.Get(k); got != want {
+						t.Errorf("%s: %s = %q, want %q", p, k, got, want)
+					}
+				}
 			}
 		})
 	}

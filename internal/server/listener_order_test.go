@@ -65,7 +65,8 @@ func TestListenerOrderRefusalsBeforeAdmission(t *testing.T) {
 		{"routed request", "/ok", nil, http.StatusServiceUnavailable},
 		{"non-canonical path", "/a/../ok", nil, http.StatusTemporaryRedirect},
 		{"encoded separator", "/a%2Fb", nil, http.StatusBadRequest},
-		{"service worker on a non-canonical path", "/a/../sw.js", []string{"Service-Worker: script"}, http.StatusForbidden},
+		{"service worker on a non-canonical path", "/a/../sw.js", []string{"Service-Worker: script"}, http.StatusOK},
+		{"service worker on an ambiguous path", "/a%2Fsw.js", []string{"Service-Worker: script"}, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, err := net.Dial("tcp", ts.Listener.Addr().String())

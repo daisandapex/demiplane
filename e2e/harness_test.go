@@ -103,6 +103,9 @@ type serverOpts struct {
 	Token  string // empty = no auth token configured (open instance)
 	Browse bool
 	Args   []string // extra CLI args appended verbatim
+	// ContentPort fixes the content listener's port (0 = an ephemeral one), for
+	// a test that needs the same origin across server restarts.
+	ContentPort int
 }
 
 // testServer wraps a real `demiplane serve` subprocess bound to two ephemeral
@@ -145,9 +148,12 @@ func startServerWithStoreDir(t *testing.T, storeDir string, opts serverOpts) *te
 	t.Helper()
 
 	controlPort := freePort(t)
-	contentPort := freePort(t)
-	for contentPort == controlPort { // vanishingly unlikely, but be certain
+	contentPort := opts.ContentPort
+	if contentPort == 0 {
 		contentPort = freePort(t)
+	}
+	for contentPort == controlPort { // vanishingly unlikely, but be certain
+		controlPort = freePort(t)
 	}
 	controlURL := "http://127.0.0.1:" + strconv.Itoa(controlPort)
 	contentURL := "http://127.0.0.1:" + strconv.Itoa(contentPort)

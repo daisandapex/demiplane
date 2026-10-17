@@ -4,6 +4,7 @@
 package server
 
 import (
+	"io"
 	"mime"
 	"net/http"
 	"strings"
@@ -169,15 +170,51 @@ func mediaType(contentType string) string {
 	return ct
 }
 
-// refuseServiceWorkers rejects every service-worker script fetch. Browsers mark
-// those with "Service-Worker: script", and no demiplane URL is meant to be one.
-// It is the network-side half of the service-worker defence: it holds even if a
-// page somehow ran unsandboxed on the content origin, and it also fails the
-// update check of a worker registered before this defence existed.
+// killSwitchWorker is the only service-worker script demiplane serves. It
+// installs at once, deletes every Cache Storage cache, unregisters its own
+// registration and reloads the windows it controls, which then load straight
+// from the server. It has no fetch handler, so it never answers a request.
+// The bytes are fixed; nothing in them comes from the request.
+const killSwitchWorker = `self.addEventListener("install", function () { self.skipWaiting(); });
+self.addEventListener("activate", function (event) {
+  event.waitUntil((async function () {
+    try {
+      var keys = await caches.keys();
+      await Promise.all(keys.map(function (k) { return caches.delete(k); }));
+    } catch (e) {}
+    await self.registration.unregister();
+    var windows = await self.clients.matchAll({ type: "window" });
+    windows.forEach(function (c) { c.navigate(c.url).catch(function () {}); });
+  })());
+});
+`
+
+// refuseServiceWorkers answers every service-worker script fetch (browsers
+// mark those with "Service-Worker: script", and no demiplane URL is meant to
+// be one) with killSwitchWorker instead of the requested URL. It is the
+// network-side half of the service-worker defence, and it holds even if a page
+// ran unsandboxed on the content origin. A worker registered before this
+// defence existed is removed by it: the browser's update check fetches the
+// registered script URL with that header, gets the kill switch, installs it
+// over the old worker and the kill switch unregisters itself. A refusal would
+// not do that, because a failed update keeps the old worker. A new
+// registration attempt gets the same script and removes itself the same way.
+//
+// Service-Worker-Allowed: / lets the replacement cover whatever scope the old
+// registration had, so the update cannot fail on the scope check. The worker's
+// own CSP gives it no network access.
 func refuseServiceWorkers(w http.ResponseWriter, r *http.Request) bool {
 	if r.Header.Get("Service-Worker") == "" {
 		return false
 	}
-	http.Error(w, "service workers are not permitted", http.StatusForbidden)
+	h := w.Header()
+	h.Set("Content-Type", "application/javascript; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	h.Set("Content-Security-Policy", "default-src 'none'")
+	h.Set("Service-Worker-Allowed", "/")
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		_, _ = io.WriteString(w, killSwitchWorker)
+	}
 	return true
 }
