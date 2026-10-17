@@ -333,13 +333,23 @@ func (w *SiteWriter) Commit() (int, error) {
 	}
 	w.done = true
 	s.unregisterStaging(filepath.Base(w.tmpDir))
-	s.endSiteTransition(w.charged, 0, w.entries, 0)
+	// The replaced tree is removed and unregistered inside the same
+	// transition, so no recount sees it registered (skipped) while its charge
+	// is live, or its survivors before they are unregistered.
+	c := change{settled: w.charged, settledEntries: w.entries}
 	if backup != "" {
-		if err := s.removeLiveTree(backup); err != nil {
+		if beforeBackupRemove != nil {
+			beforeBackupRemove()
+		}
+		r, err := s.removeTreeCounted(backup)
+		if err != nil {
 			log.Printf("store: could not remove a replaced site tree, will retry: %s", logsafe.Err(err))
 		}
+		rc := r.change()
+		c.removed, c.removedEntries = rc.removed, rc.removedEntries
 		s.unregisterStaging(filepath.Base(backup))
 	}
+	s.endChange(c)
 	return w.count, nil
 }
 
@@ -366,6 +376,10 @@ func (w *SiteWriter) Abort() error {
 	w.charged, w.entries = 0, 0
 	return err
 }
+
+// beforeBackupRemove is a test hook run by Commit before it removes the
+// replaced tree.
+var beforeBackupRemove func()
 
 // beforeSiteRemove is a test hook run by DeleteSite before it removes the tree.
 var beforeSiteRemove func()
