@@ -57,8 +57,9 @@ access logs, proxy logs, and browser history. The token rides the
 
 Store the request body and return the artifact URL. Auth: bearer (when
 configured). Body: raw bytes of any type, or `multipart/form-data` (the first
-file part is taken). The body streams to disk with no size limit unless the
-operator set `--max-upload`.
+file part is taken). The body streams to disk, capped at `--max-upload` (default
+100 MiB; `0` lifts the cap). It must also arrive at `--upload-min-rate` or faster
+after a `--body-timeout` grace, or the request gets `408`.
 
 ### Query parameters
 

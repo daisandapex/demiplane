@@ -220,7 +220,7 @@ only in `-tags reply` builds.
 | View password | failed attempts per artifact, per client, in all; past it `429` without hashing | 10, 20, 120 a minute (bursts 10, 10, 30) | (code) |
 | Request body | non-upload body must arrive within; uploads: grace and longest stall | 30s | `--body-timeout` |
 | Request body | upload average rate after the grace; slower gets `408` | 16 KiB/s | `--upload-min-rate` |
-| Response | write deadline per response | 60s | `--response-timeout` |
+| Response | write deadline per response; an upload's starts at its longest allowed body time plus this, and tightens to this once the body is read | 60s | `--response-timeout` |
 | Response | extra time for an artifact or site file: size at this rate | 16 KiB/s | `--download-min-rate` |
 | Admission | requests in progress per listener / per client; excess `503` | 256 / 32 | `--max-requests`, `--max-requests-per-client` |
 | Admission | open connections per listener (further ones wait) / per client (further ones are closed) | 1024 / 64 | `--max-conns`, `--max-conns-per-client` |
