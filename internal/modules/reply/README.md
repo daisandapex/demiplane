@@ -23,7 +23,7 @@ reply routes, no `reply`/`replies` reserved slugs.
 
 | Action | Endpoint | Gate |
 |---|---|---|
-| Submit a reply | `POST /reply/{slug}` | **viewer** — open to anyone who can view the artifact, exactly like `GET /{slug}`: the artifact's view password if it has one. Only for artifacts published with `?reply=form` or `?reply=question`. |
+| Submit a reply | `POST /reply/{slug}` | **viewer**: open to anyone who can view the artifact, exactly like `GET /{slug}`, with the artifact's view password if it has one. Only for artifacts published with `?reply=form` or `?reply=question`. |
 | Show the reply form | `GET /reply/{slug}` | viewer, same as submit |
 | List / triage replies | `GET /replies` | **bearer publish-auth** (same token as `POST /publish`, `GET /list`) |
 | Mark a reply read | `POST /replies/{id}/ack` | bearer publish-auth |
@@ -31,7 +31,7 @@ reply routes, no `reply`/`replies` reserved slugs.
 No new auth primitive: submitting is a *view*-level act (network reachability,
 plus the view password through core's rate-limited check), reading the
 collected replies is a *publish*-level act (bearer token). On an open instance
-(no token) the read side is open too — same as core's `/list`.
+(no token) the read side is open too, same as core's `/list`.
 
 Replies are **opt-in per artifact**: publish with `?reply=form` (this module's
 form, page unchanged) or `?reply=question` (the inline box below). The choice is
@@ -76,7 +76,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 ### `POST /replies/{id}/ack` — mark read *(auth)*
 `204` on success, `404` for an unknown id. Idempotent triage of a pending queue.
 
-### `POST /answer/{slug}` — same-origin answer submit (content plane, viewer)
+### `POST /answer/{slug}`: same-origin answer submit (content plane, viewer)
 The **content-origin** submit path for the inline reply box (below). It records a
 single free-text answer as a **`comment`**-kind reply and returns a
 **server-rendered** result page: `201` "✓ Recorded" only after the answer is
@@ -135,7 +135,7 @@ Dispatch runs on a bounded pool: `reply_hook_workers` events at once (default
 its place in the pool **before** the reply is stored; a full pool refuses the
 submission with `503` and records nothing, so a stored reply's hook is never
 dropped. Once admitted, a failing or slow hook is logged and can never fail,
-delay, or roll back the reply write — the viewer's honest confirmation is
+delay, or roll back the reply write; the viewer's honest confirmation is
 independent of hook fate. A malformed value is a hard startup error, like any
 other config key.
 

@@ -40,7 +40,7 @@ const PasswordChallenge = `Basic realm="demiplane", charset="UTF-8"`
 
 // Host is the capability surface core hands to a module at startup. It is an
 // interface (not the concrete *server.Server) so a module can reach only these
-// six methods — the entire blast radius of any module is reviewing its use of
+// six methods; the entire blast radius of any module is reviewing its use of
 // this surface. Implemented by *server.Server.
 type Host interface {
 	// Store is the shared artifact content store.

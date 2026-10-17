@@ -483,7 +483,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	// artifact, whose slug is never offered to a replier.
 	mode := replyMode(q)
 	if mode != "" && private {
-		http.Error(w, "?reply cannot be combined with ?private — a private capability page cannot collect replies", http.StatusBadRequest)
+		http.Error(w, "?reply cannot be combined with ?private: a private capability page cannot collect replies", http.StatusBadRequest)
 		return
 	}
 	// An inline reply box (?reply=question) only makes sense baked into a

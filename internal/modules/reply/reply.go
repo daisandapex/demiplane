@@ -255,7 +255,7 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 // Honesty is structural: this handler renders a "recorded" confirmation ONLY on
 // the success branch, AFTER the row is durably inserted. Every failure path —
 // unknown/private/disabled slug, missing password, rate limit, empty answer,
-// storage down, a limit reached — renders an explicit "not recorded" page with
+// storage down, a limit reached: renders an explicit "not recorded" page with
 // the matching status. Because the browser simply navigates to whatever this
 // returns (no JS), the viewer cannot be shown success on a failure. Kind is
 // fixed to "comment": a question answer is a comment-kind reply (Approve/Defer
