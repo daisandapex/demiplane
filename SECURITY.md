@@ -396,7 +396,7 @@ only in `-tags reply` builds.
 
 | Surface | Limit | Default | Knob |
 |---|---|---|---|
-| View password | KDF runs at once; more wait up to 5s, then `503` | half the cores, 1 to 4 | `--password-concurrency` |
+| View password | KDF runs at once, password checks and publish-time hashing together; more wait up to 5s, then `503` | half the cores, 1 to 4 | `--password-concurrency` |
 | View password | one client's failed attempts on one artifact / on any artifact; past it `429` without hashing | 10 / 20 a minute (bursts 10, 10) | `--password-rate-client-target`, `--password-rate-client` |
 | View password | all clients' failed attempts on one artifact / in all; once spent, clients that failed recently get `429` without hashing | 10 / 120 a minute (bursts 10, 30) | `--password-rate-target`, `--password-rate-global` |
 | Live reload | streams per client on one artifact / per client in all; past it `503` | 2 / 16 | `--live-max-per-client-slug`, `--live-max-per-client` |
@@ -408,7 +408,8 @@ only in `-tags reply` builds.
 | Response | extra time for an artifact or site file: size at this rate | 16 KiB/s | `--download-min-rate` |
 | Request host | `Host` header length; longer gets `400` before routing | 255 bytes | (code) |
 | Listings | artifacts per `/list` response or `/gallery` page / replies per `/replies` response; more via the `?after=` cursor | 200 / 100 | (code) |
-| Browse index | artifacts read to fill the table / series members counted | 1,000 / 100 (shown as "100+") | (code) |
+| Listings | index entries one `/list` or `/gallery` page examines (expired ones skipped) | 1,201 | (code) |
+| Browse index | index entries examined for families / per series counted (a series is counted to 100, shown as "100+") | 1,000 / 404 | (code) |
 | Site archives | entries of every kind / zip central directory / tar headers in front of one entry / archives parsed at once (others wait 5s, then `503`) | 4,096 / 2 MiB / 64 KiB / 2 | (code) |
 | TTL | `ttl` value length; longer is `400` before parsing | 64 bytes | (code) |
 | Admission | requests in progress per listener / per client; excess `503` | 256 / 32 | `--max-requests`, `--max-requests-per-client` |
@@ -443,6 +444,9 @@ Notes on the limits:
   a rate; use a strong password. Behind a proxy, set `--trusted-proxy`, or
   every user shares the proxy's budget. Reply routes, the `?live` wrapper and
   the live-reload stream (including its re-checks) run the same check.
+  Setting a password at publish runs the same KDF under the same concurrency
+  limit, so password publishes cannot take more cores than password checks;
+  an SSH directory sync hashes its password once.
 - **Rendering.** Every byte a render produces goes through one budgeted
   writer, charged before it is appended: the body, the frontmatter
   meta-header, the outline and the page chrome share one budget, and the page

@@ -134,7 +134,15 @@ All notable changes to demiplane are documented here. The format follows
   a bounded number of index rows however many artifacts the instance holds:
   they seek on indexes over public artifacts, the browse index scans at most
   1,000 artifacts and counts a series only to 100, and the queries end with
-  the request.
+  the request. Each read bounds the index entries it examines, not the rows
+  it returns, so a large batch of expired artifacts awaiting the sweeper no
+  longer makes each request walk it; a page that stops early may be short,
+  or empty, and carries a cursor to continue. `GET /` no longer counts the
+  instance's artifacts.
+- **Setting a password shares the KDF limit.** Hashing a view password at
+  publish takes the same bounded KDF slots as password checks: concurrent
+  password publishes wait up to 5 seconds for a slot and otherwise get `503`.
+  An SSH directory sync hashes its password once per session.
 - **Site archives are checked before they are parsed.** A zip's central
   directory is validated against its end record (at most 4,096 entries and
   2 MiB) and read through a limit, archive/tar reads a tar through a 64 KiB
@@ -282,9 +290,12 @@ All notable changes to demiplane are documented here. The format follows
   too.
 - **Upgrade note: `GET /replies` is paged** the same way: at most 100
   replies a response, with `next` to pass back as `?after=`.
-- **The browse index shows a large series as `(100+)`** and no longer
-  states the total number of artifacts; its footer reads "More in the
-  gallery".
+- **The browse index shows a large series as `(100+)`,** or `(N+)` when its
+  size was not fully counted, and the landing no longer states the total
+  number of artifacts; the browse footer reads "More in the gallery".
+- **Upgrade note: a `/list` page can be short.** A page holds at most 200
+  artifacts but can hold fewer, or none, while `next` is present; follow
+  `next` until it is absent rather than stopping at a short page.
 - **Upgrade note: `GET /list` is paged.** A response holds at most 200
   artifacts; a client that reads one response as the whole list must follow
   `next` (`?after=<next>`) until it is absent. `count` now counts the
