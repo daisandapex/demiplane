@@ -145,17 +145,33 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 	if err := st.ctxErr(); err != nil {
 		return nil, err
 	}
-	body := src
+	// The render holds one string copy of the input (two while CRLF is
+	// folded) and reads every line out of it by offset.
+	text := string(src)
+	if strings.Contains(text, "\r\n") {
+		text = strings.ReplaceAll(text, "\r\n", "\n")
+	}
+	l, err := splitLines(st, text)
+	if err != nil {
+		return nil, err
+	}
 
 	// Frontmatter: a leading `---`-fenced key:value block. When the meta-header is
 	// on we render it below the title; when off (or always, if it's there) we
 	// strip it so the raw fence never leaks into the body. No frontmatter → no-op.
+	from := 0
 	var metaHTML string
 	var metaNeedsScript bool
-	if fields, rest, ok := parseFrontmatter(body); ok {
-		body = rest
+	if close := frontmatterEnd(l); close > 0 {
+		from = close + 1
 		if opts.MetaHeader {
-			metaHTML, metaNeedsScript = metaHeader(fields)
+			fields, err := parseFrontmatter(st, l, close)
+			if err != nil {
+				return nil, err
+			}
+			if metaHTML, metaNeedsScript, err = metaHeader(st, fields); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -163,8 +179,12 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 	// a duplicate giant title in the body. Without a header, the H1 stays put.
 	title := html.EscapeString(opts.Title)
 	if opts.Header {
-		if h1, rest := splitFirstH1(body); h1 != "" {
-			title, body = h1, rest
+		h1, line, err := firstH1(st, l, from)
+		if err != nil {
+			return nil, err
+		}
+		if line >= 0 {
+			title, l.hole = h1, line
 		}
 	}
 	if title == "" {
@@ -217,40 +237,35 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 		css += printCSS
 	}
 
-	bodyHTML, err := renderBlocks(st, string(body))
-	if err != nil {
-		return nil, err
-	}
-	if opts.Header {
-		// The first body paragraph is the document's dek. Tag it explicitly so the
-		// lead treatment targets .lead, not a positional selector that breaks the
-		// moment a frontmatter meta-header is injected ahead of the body.
-		bodyHTML = tagLead(bodyHTML)
-	}
-
 	// Masthead pages take the F layout (flayout.go): the facts move from the
 	// column into the rail, and a series family gets the tree. A --css sheet
 	// owns the look, so its pages keep the plain masthead and single column;
 	// F would hand an operator's sheet a grid, rail and tree it never styled.
 	fLayout := opts.Header && opts.CSS == ""
+	// The body tags its own lead paragraph (the dek) and, on F pages, the
+	// paragraphs that open with inline code, and collects the outline as it
+	// writes headings, so no finished HTML is rewritten or rescanned.
+	st.lead = opts.Header
+	st.codeFirst = fLayout
+	st.collectOutline = fLayout
+	body := st.newOut()
+	if err := renderBlocks(st, l, from, body); err != nil {
+		return nil, err
+	}
 	if opts.Header && !fLayout {
 		css += mastheadCSS
 	}
 	var rail, tree, bodyClass string
 	if fLayout {
 		css += fCSS + fPrintCSS
-		bodyHTML = markCodeFirst(bodyHTML)
-		if err := st.output(len(bodyHTML) + len(metaHTML)); err != nil {
-			return nil, err
-		}
-		rail, err = railHTML(st, len(bodyHTML)+len(metaHTML), metaHTML, outlineFrom(bodyHTML))
+		rail, err = railHTML(st, metaHTML, st.outline)
 		if err != nil {
 			return nil, err
 		}
 		if metaHTML != "" {
 			css += fMetaCSS
 		}
-		metaHTML = ""
+		metaHTML = "" // it lives in the rail now
 		if fam := seriesFamily(opts.Slug, opts.Siblings); fam != nil {
 			tree = treeHTML(opts.Slug, fam, opts.ContentBase)
 		}
@@ -263,66 +278,125 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 		}
 	}
 
-	var b strings.Builder
-	b.WriteString(docHead(css, titleText, themeName, contract, toggle, bodyClass))
+	// The page is a list of parts. Chrome is charged as it is added; the body,
+	// meta-header and rail were charged as they were written. The parts are
+	// copied once, into the finished document.
+	pg := page{st: st}
+	pg.add(docHead(css, titleText, themeName, contract, toggle, bodyClass))
 	switch {
 	case fLayout:
-		b.WriteString(topbar(themeName, toggle, tree != ""))
-		b.WriteString(`<div class="fgrid">` + "\n")
-		b.WriteString(tree)
-		b.WriteString(`<header class="dochead"><h1 class="doctitle">` + title + "</h1></header>\n")
+		pg.add(topbar(themeName, toggle, tree != ""))
+		pg.add(`<div class="fgrid">` + "\n")
+		pg.add(tree)
+		pg.add(`<header class="dochead"><h1 class="doctitle">` + title + "</h1></header>\n")
 	case opts.Header:
-		b.WriteString(masthead(title, themeName, toggle))
+		pg.add(masthead(title, themeName, toggle))
 	}
-	b.WriteString("<main class=\"wrap\">\n")
-	b.WriteString(metaHTML)
-	b.WriteString(bodyHTML)
+	pg.add("<main class=\"wrap\">\n")
+	pg.keep(metaHTML)
+	pg.keep(body.String())
 	if opts.ReplySlug != "" {
-		b.WriteString(replyBox(opts.ReplySlug, opts.ReplyNext, opts.ReplyToken))
+		pg.add(replyBox(opts.ReplySlug, opts.ReplyNext, opts.ReplyToken))
 	}
 	if opts.Colophon {
-		b.WriteString(colophon(opts))
+		pg.colophon = len(pg.parts)
+		pg.add(colophon(opts))
 	}
-	b.WriteString("</main>\n")
+	pg.add("</main>\n")
 	if fLayout {
-		b.WriteString(rail)
-		b.WriteString("</div>\n")
+		pg.keep(rail)
+		pg.add("</div>\n")
 	}
 	if opts.Footer {
 		if fLayout {
-			b.WriteString(`<footer class="docfoot"><div class="wrap"><div class="fcell">` +
+			pg.add(`<footer class="docfoot"><div class="wrap"><div class="fcell">` +
 				footerInner(opts.FooterLink) + "</div></div></footer>\n")
 		} else {
-			b.WriteString(footerHTML(opts.FooterLink))
+			pg.add(footerHTML(opts.FooterLink))
 		}
 	}
 	if opts.Header {
-		b.WriteString(docChromeScript)
+		pg.add(docChromeScript)
 	}
 	if fLayout {
-		b.WriteString(fScript)
+		pg.add(fScript)
 	}
 	if metaNeedsScript {
-		b.WriteString(tstampScript)
+		pg.add(tstampScript)
 	}
-	b.WriteString(docTail)
-	if err := st.output(b.Len()); err != nil {
-		return nil, err
-	}
-	// The colophon's size sentinel is now resolved against the finished document
-	// length — the exact byte count the store will record for this artifact.
-	return []byte(fillSize(b.String())), nil
+	pg.add(docTail)
+	return pg.finish()
 }
 
-// splitFirstH1 returns the inline-rendered text of the document's first level-1
-// heading and src with that heading line removed, so the title can move into the
-// masthead without being duplicated in the body. Headings inside fenced code are
-// ignored. If there is no H1, it returns "" and the original src unchanged.
-func splitFirstH1(src []byte) (titleHTML string, rest []byte) {
-	lines := strings.Split(strings.ReplaceAll(string(src), "\r\n", "\n"), "\n")
+// page collects a rendered document's parts in order.
+type page struct {
+	st       *state
+	parts    []string
+	colophon int // index of the colophon part (it carries the size), or 0
+}
+
+// add appends chrome, charging it to the budget.
+func (p *page) add(s string) {
+	if s != "" && p.st.charge(len(s)) == nil {
+		p.parts = append(p.parts, s)
+	}
+}
+
+// keep appends a part an out already charged.
+func (p *page) keep(s string) {
+	if s != "" {
+		p.parts = append(p.parts, s)
+	}
+}
+
+// finish copies the parts into the document, in one allocation of its exact
+// size. The colophon's size sentinel is resolved against the finished length,
+// the exact byte count the store will record for this artifact: the length
+// with the sentinel removed, plus the length of the size string itself.
+func (p *page) finish() ([]byte, error) {
+	if p.st.err != nil {
+		return nil, p.st.err
+	}
+	total := 0
+	for _, s := range p.parts {
+		total += len(s)
+	}
+	size, at := "", -1
+	if p.colophon > 0 && p.colophon < len(p.parts) {
+		if i := strings.Index(p.parts[p.colophon], sizeSentinel); i >= 0 {
+			base := total - len(sizeSentinel)
+			size = humanSize(int64(base))
+			size = humanSize(int64(base + len(size))) // one refinement for the number's own bytes
+			total, at = base+len(size), i
+		}
+	}
+	if err := p.st.output(total); err != nil {
+		return nil, err
+	}
+	doc := make([]byte, 0, total)
+	for k, s := range p.parts {
+		if k == p.colophon && at >= 0 {
+			doc = append(doc, s[:at]...)
+			doc = append(doc, size...)
+			doc = append(doc, s[at+len(sizeSentinel):]...)
+			continue
+		}
+		doc = append(doc, s...)
+	}
+	return doc, nil
+}
+
+// firstH1 finds the document's first level-1 heading at or after line from,
+// ignoring headings inside fenced code, and returns its inline-rendered text
+// and raw line index (-1 when there is none). The heading is held to the
+// output budget before it is formatted.
+func firstH1(st *state, l *lines, from int) (titleHTML string, line int, err error) {
 	inFence := false
-	for i, ln := range lines {
-		t := strings.TrimSpace(ln)
+	for i := from; i < l.rawLen(); i++ {
+		if err := st.tick(); err != nil {
+			return "", -1, err
+		}
+		t := strings.TrimSpace(l.raw(i))
 		if strings.HasPrefix(t, "```") {
 			inFence = !inFence
 			continue
@@ -331,11 +405,13 @@ func splitFirstH1(src []byte) (titleHTML string, rest []byte) {
 			continue
 		}
 		if m := reHeading.FindStringSubmatch(t); m != nil && len(m[1]) == 1 {
-			kept := append(append([]string{}, lines[:i]...), lines[i+1:]...)
-			return inline(m[2]), []byte(strings.Join(kept, "\n"))
+			if err := st.inlineFits(m[2]); err != nil {
+				return "", -1, err
+			}
+			return inline(m[2]), i, nil
 		}
 	}
-	return "", src
+	return "", -1, nil
 }
 
 // masthead renders the plain sticky title bar a --css page keeps in place of
@@ -367,17 +443,6 @@ func masthead(titleHTML, serverTheme string, toggle bool) string {
 // Used to derive the element <title> from a masthead title that may carry inline
 // markup; HTML entities in the text are left escaped (valid title content).
 func stripTags(s string) string { return reTag.ReplaceAllString(s, "") }
-
-// tagLead marks the first paragraph of rendered body HTML as the lead/dek by
-// adding class="lead", but only when the document actually leads with a
-// paragraph (not a heading, list, or table). The renderer knows the block
-// structure, so this replaces the fragile positional CSS selector.
-func tagLead(bodyHTML string) string {
-	if strings.HasPrefix(bodyHTML, "<p>") {
-		return strings.Replace(bodyHTML, "<p>", `<p class="lead">`, 1)
-	}
-	return bodyHTML
-}
 
 // headingText reduces a heading's raw markdown to the plain text used for its
 // slug id and permalink aria-label: it runs the same inline pipeline the body
@@ -573,50 +638,91 @@ const replyBoxCSS = `
 // Body is for trusted, operator-shipped documents and applies no limits; the
 // publish path uses Render.
 func Body(src []byte) string {
-	out, _ := renderBlocks(newState(context.Background(), unlimited), string(src))
-	return out
+	st := newState(context.Background(), unlimited)
+	l, _ := splitLines(st, strings.ReplaceAll(string(src), "\r\n", "\n"))
+	o := st.newOut()
+	_ = renderBlocks(st, l, 0, o)
+	return o.String()
 }
 
-// renderBlocks converts markdown block structure to HTML. Heading ids come from
-// st.slugs, scoped per render, so ids are stable for a given source and
-// independent across documents.
-func renderBlocks(st *state, src string) (string, error) {
-	lines := strings.Split(strings.ReplaceAll(src, "\r\n", "\n"), "\n")
-	var out strings.Builder
-	var para []string
-	// paraErr holds a paragraph refused by inlineFits; it is returned at the
-	// top of the next iteration (or after the loop).
-	var paraErr error
+// textRun accumulates the lines of one inline block (a paragraph, a quote, a
+// list item's paragraph) joined by spaces, holding the formatted size of the
+// whole run to the remaining output budget as each line arrives, so the run is
+// never longer than the budget allows it to render to.
+type textRun struct {
+	st    *state
+	b     strings.Builder
+	n     int // lines in the run
+	upper int // inlineUpper of the run
+}
+
+// slack covers the tags a block adds around its inline text.
+const slack = 64
+
+func (r *textRun) add(s string) error {
+	u := inlineUpper(s) + 1
+	if err := r.st.fits(r.upper + u + slack); err != nil {
+		return err
+	}
+	if r.n > 0 {
+		r.b.WriteByte(' ')
+	}
+	r.b.WriteString(s)
+	r.n++
+	r.upper += u
+	return nil
+}
+
+// take returns the run's text and empties it.
+func (r *textRun) take() string {
+	s := r.b.String()
+	r.b.Reset()
+	r.n, r.upper = 0, 0
+	return s
+}
+
+func (r *textRun) empty() bool { return r.n == 0 }
+
+// renderBlocks converts markdown block structure to HTML, from line from on,
+// writing into o. Heading ids come from st.slugs, scoped per render, so ids
+// are stable for a given source and independent across documents.
+func renderBlocks(st *state, l *lines, from int, o *out) error {
+	para := textRun{st: st}
 
 	flushPara := func() {
-		if len(para) == 0 || paraErr != nil {
+		if para.empty() {
 			return
 		}
-		text := strings.Join(para, " ")
-		para = para[:0]
-		if paraErr = st.inlineFits(text, out.Len()); paraErr != nil {
-			return
+		h := inline(para.take())
+		var cls string
+		if st.lead && st.blocks == 0 {
+			cls = "lead"
 		}
-		out.WriteString("<p>")
-		out.WriteString(inline(text))
-		out.WriteString("</p>\n")
+		if st.codeFirst && strings.HasPrefix(h, "<code>") {
+			cls = strings.TrimSpace(cls + " code-first")
+		}
+		if cls == "" {
+			o.WriteString("<p>")
+		} else {
+			o.WriteString(`<p class="` + cls + `">`)
+		}
+		o.WriteString(h)
+		o.WriteString("</p>\n")
+		st.blocks++
 	}
 
-	for i := 0; i < len(lines); i++ {
-		// Every block is checked against the output cap once it is written, and
-		// the context is checked as lines are consumed. A block that can expand
-		// a lot (inline text, a code block) is also held to the remaining
-		// budget before or while it is produced.
-		if paraErr != nil {
-			return "", paraErr
-		}
-		if err := st.output(out.Len()); err != nil {
-			return "", err
+	n := l.n()
+	for i := from; i < n; i++ {
+		// Every write is charged as it happens; the first refusal is sticky
+		// and ends the render here. The context is checked as lines are
+		// consumed.
+		if st.err != nil {
+			return st.err
 		}
 		if err := st.tick(); err != nil {
-			return "", err
+			return err
 		}
-		line := lines[i]
+		line := l.at(i)
 		trimmed := strings.TrimSpace(line)
 
 		switch {
@@ -624,55 +730,73 @@ func renderBlocks(st *state, src string) (string, error) {
 			flushPara()
 			// The fence info-string names the language (```go); its first token
 			// selects the syntax highlighter (highlight.go). Collect until close.
+			// The code is held to the remaining budget as it is collected (its
+			// escaped output is never shorter than it).
 			lang := strings.TrimSpace(trimmed[3:])
-			var code []string
-			for i++; i < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[i]), "```"); i++ {
+			var code strings.Builder
+			first := true
+			for i++; i < n && !strings.HasPrefix(strings.TrimSpace(l.at(i)), "```"); i++ {
 				if err := st.tick(); err != nil {
-					return "", err
+					return err
 				}
-				code = append(code, lines[i])
+				ln := l.at(i)
+				if err := st.fits(code.Len() + len(ln) + 1); err != nil {
+					return err
+				}
+				if !first {
+					code.WriteByte('\n')
+				}
+				first = false
+				code.WriteString(ln)
 			}
-			joined := strings.Join(code, "\n")
-			out.WriteString("<pre><code")
+			o.WriteString("<pre><code")
 			if canon := canonLang(lang); canon != "" {
-				out.WriteString(` class="language-` + canon + `"`)
+				o.WriteString(` class="language-` + canon + `"`)
 			}
-			out.WriteString(">")
+			o.WriteString(">")
 			// highlight() escapes every byte it emits (classed span or plain run);
 			// an unsupported language returns the source HTML-escaped and unstyled,
-			// so the raw-HTML-in-code XSS guard holds either way.
-			codeHTML, err := highlightTo(st, st.lim.MaxOutputBytes-out.Len(), lang, joined)
+			// so the raw-HTML-in-code XSS guard holds either way. It counts its
+			// output before building it and stops at the remaining budget.
+			codeHTML, err := highlightTo(st, st.remaining(), lang, code.String())
 			if err != nil {
-				return "", err
+				return err
 			}
-			out.WriteString(codeHTML)
-			out.WriteString("</code></pre>\n")
+			code.Reset()
+			o.WriteString(codeHTML)
+			o.WriteString("</code></pre>\n")
+			st.blocks++
 
 		case trimmed == "":
 			flushPara()
 
 		case reHRule.MatchString(trimmed):
 			flushPara()
-			out.WriteString("<hr>\n")
+			o.WriteString("<hr>\n")
+			st.blocks++
 
 		case reHeading.MatchString(trimmed):
 			flushPara()
 			m := reHeading.FindStringSubmatch(trimmed)
-			level := len(m[1])
-			plain := headingText(m[2])
-			if err := st.inlineFits(m[2], out.Len()); err != nil {
-				return "", err
+			if err := st.inlineFits(m[2]); err != nil {
+				return err
 			}
+			if st.headings++; st.headings > st.lim.MaxHeadings {
+				return st.limit("headings", st.lim.MaxHeadings)
+			}
+			level := len(m[1])
+			h := inline(m[2])
+			plain := html.UnescapeString(stripTags(h)) // headingText(m[2])
 			id := st.slugs.unique(plain)
-			lvl := byte('0' + level)
-			out.WriteString("<h")
-			out.WriteByte(lvl)
-			out.WriteString(` id="` + id + `">`)
-			out.WriteString(inline(m[2]))
-			out.WriteString(headingAnchor(id, plain))
-			out.WriteString("</h")
-			out.WriteByte(lvl)
-			out.WriteString(">\n")
+			lvl := string(rune('0' + level))
+			o.WriteString("<h" + lvl + ` id="` + id + `">`)
+			o.WriteString(h)
+			o.WriteString(headingAnchor(id, plain))
+			o.WriteString("</h" + lvl + ">\n")
+			if st.collectOutline && (level == 2 || level == 3) {
+				st.outline = append(st.outline, outlineItem{level: level, id: id, text: stripTags(h)})
+			}
+			st.blocks++
 
 		case strings.HasPrefix(trimmed, "> "):
 			flushPara()
@@ -680,95 +804,103 @@ func renderBlocks(st *state, src string) (string, error) {
 			// without the `> ` prefix joins the quote, ending on a blank line, a
 			// list marker, or a block opener — the same paragraph-interruption
 			// rules the list continuation uses.
-			var quote []string
-			for i < len(lines) {
+			quote := textRun{st: st}
+			for i < n {
 				if err := st.tick(); err != nil {
-					return "", err
+					return err
 				}
-				qt := strings.TrimSpace(lines[i])
+				qt := strings.TrimSpace(l.at(i))
+				var piece string
 				if strings.HasPrefix(qt, "> ") {
-					quote = append(quote, strings.TrimPrefix(qt, "> "))
+					piece = strings.TrimPrefix(qt, "> ")
 				} else if qt != "" && !isUnordered(qt) && !reOrdered.MatchString(qt) &&
 					!interruptsParagraph(qt) {
-					quote = append(quote, qt)
+					piece = qt
 				} else {
 					break
+				}
+				if err := quote.add(piece); err != nil {
+					return err
 				}
 				i++
 			}
 			i--
-			qtext := strings.Join(quote, " ")
-			if err := st.inlineFits(qtext, out.Len()); err != nil {
-				return "", err
-			}
-			out.WriteString("<blockquote>")
-			out.WriteString(inline(qtext))
-			out.WriteString("</blockquote>\n")
+			o.WriteString("<blockquote>")
+			o.WriteString(inline(quote.take()))
+			o.WriteString("</blockquote>\n")
+			st.blocks++
 
 		case isUnordered(trimmed) || reOrdered.MatchString(trimmed):
 			flushPara()
-			listHTML, next, err := renderList(st, lines, i, out.Len())
+			next, err := renderList(st, l, i, o)
 			if err != nil {
-				return "", err
+				return err
 			}
-			out.WriteString(listHTML)
 			i = next - 1
+			st.blocks++
 
-		case strings.Contains(trimmed, "|") && i+1 < len(lines) && reTableSep.MatchString(lines[i+1]):
+		case strings.Contains(trimmed, "|") && i+1 < n && reTableSep.MatchString(l.at(i+1)):
 			// GFM pipe table: header row, |---| separator, then body rows until a
 			// blank or non-pipe line.
 			//
 			// The width is counted before the header is split, and every body row
 			// is admitted against the document's cell budget at that width (rows
-			// are padded to it) before it is split, so an oversized table is
-			// rejected before its cells are allocated.
+			// are padded to it) and against the remaining output budget, at its
+			// padded size, before it is split. Rows are written as they are read.
 			flushPara()
 			cols := countCells(trimmed)
 			if err := st.tableColumns(cols); err != nil {
-				return "", err
+				return err
 			}
-			// Cell text is held to the remaining output budget, row by row,
-			// before it is split and formatted.
-			tableText := escapedLen(trimmed)
-			if err := st.inlineFits(trimmed, out.Len()); err != nil {
-				return "", err
+			if err := st.inlineFits(trimmed); err != nil {
+				return err
 			}
 			header := splitCells(trimmed, cols)
+			o.WriteString(`<div class="table-wrap">` + "\n")
+			o.WriteString("<table>\n<thead><tr>")
+			for _, h := range header {
+				o.WriteString("<th>" + h + "</th>")
+			}
+			o.WriteString("</tr></thead>\n<tbody>\n")
 			i += 2 // consume header + separator; i now at the first body row
-			var rows [][]string
-			for i < len(lines) {
-				lt := strings.TrimSpace(lines[i])
+			for i < n {
+				lt := strings.TrimSpace(l.at(i))
 				if lt == "" || !strings.Contains(lt, "|") {
 					break
 				}
 				if err := st.tick(); err != nil {
-					return "", err
+					return err
 				}
 				if err := st.tableRow(cols); err != nil {
-					return "", err
+					return err
 				}
-				tableText += escapedLen(lt)
-				if tableText > st.lim.MaxOutputBytes-out.Len() {
-					return "", &BudgetError{Limit: "output bytes", Max: st.lim.MaxOutputBytes}
+				if err := st.fits(inlineUpper(lt) + len("<td></td>")*len(header) + len("<tr></tr>\n")); err != nil {
+					return err
 				}
-				rows = append(rows, splitCells(lt, cols))
+				cells := splitCells(lt, cols)
+				o.WriteString("<tr>")
+				for c := range header {
+					cell := ""
+					if c < len(cells) {
+						cell = cells[c]
+					}
+					o.WriteString("<td>" + cell + "</td>")
+				}
+				o.WriteString("</tr>\n")
 				i++
 			}
 			i-- // the outer loop's i++ advances past the last consumed row
-			out.WriteString(renderTable(header, rows))
+			o.WriteString("</tbody>\n</table>\n</div>\n")
+			st.blocks++
 
 		default:
-			para = append(para, trimmed)
+			if err := para.add(trimmed); err != nil {
+				return err
+			}
 		}
 	}
 	flushPara()
-	if paraErr != nil {
-		return "", paraErr
-	}
-	if err := st.output(out.Len()); err != nil {
-		return "", err
-	}
-	return out.String(), nil
+	return st.err
 }
 
 func isUnordered(s string) bool {
@@ -783,10 +915,11 @@ func interruptsParagraph(trimmed string) bool {
 		strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "> ")
 }
 
-// renderList consumes a run of list items starting at lines[start] and renders
-// it to nested <ul>/<ol> HTML, returning the index of the first line past the
-// list. A run is ended by a blank line NOT followed by an indented continuation
-// paragraph, or by a block opener (heading, hrule, fence, blockquote).
+// renderList consumes a run of list items starting at line start and renders
+// it to nested <ul>/<ol> HTML into o, returning the index of the first line
+// past the list. A run is ended by a blank line NOT followed by an indented
+// continuation paragraph, or by a block opener (heading, hrule, fence,
+// blockquote).
 //
 // Continuation (CommonMark lazy continuation): a non-blank line that is not a
 // list marker and not a block opener joins the current item's content with a
@@ -798,95 +931,87 @@ func interruptsParagraph(trimmed string) bool {
 //
 // Nesting is driven by leading indentation (the house convention is two spaces
 // per level, but any consistent widening nests and any narrowing closes, so
-// deeper or ragged indentation still yields a valid tree). Ordered and unordered
-// items mix freely: a change of marker kind at the same indent closes the current
-// list and opens the other. Item text runs through inline(), which HTML-escapes
-// before formatting, so the escape-first XSS posture is unchanged. Fenced code
-// inside a list item is a known gap (out of scope for this fix).
+// deeper or ragged indentation still yields a valid tree), up to st's
+// MaxListDepth. Ordered and unordered items mix freely: a change of marker kind
+// at the same indent closes the current list and opens the other. Item text
+// runs through inline(), which HTML-escapes before formatting, so the
+// escape-first XSS posture is unchanged. Fenced code inside a list item is a
+// known gap (out of scope for this fix).
 //
 // Invariant: each open list frame always has exactly one <li> whose </li> is
 // deferred until a sibling replaces it, a child list closes above it, or the run
 // unwinds — which is what lets a nested list live inside its parent's still-open
 // <li>.
 //
-// used is the output already emitted before the list, so item text can be
-// held to the remaining budget before it is formatted.
-func renderList(st *state, lines []string, start, used int) (string, int, error) {
+// Item text is held to the remaining budget as it is read (textRun). Only the
+// current paragraph is held: once an item turns out to be loose, each of its
+// paragraphs is written in <p> as soon as the next one starts.
+func renderList(st *state, l *lines, start int, o *out) (int, error) {
 	type frame struct {
 		indent  int
 		ordered bool
 	}
-	var b strings.Builder
 	var stack []frame
-	// The current (innermost open) item's text: para accumulates the paragraph
-	// being read, paras holds any completed earlier paragraphs (loose item).
-	var para []string
-	var paras [][]string
+	cur := textRun{st: st} // the current item's open paragraph
+	open := false          // whether an item is open (its text not yet written)
+	loose := false         // whether the open item has more than one paragraph
 
 	openTag := func(ordered bool) {
 		if ordered {
-			b.WriteString("<ol>\n")
+			o.WriteString("<ol>\n")
 		} else {
-			b.WriteString("<ul>\n")
+			o.WriteString("<ul>\n")
 		}
 	}
 	closeTag := func(ordered bool) {
 		if ordered {
-			b.WriteString("</ol>\n")
+			o.WriteString("</ol>\n")
 		} else {
-			b.WriteString("</ul>\n")
+			o.WriteString("</ul>\n")
 		}
 	}
-	// flushItem emits the current item's buffered content: a tight single
-	// paragraph renders bare, a loose item wraps each paragraph in <p>.
-	// itemErr holds item text refused by inlineFits, returned by the loop.
-	var itemErr error
-	emit := func(p []string) string {
-		text := strings.Join(p, " ")
-		if itemErr == nil {
-			itemErr = st.inlineFits(text, used+b.Len())
-		}
-		if itemErr != nil {
-			return ""
-		}
-		return inline(text)
+	// endPara writes the open item's completed paragraph in <p>.
+	endPara := func() {
+		o.WriteString("<p>" + inline(cur.take()) + "</p>")
 	}
+	// flushItem writes the current item's remaining content: a tight single
+	// paragraph renders bare, a loose item's last paragraph in <p>.
 	flushItem := func() {
-		if para == nil && paras == nil {
+		if !open {
 			return
 		}
-		if len(paras) == 0 {
-			b.WriteString(emit(para))
+		if loose {
+			endPara()
 		} else {
-			for _, p := range append(paras, para) {
-				b.WriteString("<p>" + emit(p) + "</p>")
-			}
+			o.WriteString(inline(cur.take()))
 		}
-		para, paras = nil, nil
+		open, loose = false, false
 	}
 
+	n := l.n()
 	i := start
-	for i < len(lines) {
-		if itemErr != nil {
-			return "", 0, itemErr
+	for i < n {
+		if st.err != nil {
+			return 0, st.err
 		}
 		if err := st.tick(); err != nil {
-			return "", 0, err
+			return 0, err
 		}
-		raw := lines[i]
+		raw := l.at(i)
 		trimmed := strings.TrimSpace(raw)
 
 		if trimmed == "" {
 			// Blank line: a following line indented past the current item's marker
 			// (and not itself a marker) continues the item as a new paragraph;
 			// anything else ends the list.
-			if j := i + 1; j < len(lines) && len(stack) > 0 {
-				nt := strings.TrimSpace(lines[j])
-				nindent := len(lines[j]) - len(strings.TrimLeft(lines[j], " \t"))
+			if j := i + 1; j < n && len(stack) > 0 {
+				next := l.at(j)
+				nt := strings.TrimSpace(next)
+				nindent := len(next) - len(strings.TrimLeft(next, " \t"))
 				if nt != "" && !isUnordered(nt) && !reOrdered.MatchString(nt) &&
 					!interruptsParagraph(nt) && nindent > stack[len(stack)-1].indent {
-					paras = append(paras, para)
-					para = nil
+					endPara()
+					loose, open = true, true
 					i++
 					continue
 				}
@@ -901,7 +1026,10 @@ func renderList(st *state, lines []string, start, used int) (string, int, error)
 				break
 			}
 			// Lazy continuation: join the current item's paragraph.
-			para = append(para, trimmed)
+			if err := cur.add(trimmed); err != nil {
+				return 0, err
+			}
+			open = true
 			i++
 			continue
 		}
@@ -921,7 +1049,7 @@ func renderList(st *state, lines []string, start, used int) (string, int, error)
 		// that level's open <li> and its list tag; the parent <li> it lived inside is
 		// closed by the next shallower iteration (or by the sibling/unwind below).
 		for len(stack) > 0 && indent < stack[len(stack)-1].indent {
-			b.WriteString("</li>\n")
+			o.WriteString("</li>\n")
 			closeTag(stack[len(stack)-1].ordered)
 			stack = stack[:len(stack)-1]
 		}
@@ -929,7 +1057,7 @@ func renderList(st *state, lines []string, start, used int) (string, int, error)
 		if len(stack) > 0 && indent == stack[len(stack)-1].indent {
 			// Sibling at the same level: close the previous item, then reopen as the
 			// other marker kind if this item switched ordered<->unordered.
-			b.WriteString("</li>\n")
+			o.WriteString("</li>\n")
 			if stack[len(stack)-1].ordered != ordered {
 				closeTag(stack[len(stack)-1].ordered)
 				stack = stack[:len(stack)-1]
@@ -939,26 +1067,32 @@ func renderList(st *state, lines []string, start, used int) (string, int, error)
 		} else {
 			// Deeper than the current top (or the very first item): open a new list.
 			// When deeper, it nests inside the parent's still-open <li>.
+			if len(stack) >= st.lim.MaxListDepth {
+				return 0, st.limit("list depth", st.lim.MaxListDepth)
+			}
 			openTag(ordered)
 			stack = append(stack, frame{indent: indent, ordered: ordered})
 		}
 
-		b.WriteString("<li>")
-		para = append(para, content)
+		o.WriteString("<li>")
+		if err := cur.add(content); err != nil {
+			return 0, err
+		}
+		open = true
 		i++
 	}
 	flushItem()
-	if itemErr != nil {
-		return "", 0, itemErr
+	if st.err != nil {
+		return 0, st.err
 	}
 
 	// Unwind any levels left open at the end of the run.
 	for len(stack) > 0 {
-		b.WriteString("</li>\n")
+		o.WriteString("</li>\n")
 		closeTag(stack[len(stack)-1].ordered)
 		stack = stack[:len(stack)-1]
 	}
-	return b.String(), i, nil
+	return i, st.err
 }
 
 // rowInner strips a table row's surrounding whitespace and its leading and
@@ -990,36 +1124,6 @@ func splitCells(row string, max int) []string {
 		cells[i] = inline(strings.TrimSpace(p))
 	}
 	return cells
-}
-
-// renderTable emits a <table> from a header and body rows of already-escaped,
-// inline-rendered cell HTML. Rows are padded/truncated to the header width. The
-// table is wrapped in a .table-wrap container that scrolls horizontally on its
-// own (overflow-x:auto), so a table wider than the text measure scrolls inside
-// its box instead of forcing the whole document body to scroll sideways on
-// mobile.
-func renderTable(header []string, rows [][]string) string {
-	var b strings.Builder
-	b.WriteString(`<div class="table-wrap">` + "\n")
-	b.WriteString("<table>\n<thead><tr>")
-	for _, h := range header {
-		b.WriteString("<th>" + h + "</th>")
-	}
-	b.WriteString("</tr></thead>\n<tbody>\n")
-	for _, r := range rows {
-		b.WriteString("<tr>")
-		for c := range header {
-			cell := ""
-			if c < len(r) {
-				cell = r[c]
-			}
-			b.WriteString("<td>" + cell + "</td>")
-		}
-		b.WriteString("</tr>\n")
-	}
-	b.WriteString("</tbody>\n</table>\n")
-	b.WriteString("</div>\n")
-	return b.String()
 }
 
 // codeSentinel frames a code-span placeholder. NUL cannot survive

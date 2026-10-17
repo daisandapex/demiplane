@@ -355,3 +355,41 @@ func TestHighlightCountMatchesOutput(t *testing.T) {
 		}
 	}
 }
+
+// TestInputCaps: every input-side cap refuses with ErrBudget naming its
+// limit, before the render builds the elements it counts, and a document
+// within every cap still renders.
+func TestInputCaps(t *testing.T) {
+	small := Limits{MaxLines: 50, MaxHeadings: 3, MaxListDepth: 2, MaxMetaFields: 2, MaxMetaBytes: 64}
+	for _, c := range []struct {
+		name, src, limit string
+	}{
+		{"lines", strings.Repeat("a\n", 60), "lines"},
+		{"headings", "# a\n## b\n### c\n#### d\n##### e\n", "headings"},
+		{"list depth", "- a\n  - b\n    - c\n", "list depth"},
+		{"frontmatter fields", "---\na: 1\nb: 2\nc: 3\n---\nbody\n", "frontmatter fields"},
+		{"frontmatter bytes", "---\na: " + strings.Repeat("v", 80) + "\n---\nbody\n", "frontmatter bytes"},
+		{"frontmatter key", "---\n" + strings.Repeat("k", maxMetaKey+1) + ": v\n---\n", "frontmatter key bytes"},
+		{"frontmatter value", "---\nk: " + strings.Repeat("v", maxMetaValue+1) + "\n---\n", "frontmatter value bytes"},
+	} {
+		lim := small
+		if strings.HasPrefix(c.limit, "frontmatter k") || strings.HasPrefix(c.limit, "frontmatter v") {
+			lim.MaxMetaBytes = 1 << 20
+		}
+		_, err := Render(context.Background(), []byte(c.src), Options{Header: true, MetaHeader: true, Limits: lim})
+		var be *BudgetError
+		if !errors.Is(err, ErrBudget) || !errors.As(err, &be) || be.Limit != c.limit {
+			t.Errorf("%s: err %v, want ErrBudget for %q", c.name, err, c.limit)
+		}
+	}
+	ok := "---\na: 1\n---\n# T\n## s\n- a\n  - b\ntext\n"
+	if _, err := Render(context.Background(), []byte(ok), Options{Header: true, MetaHeader: true, Limits: small}); err != nil {
+		t.Errorf("a document within every cap was refused: %v", err)
+	}
+	// With the meta-header off, frontmatter is skipped without being parsed,
+	// so its caps do not apply.
+	big := "---\na: 1\nb: 2\nc: 3\n---\nbody\n"
+	if _, err := Render(context.Background(), []byte(big), Options{Limits: small}); err != nil {
+		t.Errorf("frontmatter with the meta-header off was refused: %v", err)
+	}
+}

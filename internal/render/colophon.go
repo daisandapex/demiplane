@@ -29,7 +29,7 @@ import (
 
 // sizeSentinel is a placeholder the colophon emits in place of the document size,
 // which is not known until the whole document (colophon included) is assembled.
-// Markdown() measures the finished bytes and substitutes the real human size. The
+// Render measures the finished bytes and substitutes the real human size. The
 // byte is a NUL, which cannot appear in the rendered HTML, so the replace is
 // unambiguous.
 const sizeSentinel = "\x00DP_SIZE\x00"
@@ -80,7 +80,7 @@ func computeSeries(slug string, siblings []string) seriesNav {
 }
 
 // colophon renders the colophon block with a sizeSentinel standing in for the
-// document size. Markdown() fills the real size after measuring the finished doc.
+// document size. page.finish fills the real size after measuring the finished doc.
 func colophon(opts Options) string {
 	var b strings.Builder
 	b.WriteString(`<div class="colo">`)
@@ -116,20 +116,6 @@ func colophon(opts Options) string {
 // base and slug are attribute-escaped defensively.
 func navHref(base, slug string) string {
 	return html.EscapeString(base + "/" + slug)
-}
-
-// fillSize substitutes the sizeSentinel in the finished document with the real
-// human-readable size. The stored artifact size is exactly len(doc) once the
-// number is inlined, so the value is derived as a fixed point: the length with
-// the sentinel removed, plus the length of the size string itself.
-func fillSize(doc string) string {
-	if !strings.Contains(doc, sizeSentinel) {
-		return doc
-	}
-	base := len(doc) - len(sizeSentinel)
-	size := humanSize(int64(base))
-	size = humanSize(int64(base + len(size))) // one refinement for the number's own bytes
-	return strings.Replace(doc, sizeSentinel, size, 1)
 }
 
 // humanSize formats a byte count compactly (B/KB/MB/…). A local copy of the

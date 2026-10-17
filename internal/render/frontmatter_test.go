@@ -4,6 +4,7 @@
 package render
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -135,9 +136,18 @@ func TestFrontmatterEscaping(t *testing.T) {
 }
 
 func TestParseFrontmatterUnit(t *testing.T) {
-	fields, rest, ok := parseFrontmatter([]byte("---\na: 1\nb: two words\n# c: comment\nnocolon\n---\nbody\n"))
-	if !ok {
-		t.Fatal("expected frontmatter")
+	st := newState(context.Background(), DefaultLimits)
+	l, err := splitLines(st, "---\na: 1\nb: two words\n# c: comment\nnocolon\n---\nbody\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	close := frontmatterEnd(l)
+	if close != 5 {
+		t.Fatalf("expected frontmatter closing at line 5, got %d", close)
+	}
+	fields, err := parseFrontmatter(st, l, close)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(fields) != 2 {
 		t.Fatalf("want 2 fields (comment + colon-less line ignored), got %d: %+v", len(fields), fields)
@@ -145,7 +155,7 @@ func TestParseFrontmatterUnit(t *testing.T) {
 	if fields[0].key != "a" || fields[0].value != "1" || fields[1].key != "b" || fields[1].value != "two words" {
 		t.Errorf("fields parsed wrong: %+v", fields)
 	}
-	if strings.TrimSpace(string(rest)) != "body" {
+	if rest := l.raw(close + 1); rest != "body" {
 		t.Errorf("body not split cleanly: %q", rest)
 	}
 }

@@ -16,56 +16,73 @@ type metaField struct {
 	value string
 }
 
-// parseFrontmatter lifts a leading YAML-style frontmatter block out of src. The
-// block must START the document: the first line is exactly `---`, and a later
-// line is exactly `---` (the close). Between them, each `key: value` line
-// becomes a field (value is the verbatim string, trimmed); lines without a colon
-// are ignored, as are nested/complex constructs (this is a deliberately minimal,
-// dependency-free parser — strings only). It returns the fields, the body with
-// the block removed, and ok=true. If there is no opening fence or no closing
-// fence, it returns ok=false and leaves the body untouched — so a document that
-// merely opens with a `---` horizontal rule is not mistaken for frontmatter.
-func parseFrontmatter(src []byte) (fields []metaField, rest []byte, ok bool) {
-	s := strings.ReplaceAll(string(src), "\r\n", "\n")
-	lines := strings.Split(s, "\n")
-	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
-		return nil, src, false
+// frontmatterEnd finds a leading YAML-style frontmatter block. The block must
+// START the document: the first line is exactly `---`, and a later line is
+// exactly `---` (the close). It returns the raw index of the closing line, or
+// -1 when there is no block: with no opening or no closing fence the body is
+// untouched, so a document that merely opens with a `---` horizontal rule is
+// not mistaken for frontmatter. It allocates nothing.
+func frontmatterEnd(l *lines) int {
+	if l.rawLen() == 0 || strings.TrimSpace(l.raw(0)) != "---" {
+		return -1
 	}
-	for i := 1; i < len(lines); i++ {
-		if strings.TrimSpace(lines[i]) == "---" {
-			// Found the close: parse the lines between the fences.
-			for _, ln := range lines[1:i] {
-				t := strings.TrimSpace(ln)
-				if t == "" || strings.HasPrefix(t, "#") {
-					continue
-				}
-				k, v, found := strings.Cut(t, ":")
-				if !found {
-					continue
-				}
-				key := strings.TrimSpace(k)
-				if key == "" {
-					continue
-				}
-				fields = append(fields, metaField{key: key, value: strings.TrimSpace(v)})
-			}
-			rest = []byte(strings.Join(lines[i+1:], "\n"))
-			return fields, rest, true
+	for i := 1; i < l.rawLen(); i++ {
+		if strings.TrimSpace(l.raw(i)) == "---" {
+			return i
 		}
 	}
-	// No closing fence: not frontmatter.
-	return nil, src, false
+	return -1
+}
+
+// parseFrontmatter parses the block that frontmatterEnd found, between line 0
+// and the closing line close. Each `key: value` line becomes a field (value is
+// the verbatim string, trimmed); lines without a colon are ignored, as are
+// comments and nested/complex constructs (this is a deliberately minimal,
+// dependency-free parser: strings only). Values are slices of the document,
+// not copies. The block's size, its field count and each key and value are
+// held to st's caps before any field is kept.
+func parseFrontmatter(st *state, l *lines, close int) ([]metaField, error) {
+	if size := int(l.off[close]) - int(l.off[1]); size > st.lim.MaxMetaBytes {
+		return nil, st.limit("frontmatter bytes", st.lim.MaxMetaBytes)
+	}
+	var fields []metaField
+	for i := 1; i < close; i++ {
+		t := strings.TrimSpace(l.raw(i))
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		k, v, found := strings.Cut(t, ":")
+		if !found {
+			continue
+		}
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		value := strings.TrimSpace(v)
+		switch {
+		case len(fields) >= st.lim.MaxMetaFields:
+			return nil, st.limit("frontmatter fields", st.lim.MaxMetaFields)
+		case len(key) > maxMetaKey:
+			return nil, st.limit("frontmatter key bytes", maxMetaKey)
+		case len(value) > maxMetaValue:
+			return nil, st.limit("frontmatter value bytes", maxMetaValue)
+		}
+		fields = append(fields, metaField{key: key, value: value})
+	}
+	return fields, nil
 }
 
 // metaHeader renders the parsed frontmatter as a styled meta-header: the first
 // date/published field as a localized timestamp row, then every other field as
-// its own labeled line. It returns the HTML and whether a localize <script> is
-// needed (true only when a full timestamp — not a bare date — was rendered).
-func metaHeader(fields []metaField) (htmlOut string, needsScript bool) {
+// its own labeled line. It writes through a budgeted out, so it is charged as
+// it is built. It returns the HTML and whether a localize <script> is needed
+// (true only when a full timestamp, not a bare date, was rendered).
+func metaHeader(st *state, fields []metaField) (htmlOut string, needsScript bool, err error) {
 	if len(fields) == 0 {
-		return "", false
+		return "", false, nil
 	}
-	var b strings.Builder
+	b := st.newOut()
 	b.WriteString(`<div class="metahead">`)
 
 	dateUsed := false
@@ -79,23 +96,28 @@ func metaHeader(fields []metaField) (htmlOut string, needsScript bool) {
 		}
 	}
 
-	var rows strings.Builder
-	skipped := false
-	for _, f := range fields {
-		if !skipped && dateUsed && isDateKey(f.key) {
-			skipped = true // drop only the one field promoted to the date row
-			continue
-		}
-		rows.WriteString(`<div class="metarow"><dt>` + titleCase(f.key) +
-			`</dt><dd>` + html.EscapeString(f.value) + `</dd></div>`)
+	rows := len(fields)
+	if dateUsed {
+		rows-- // the one field promoted to the date row
 	}
-	if rows.Len() > 0 {
+	if rows > 0 {
 		b.WriteString(`<dl class="metafields">`)
-		b.WriteString(rows.String())
+		skipped := false
+		for _, f := range fields {
+			if !skipped && dateUsed && isDateKey(f.key) {
+				skipped = true
+				continue
+			}
+			b.WriteString(`<div class="metarow"><dt>` + titleCase(f.key) +
+				`</dt><dd>` + html.EscapeString(f.value) + `</dd></div>`)
+		}
 		b.WriteString(`</dl>`)
 	}
 	b.WriteString("</div>\n")
-	return b.String(), needsScript
+	if st.err != nil {
+		return "", false, st.err
+	}
+	return b.String(), needsScript, nil
 }
 
 // isDateKey reports whether key marks the timestamp field (date or published).

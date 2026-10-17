@@ -5,7 +5,6 @@ package render
 
 import (
 	"html"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,39 +23,10 @@ import (
 // paint, so it holds on every page. Below 51.25rem the layout is one column
 // with the rail under the title.
 
-// reOutlineHead matches the h2/h3 lines renderBlocks emits. The body HTML is
-// the renderer's own output (source text is escaped), so the shape is fixed.
-var reOutlineHead = regexp.MustCompile(`<h([23]) id="([a-z0-9-]+)">(.*?)<a class="heading-anchor"`)
-
 type outlineItem struct {
 	level int
 	id    string
 	text  string // plain text, entities still escaped
-}
-
-// outlineFrom lists the h2 and h3 headings of rendered body HTML in order.
-func outlineFrom(bodyHTML string) []outlineItem {
-	var items []outlineItem
-	for _, m := range reOutlineHead.FindAllStringSubmatch(bodyHTML, -1) {
-		items = append(items, outlineItem{level: int(m[1][0] - '0'), id: m[2], text: stripTags(m[3])})
-	}
-	return items
-}
-
-// reCodeFirst matches a top-level paragraph whose first content is a code span.
-var reCodeFirst = regexp.MustCompile(`(?m)^<p( class="lead")?><code>`)
-
-// markCodeFirst tags paragraphs that open with inline code. The chip's side
-// padding would start the first glyph .3em inside the column edge; the F sheet
-// hangs a tagged chip by that padding so the text, not the chip, sits on the
-// edge the headings share (the reading check compares glyphs).
-func markCodeFirst(bodyHTML string) string {
-	return reCodeFirst.ReplaceAllStringFunc(bodyHTML, func(m string) string {
-		if strings.Contains(m, "lead") {
-			return `<p class="lead code-first"><code>`
-		}
-		return `<p class="code-first"><code>`
-	})
 }
 
 // railHTML renders the right rail: the facts (the frontmatter meta-header, when
@@ -68,17 +38,19 @@ func markCodeFirst(bodyHTML string) string {
 // a document with many headings is refused before its outline is built rather
 // than after. Each entry names its section by a short index (data-sec="s3"),
 // never by repeating the section's heading id.
-func railHTML(st *state, used int, metaHTML string, outline []outlineItem) (string, error) {
+func railHTML(st *state, metaHTML string, outline []outlineItem) (string, error) {
 	if len(outline) < 2 {
 		outline = nil
 	}
 	if metaHTML == "" && outline == nil {
 		return "", nil
 	}
-	var b strings.Builder
+	b := st.newOut()
 	b.WriteString(`<aside class="frail" aria-label="About this page">`)
 	if metaHTML != "" {
-		b.WriteString(`<section class="rail-facts"><p class="rail-h">Details</p>` + metaHTML + `</section>`)
+		b.WriteString(`<section class="rail-facts"><p class="rail-h">Details</p>`)
+		b.keep(metaHTML) // charged when the meta-header was built
+		b.WriteString(`</section>`)
 	}
 	if outline != nil {
 		b.WriteString(`<details class="rail-outline" open><summary class="rail-h">On this page</summary><ol class="outline">`)
@@ -86,6 +58,9 @@ func railHTML(st *state, used int, metaHTML string, outline []outlineItem) (stri
 		for _, it := range outline {
 			if err := st.tick(); err != nil {
 				return "", err
+			}
+			if st.err != nil {
+				return "", st.err
 			}
 			if it.level == 2 {
 				n++
@@ -95,16 +70,15 @@ func railHTML(st *state, used int, metaHTML string, outline []outlineItem) (stri
 			if it.level == 3 {
 				cls = "l3"
 			}
-			if err := st.output(used + b.Len() + len(it.id) + len(it.text) + len(sec) + 48); err != nil {
-				return "", err
-			}
-			b.WriteString(`<li class="` + cls + `" data-sec="` + sec + `"><a href="#` + it.id + `">` + it.text + `</a></li>`)
+			b.WriteString(`<li class="` + cls + `" data-sec="` + sec + `"><a href="#` + it.id + `">`)
+			b.WriteString(it.text)
+			b.WriteString(`</a></li>`)
 		}
 		b.WriteString(`</ol></details>`)
 	}
 	b.WriteString("</aside>\n")
-	if err := st.output(used + b.Len()); err != nil {
-		return "", err
+	if st.err != nil {
+		return "", st.err
 	}
 	return b.String(), nil
 }
