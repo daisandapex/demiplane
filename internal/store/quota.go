@@ -281,34 +281,24 @@ func (s *Store) measureUsage() (used, siteEntries int64, l ledger, err error) {
 	}
 	l = newLedger()
 	// Artifact rows and pending deletion records each hold an allowance.
-	rows, err := s.db.Query(`SELECT slug FROM artifacts`)
-	if err != nil {
-		return fail(err)
-	}
-	for rows.Next() {
+	if err := s.scanUsageRows(`SELECT slug FROM artifacts`, func(scan func(...any) error) error {
 		var slug string
-		if err := rows.Scan(&slug); err != nil {
-			rows.Close()
-			return fail(err)
+		if err := scan(&slug); err != nil {
+			return err
 		}
 		l.rows[slug] = struct{}{}
-	}
-	if err := rows.Close(); err != nil {
+		return nil
+	}); err != nil {
 		return fail(err)
 	}
-	pend, err := s.db.Query(`SELECT slug, blob_gen, source_gen FROM pending_deletions`)
-	if err != nil {
-		return fail(err)
-	}
-	for pend.Next() {
+	if err := s.scanUsageRows(`SELECT slug, blob_gen, source_gen FROM pending_deletions`, func(scan func(...any) error) error {
 		var k pendingKey
-		if err := pend.Scan(&k.slug, &k.blobGen, &k.sourceGen); err != nil {
-			pend.Close()
-			return fail(err)
+		if err := scan(&k.slug, &k.blobGen, &k.sourceGen); err != nil {
+			return err
 		}
 		l.pending[k] = struct{}{}
-	}
-	if err := pend.Close(); err != nil {
+		return nil
+	}); err != nil {
 		return fail(err)
 	}
 	var total int64
@@ -325,6 +315,41 @@ func (s *Store) measureUsage() (used, siteEntries int64, l ledger, err error) {
 	}
 	total += n
 	return total + (int64(len(l.rows)+len(l.pending))+entries)*metaAllowance, entries, l, nil
+}
+
+// usageRows is the part of *sql.Rows a usage scan uses.
+type usageRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+	Close() error
+}
+
+// wrapUsageRows, when set, wraps the rows of each usage scan; a test hook.
+var wrapUsageRows func(usageRows) usageRows
+
+// scanUsageRows runs query and calls each for every row. A scan or iteration
+// error fails the whole scan: Next stops at a read failure without saying so,
+// and Close does not report it, so Err is checked before the rows count.
+func (s *Store) scanUsageRows(query string, each func(scan func(...any) error) error) error {
+	r, err := s.db.Query(query)
+	if err != nil {
+		return err
+	}
+	var rows usageRows = r
+	if wrapUsageRows != nil {
+		rows = wrapUsageRows(rows)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		if err := each(rows.Scan); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return rows.Close()
 }
 
 // validateMeta bounds the user-supplied metadata a publish stores in its row.
