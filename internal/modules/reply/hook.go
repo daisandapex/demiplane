@@ -254,6 +254,10 @@ func runHookExec(cmdline string, timeout time.Duration, rep Reply, payload []byt
 		return
 	}
 	cmd.Stdout, cmd.Stderr = pw, pw
+	// Stdin is copied by an exec goroutine that Wait also waits for; a
+	// descendant holding stdin open without reading it would block that copy,
+	// and with it Wait, after the shell has exited. WaitDelay bounds that wait.
+	cmd.WaitDelay = hookPipeGrace
 	setProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		pw.Close()
@@ -270,6 +274,9 @@ func runHookExec(cmdline string, timeout time.Duration, rep Reply, payload []byt
 	}()
 	werr := cmd.Wait()
 	killProcessGroup(cmd)
+	if errors.Is(werr, exec.ErrWaitDelay) {
+		werr = nil // the shell exited cleanly; only its leftover I/O was cut
+	}
 	select {
 	case <-copied:
 	case <-time.After(hookPipeGrace):

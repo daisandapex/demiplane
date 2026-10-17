@@ -349,3 +349,19 @@ func TestHookOutputIsCappedWhileStreaming(t *testing.T) {
 		t.Fatalf("logged %d bytes of hook output, cap %d", len(out), hookLogOutputCap)
 	}
 }
+
+// TestHookStdinHeldByChildDoesNotWedgeWorker: the shell exits without
+// reading a payload larger than a pipe buffer while a background child keeps
+// stdin open. The run must still end and the child must die.
+func TestHookStdinHeldByChildDoesNotWedgeWorker(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+	cmd := `sleep 20 <&0 & echo $! > "` + pidFile + `"; exit 0`
+	payload := []byte(`{"body":"` + strings.Repeat("x", 1<<20) + `"}`)
+	start := time.Now()
+	runHookExec(cmd, time.Minute, Reply{ID: 1, Slug: "s", Kind: "comment"}, payload)
+	if el := time.Since(start); el > 10*time.Second {
+		t.Fatalf("hook took %v to return while a child held stdin", el)
+	}
+	assertProcessGone(t, pidFile)
+}
