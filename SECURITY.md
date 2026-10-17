@@ -273,19 +273,27 @@ inherits the posture above and was reviewed adversarially before release.
   waiting requests cannot starve the listener; at most 32 wait at once and one
   per client, each for at most 11s. The stream sends periodic heartbeats and drops consumers on a
   write deadline or context cancel.
-- **Multi-file archive ingest (`POST /publish?site=`).** Tar, zip, and multipart
-  bundles are accepted behind the publish token. Every entry path is
-  traversal-checked (`..`, absolute paths, and backslashes rejected; each segment
-  re-validated as a named slug) and confined under the site prefix on both write
-  and serve; symlink and other non-regular entries are skipped, never
-  materialized. The serve path opens every component through an `os.Root` and
-  refuses a symlink anywhere on the path (site directory, intermediate
-  directory or file), checking that what it opened is what it inspected, so a
-  link planted or swapped in out of band is never followed. The archive is
-  bounded on **both** the compressed upload
-  (`--max-upload`, buffered to a scratch file) and the **total decompressed
-  bytes** across all entries — enforced identically for zip **and** tar, so a
-  compression- or sparse-tar bomb is rejected with `413` — plus a file-count cap.
+- **Multi-file archive ingest (`POST /publish?site=`).** A tar or zip archive
+  in the request body is accepted behind the publish token (multipart is
+  not). Every entry path is traversal-checked (`..`, absolute paths and any
+  backslash rejected; `/` is the only separator; each segment re-validated as
+  a named slug) and confined under the site prefix on both write and serve;
+  symlink and other non-regular entries are skipped, never materialized. The
+  serve path opens every component through an `os.Root` and refuses a symlink
+  anywhere on the path (site directory, intermediate directory or file),
+  checking that what it opened is what it inspected, so a link planted or
+  swapped in out of band is never followed. The archive is bounded on **both**
+  the compressed upload (`--max-upload`, buffered to a scratch file) and the
+  **total decompressed bytes** across all entries, enforced identically for
+  zip **and** tar, so a compression- or sparse-tar bomb is rejected with
+  `413`, plus a cap of 4,096 entries of every kind (directories and skipped
+  entries included). Its structure is checked with bounded parsing before
+  `archive/zip` or `archive/tar` reads it: a zip whose end record declares
+  more than 4,096 entries or a central directory over 2 MiB is refused, the
+  central-directory read is limited even when the end record understates it,
+  and a tar's headers are walked first, refusing a PAX or GNU long-name header
+  over 64 KiB or more than 12,288 headers. Two archives are parsed at a time;
+  another waits up to five seconds and is then refused with `503`.
   Served assets keep the flat-artifact posture (global `nosniff`, the
   per-document sandbox, `script-src 'none'` on SVG/XML). Sites have no privacy,
   expiry or password support: a site upload that asks for `?private`, `?ttl`,
@@ -394,6 +402,10 @@ only in `-tags reply` builds.
 | Request body | upload average rate after the grace; slower gets `408` | 16 KiB/s | `--upload-min-rate` |
 | Response | write deadline per response; an upload's starts at its longest allowed body time plus this, and tightens to this once the body is read | 60s | `--response-timeout` |
 | Response | extra time for an artifact or site file: size at this rate | 16 KiB/s | `--download-min-rate` |
+| Request host | `Host` header length; longer gets `400` before routing | 255 bytes | (code) |
+| Listings | artifacts per `/list` response or `/gallery` page; more via the `?after=` cursor | 200 | (code) |
+| Site archives | entries of every kind / zip central directory / tar special header / archives parsed at once (others wait 5s, then `503`) | 4,096 / 2 MiB / 64 KiB / 2 | (code) |
+| TTL | `ttl` value length; longer is `400` before parsing | 64 bytes | (code) |
 | Admission | requests in progress per listener / per client; excess `503` | 256 / 32 | `--max-requests`, `--max-requests-per-client` |
 | Admission | open connections per listener (further ones wait) / per client (further ones are closed) | 1024 / 64 | `--max-conns`, `--max-conns-per-client` |
 | Rendering | table columns; table body cells per document (rows times header width) | 128; 1,000,000 | (code) |
@@ -402,7 +414,7 @@ only in `-tags reply` builds.
 | Rendering | series members a page navigates (its tree and prev/next row); a larger series renders without them | 1,000 | (code) |
 | Rendering | frontmatter rendered as the meta-header: fields / block size / key / value; over it `413` | 256 / 64 KiB / 256 B / 8 KiB | (code) |
 | Rendering | renders at once; one that waits 5s gets `503` | GOMAXPROCS, at most 4 | `--render-concurrency` |
-| Storage | bytes of artifacts, retained sources and sites, including in-flight uploads, scratch and extracted archive bytes, plus 4 KiB per artifact for its metadata and 4 KiB per site file or directory; over it `507` | unlimited | `--store-quota` |
+| Storage | bytes of artifacts, retained sources and sites, including in-flight uploads, scratch and extracted archive bytes, removed files a download still holds open, and abandoned site staging trees, plus 4 KiB per artifact for its metadata and 4 KiB per site file or directory; over it `507` | unlimited | `--store-quota` |
 | Storage | site files and directories in all, sites being published included; over it `507` | 100,000 | (code) |
 | Metadata | filename hint length; longer is `400` | 255 bytes | (code) |
 | Replies | submissions per client / per artifact / in all; past it `429` | 10 / 60 / 300 a minute | `reply_rate_client`, `reply_rate_target`, `reply_rate_global` |
@@ -485,6 +497,10 @@ Notes on the limits:
   left behind by a crash.
   An overwrite or rebake needs room for the new copy while the old one still
   exists; a site publish needs room for its archive plus the extracted files.
+  A replaced or deleted file that a download still holds open stays charged
+  until the download ends. Leftovers of a failed site publish or a crash stay
+  charged until startup or the hourly reconcile removes them, an hour after
+  they were last written; a cleanup releases only what it actually removed.
   `demiplane receive` runs as a separate process and enforces the quota
   against its own writes; a running `serve` learns of them at its next
   recount (every `--sweep-interval`), so across processes the store can

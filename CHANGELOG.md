@@ -124,6 +124,26 @@ All notable changes to demiplane are documented here. The format follows
   `reply_hook_log_output = on` key is set (then truncated and escaped; it is
   captured bounded either way). The
   fatal error line of `serve` and `receive` is redacted the same way.
+- **Request hosts are capped.** A `Host` header longer than 255 bytes gets
+  `400` on every listener, before routing. Without `--base-url`, the request
+  host appears in every advertised URL, so an unbounded one multiplied the
+  size of each listing.
+- **Listings are paged.** `GET /list` and `/gallery` return 200 artifacts at
+  a time, newest first, and the browse index reads only what it shows.
+- **Site archives are checked before they are parsed.** A zip's central
+  directory is validated against its end record (at most 4,096 entries and
+  2 MiB) and read through a limit, a tar's headers are walked first (PAX and
+  GNU long-name headers at most 64 KiB), every entry of every kind counts
+  toward the 4,096-entry cap, and two archives are parsed at a time (`503`
+  with `Retry-After` beyond that). A site entry name with a backslash is
+  refused (`400`) instead of being read as `/`.
+- **Storage accounting follows the disk.** A failed site publish, a site
+  replacement and a site delete release the quota only for what they actually
+  removed; staging trees left by a failed cleanup or a crash stay counted and
+  are removed at startup and by the hourly reconcile once an hour old. A
+  replaced or deleted file that a download still holds open keeps its quota
+  charge until the download ends.
+- **TTL values are at most 64 bytes,** refused before they are parsed.
 - **Every accepted TTL expires.** `?ttl=`, `receive --ttl`, the MCP `publish`
   tool and `demiplane publish --ttl` share one parser. Day values must be plain
   decimals and are converted exactly; non-finite, overflowing and sub-second
@@ -235,6 +255,12 @@ All notable changes to demiplane are documented here. The format follows
   reply forms are refused as cross-origin. The new `--allowed-hosts` refuses
   any other `Host` with `421`.
 - **Upgrade note: `/gallery` needs the token unless `--browse` is set.**
+- **Upgrade note: `GET /list` is paged.** A response holds at most 200
+  artifacts; a client that reads one response as the whole list must follow
+  `next` (`?after=<next>`) until it is absent. `count` now counts the
+  response, not the instance. The MCP `list` tool takes the cursor as `after`.
+- **Upgrade note: site archives with backslash paths are refused.** Rebuild
+  an archive made by a tool that writes `\` separators with `/`.
 - **Upgrade note: `demiplane mcp` refuses `path` outside its publish root.** An
   MCP client that publishes files from outside the directory it starts
   `demiplane mcp` in (a scratch or temp directory, another repository) now gets
