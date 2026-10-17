@@ -15,7 +15,8 @@ func TestParse(t *testing.T) {
 		wantErr bool
 	}{
 		{"", 0, false},
-		{"   ", 0, false},
+		{"   ", 0, true},
+		{"\t", 0, true},
 		{"30m", 30 * time.Minute, false},
 		{"2h", 2 * time.Hour, false},
 		{"90s", 90 * time.Second, false},

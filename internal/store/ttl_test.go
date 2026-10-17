@@ -31,6 +31,7 @@ func TestParseTTL(t *testing.T) {
 		{"-1d", 0, true},
 		{"garbage", 0, true},
 		{"10x", 0, true},
+		{" ", 0, true},
 		// Inputs that once parsed as a day count but converted to zero, a
 		// wrapped value, or garbage: each must be rejected, never stored as
 		// "no expiry".

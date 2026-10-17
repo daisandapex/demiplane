@@ -35,14 +35,18 @@ var maxNS = new(big.Rat).SetInt64(math.MaxInt64)
 //
 // It accepts Go duration syntax ("30m", "2h", "90s", "1h30m") plus a day
 // suffix Go's time.ParseDuration lacks: "<n>d" means n*24h, with n a plain
-// decimal ("7d", "0.5d"). An empty string means "no TTL" and returns (0, nil).
+// decimal ("7d", "0.5d"). Only the empty string means "no TTL" and returns
+// (0, nil); a value of only whitespace is an error, not a silent "no expiry".
 // Every other input either yields a duration in [Min, MaxInt64 ns] or an
 // error, so an accepted non-empty TTL always produces an artifact that
-// expires.
+// expires. Surrounding whitespace on a real value is ignored.
 func Parse(s string) (time.Duration, error) {
-	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, nil
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("ttl is blank: omit it for no expiry")
 	}
 	var d time.Duration
 	if strings.HasSuffix(s, "d") {

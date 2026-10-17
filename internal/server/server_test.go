@@ -497,7 +497,7 @@ func TestTTLPublishExpiresAndBadTTL(t *testing.T) {
 
 	// A TTL that would round to "no expiry" or sits below the one-second
 	// expiry resolution is a 400, never a permanent artifact.
-	for _, bad := range []string{"1e-20d", "NaNd", "%2BInfd", "1e300d", "1ms"} {
+	for _, bad := range []string{"1e-20d", "NaNd", "%2BInfd", "1e300d", "1ms", "%20"} {
 		resp, err := http.Post(ts.URL+"/publish?slug=never&ttl="+bad, "application/octet-stream", strings.NewReader("x"))
 		if err != nil {
 			t.Fatal(err)

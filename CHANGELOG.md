@@ -34,7 +34,8 @@ All notable changes to demiplane are documented here. The format follows
   tool and `demiplane publish --ttl` share one parser. Day values must be plain
   decimals and are converted exactly; non-finite, overflowing and sub-second
   values are rejected with `400` (or a client-side error) instead of being
-  stored as "never expires".
+  stored as "never expires". A blank value (only whitespace) is an error
+  too; omit the TTL for no expiry.
 - **MCP `publish` paths are confined to a publish root.** The tool's `path`
   argument must resolve inside `--publish-root` / `DEMIPLANE_PUBLISH_ROOT`
   (default: the working directory of `demiplane mcp`) and is opened through that

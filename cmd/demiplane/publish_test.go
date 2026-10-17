@@ -315,7 +315,7 @@ func TestRunPublishRejectsBadTTL(t *testing.T) {
 	if err := os.WriteFile(src, []byte("<p>x</p>"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range []string{"1e-20d", "NaNd", "+Infd", "1e300d", "500ms", "-1h", "nope"} {
+	for _, bad := range []string{"1e-20d", "NaNd", "+Infd", "1e300d", "500ms", "-1h", "nope", " "} {
 		if err := runPublish([]string{"--url", srv.URL, "--ttl", bad, src}); err == nil {
 			t.Errorf("--ttl %q: runPublish = nil, want a ttl error", bad)
 		}
