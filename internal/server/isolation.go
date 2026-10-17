@@ -4,11 +4,11 @@
 package server
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"mime"
 	"net/http"
 	"strings"
+
+	"github.com/daisandapex/demiplane/internal/module"
 )
 
 // isolation.go keeps one published artifact from reaching another through the
@@ -110,10 +110,7 @@ func setProtectedHeaders(w http.ResponseWriter) {
 // credentials pre-emptively to other paths on the origin; that reaches only the
 // server, which checks them against each artifact's own hash, and under the
 // sandbox no page can read a cross-origin response it attached them to.
-func passwordChallenge(slug string) string {
-	sum := sha256.Sum256([]byte(slug))
-	return `Basic realm="demiplane ` + hex.EncodeToString(sum[:])[:12] + `", charset="UTF-8"`
-}
+func passwordChallenge(slug string) string { return module.PasswordChallenge(slug) }
 
 // allowSandboxedSubresource lets a sandboxed page load its own module scripts,
 // crossorigin stylesheets and fonts. The browser fetches those in CORS mode,

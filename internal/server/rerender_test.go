@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/daisandapex/demiplane/internal/store"
 )
@@ -339,5 +340,15 @@ func TestRerenderSpecFallbacks(t *testing.T) {
 				t.Errorf("rebaked page did not use the current renderer:\n%s", body)
 			}
 		})
+	}
+}
+
+// TestRenderSpecReplyKey pins the JSON key the store's one-time replies
+// backfill matches (store.migrate): a page with a reply box must carry
+// "reply_slug" in its render spec.
+func TestRenderSpecReplyKey(t *testing.T) {
+	spec := marshalRenderSpec(renderSpecFor("lesson", "", "lesson", "", time.Unix(0, 0)))
+	if !strings.Contains(spec, `"reply_slug":"lesson"`) {
+		t.Fatalf("render spec %s lacks the reply_slug key the store backfill matches", spec)
 	}
 }

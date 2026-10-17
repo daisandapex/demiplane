@@ -23,20 +23,28 @@ reply routes, no `reply`/`replies` reserved slugs.
 
 | Action | Endpoint | Gate |
 |---|---|---|
-| Submit a reply | `POST /reply/{slug}` | **mesh-only** — open at the transport layer, exactly like `GET /{slug}`. A replier is a viewer. |
-| Show the reply form | `GET /reply/{slug}` | mesh-only |
+| Submit a reply | `POST /reply/{slug}` | **viewer**: open to anyone who can view the artifact, exactly like `GET /{slug}`, with the artifact's view password if it has one. Only for artifacts published with `?reply=form` or `?reply=question`. |
+| Show the reply form | `GET /reply/{slug}` | viewer, same as submit |
 | List / triage replies | `GET /replies` | **bearer publish-auth** (same token as `POST /publish`, `GET /list`) |
 | Mark a reply read | `POST /replies/{id}/ack` | bearer publish-auth |
 
-No new auth primitive: submitting is a *view*-level act (network reachability),
-reading the collected replies is a *publish*-level act (bearer token). On an
-open instance (no token) the read side is open too — same as core's `/list`.
+No new auth primitive: submitting is a *view*-level act (network reachability,
+plus the view password through core's rate-limited check), reading the
+collected replies is a *publish*-level act (bearer token). On an open instance
+(no token) the read side is open too, same as core's `/list`.
+
+Replies are **opt-in per artifact**: publish with `?reply=form` (this module's
+form, page unchanged) or `?reply=question` (the inline box below). The choice is
+stored with the artifact and replaced by every publish to the slug, so a later
+publish without `?reply` turns replies off. Every other artifact answers `404`
+on the reply routes.
 
 ## Endpoints
 
 ### `GET /reply/{slug}` — the reply form
 A self-contained, JS-free HTML page: an optional note plus **Approve / Defer /
-Comment** buttons. `404` if the artifact slug doesn't exist.
+Comment** buttons. `404` if the artifact doesn't exist or does not accept
+replies; `401` without its view password.
 
 ### `POST /reply/{slug}` — submit
 Accepts a browser form post **or** a JSON body:
@@ -49,8 +57,10 @@ curl -X POST -H 'Content-Type: application/json' \
 
 - `kind` ∈ `approve | defer | comment` (a `comment` requires non-empty `body`).
 - `201` + the stored reply as JSON (or the HTML confirmation for a form post).
-- `404` unknown slug · `400` bad kind / empty comment · `413` body over 8 KiB ·
-  `429` artifact past its 1000-reply cap.
+- `404` unknown slug or replies not enabled · `401` view password missing or
+  wrong · `400` bad kind / empty comment · `413` body over 8 KiB · `429` a rate
+  limit (with `Retry-After`) or the artifact's reply cap · `503` the hook pool
+  is full (with `Retry-After`) · `507` the aggregate reply limits are reached.
 
 ### `GET /replies` — list *(auth)*
 JSON, newest first. Filters: `?slug=<slug>`, `?status=pending|read|all`
@@ -66,12 +76,14 @@ curl -H "Authorization: Bearer $TOKEN" \
 ### `POST /replies/{id}/ack` — mark read *(auth)*
 `204` on success, `404` for an unknown id. Idempotent triage of a pending queue.
 
-### `POST /{slug}` — same-origin answer submit (content plane, mesh-only)
+### `POST /answer/{slug}`: same-origin answer submit (content plane, viewer)
 The **content-origin** submit path for the inline reply box (below). It records a
 single free-text answer as a **`comment`**-kind reply and returns a
 **server-rendered** result page: `201` "✓ Recorded" only after the answer is
-durably stored, or an explicit "Not recorded" page (`400`/`413`/`429`/`404`/`503`)
-on any failure. Mounted via the optional `module.ContentRouteModule` seam so it
+durably stored, or an explicit "Not recorded" page
+(`400`/`401`/`404`/`413`/`429`/`503`/`507`) on any failure. The content listener
+refuses cross-origin browser posts (`403`), except from an opaque origin (a
+sandboxed page) whose Referer is absent or on the content origin. Mounted via the optional `module.ContentRouteModule` seam so it
 lives on the same origin that serves the page. `404` for an unknown/private slug.
 
 ## Inline reply box on a rendered page (Q&A / teaching)
@@ -93,7 +105,8 @@ stored, and a failed write shows an error — never a false success. Read the
 answers with `GET /replies?slug=lesson-01` like any other `comment` reply.
 
 Requires `?render=md`; rejected with `?private` (a private capability page can't
-collect replies).
+collect replies). `?reply=question` also enables replies for the artifact, so
+the box and the `/reply/{slug}` form both accept them.
 
 ## Reply-event hook (zero-polling consumers)
 
@@ -110,17 +123,24 @@ reply_hook_url  = http://127.0.0.1:9099/reply-event
 
 - **exec** — run via `/bin/sh -c`; the reply
   `{id, slug, kind, body, created_at, status}` arrives as JSON on **stdin** and
-  as `DEMIPLANE_REPLY_ID/SLUG/KIND/BODY` env vars. Bounded at 5 minutes —
-  long-running work should enqueue/detach (as the `systemd-run` example does).
+  as `DEMIPLANE_REPLY_ID/SLUG/KIND/BODY` env vars. It runs in its own process
+  group, killed when the shell exits or after `reply_hook_timeout` (default
+  `5m`), so long-running work must detach (as the `systemd-run` example does,
+  or with `setsid`). Output is read as it streams; the first 512 bytes are kept
+  for the failure log.
 - **webhook** — the same JSON is POSTed (`application/json`, 30 s bound).
   Redirects are not followed (a `3xx` is logged as a failed delivery), so the
   reply is only ever sent to the configured URL; point it at the final
   endpoint.
 
-Dispatch is **fire-and-forget, strictly after the insert**: a failing or slow
-hook is logged and can never fail, delay, or roll back the reply write — the
-viewer's honest confirmation is independent of hook fate. A malformed
-`reply_hook_url` is a hard startup error, like any other config key.
+Dispatch runs on a bounded pool: `reply_hook_workers` events at once (default
+2) and at most `reply_hook_queue` more waiting (default 32). A submission takes
+its place in the pool **before** the reply is stored; a full pool refuses the
+submission with `503` and records nothing, so a stored reply's hook is never
+dropped. Once admitted, a failing or slow hook is logged and can never fail,
+delay, or roll back the reply write; the viewer's honest confirmation is
+independent of hook fate. A malformed value is a hard startup error, like any
+other config key.
 
 Failure logs are kept free of reply content and hook credentials. The exec
 hook's output is discarded by default, because a grading hook often echoes the
@@ -157,13 +177,17 @@ Together with the hook: answer lands → hook spawns the grader → grader publi
 
 ## Putting reply controls on a page
 
-Link to the form from any published artifact:
+Publish the artifact with `?reply=form`, then link to the form, which is
+served by the control plane:
 
 ```html
-<a href="/reply/my-report">Leave a reply</a>
+<a href="http://demiplane.mesh:8080/reply/my-report">Leave a reply</a>
 ```
 
-…or inline the control directly (it posts `application/x-www-form-urlencoded`):
+…or inline the control in a page served by the control plane (it posts
+`application/x-www-form-urlencoded`). A page on the content origin cannot post
+here: the control plane refuses cross-origin browser writes. Use
+`?reply=question` for an answer box on the page itself.
 
 ```html
 <form method="post" action="/reply/my-report">
@@ -179,8 +203,21 @@ Link to the form from any published artifact:
 - **Module-owned storage:** a private SQLite db at
   `<store>/modules/reply/replies.db` — never core's `meta.db`. Deleting that dir
   removes all replies and nothing else.
-- **Anti-abuse** (the submit endpoint is open on the mesh): 8 KiB body cap,
-  1000-reply-per-artifact cap, target-slug existence check.
+- **Anti-abuse** (the submit endpoint is open to viewers): per-artifact opt-in,
+  the view password, 8 KiB text cap, a 10 s body deadline, submissions
+  rate-limited per client, per artifact and in all (`reply_rate_client`,
+  `reply_rate_target`, `reply_rate_global`; default 10, 60 and 300 a minute),
+  `reply_max_per_artifact` (1000) checked and inserted atomically,
+  `reply_max_total` (100,000) and `reply_max_bytes` (64 MiB) in all, and
+  `reply_retention` (90 days; `0` keeps replies) deleting old replies. The
+  content listener refuses cross-origin browser posts except from an opaque
+  origin (a sandboxed page) with no Referer or one on the content origin; it
+  cannot tell apart two pages served from the same content origin, and a
+  sandboxed frame elsewhere can omit Referer, which is why the opt-in and the
+  password matter. Limits and defaults:
+  [SECURITY.md](../../../SECURITY.md#resource-limits).
 - **No HTML injection sink:** replies are returned only as JSON; the one HTML
-  surface (the form) echoes no stored reply text. No CSRF surface — submit
-  carries no ambient credentials, reads authenticate by header.
+  surface (the form) echoes no stored reply text. Reads authenticate by
+  header. Submits can carry a browser's cached Basic credentials for a
+  password page, which is why the content listener refuses cross-origin
+  browser posts.

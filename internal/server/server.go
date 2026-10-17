@@ -73,6 +73,18 @@ type Config struct {
 	// can read any other artifact the viewer can open. Service workers stay
 	// refused. For single-operator instances that only host trusted content.
 	UnsafeNoSandbox bool
+	// Password bounds view-password verification (viewauth.go). The zero value
+	// uses the defaults.
+	Password PasswordLimits
+	// Requests bounds request bodies, response time and requests in progress
+	// (limits.go). The zero value uses the defaults.
+	Requests RequestLimits
+	// RenderMaxOutput caps a rendered ?render=md page in bytes; 0 takes
+	// render.DefaultLimits.
+	RenderMaxOutput int
+	// RenderConcurrency caps markdown renders running at once; 0 takes
+	// GOMAXPROCS, capped at 4.
+	RenderConcurrency int
 }
 
 // Server wires the store and configuration into HTTP handlers.
@@ -92,9 +104,20 @@ type Server struct {
 	renderFooterLink string
 	renderMetaHeader bool
 	sandbox          bool                        // per-document CSP sandbox on the content origin (isolation.go)
+	renderLimits     render.Limits               // work and output bounds for ?render=md
+	renderSem        chan struct{}               // render slots (renderlimit.go)
 	tokenMAC         []byte                      // random key for constant-time, length-hiding token comparison
+	views            *viewGate                   // view-password rate and concurrency limits
+	reqLimits        RequestLimits               // body, response and admission limits (limits.go), resolved
 	routes           []module.RouteModule        // compiled-in route modules, mounted on the control plane
 	contentRoutes    []module.ContentRouteModule // route modules that also mount on the content origin
+}
+
+// viewKey returns a fresh random key for the verified-password cache.
+func viewKey() []byte {
+	k := make([]byte, 32)
+	_, _ = rand.Read(k)
+	return k
 }
 
 // New returns a Server.
@@ -119,7 +142,11 @@ func New(st *store.Store, cfg Config) *Server {
 		renderFooterLink: cfg.RenderFooterLink,
 		renderMetaHeader: cfg.RenderMetaHeader,
 		sandbox:          !cfg.UnsafeNoSandbox,
+		renderLimits:     render.Limits{MaxOutputBytes: cfg.RenderMaxOutput},
+		renderSem:        newRenderSem(cfg.RenderConcurrency),
 		tokenMAC:         key,
+		views:            newViewGate(cfg.Password, viewKey()),
+		reqLimits:        cfg.Requests.resolved(),
 		routes:           module.RouteModules(),
 		contentRoutes:    module.ContentRouteModules(),
 	}
@@ -173,7 +200,7 @@ func (s *Server) ModuleDataDir(name string) (string, error) {
 func (s *Server) ControlHandler() http.Handler {
 	mux := http.NewServeMux()
 	s.registerControlRoutes(mux)
-	return withSecurityHeaders(s.hostPolicy(canonicalPaths(s.guardCrossOriginWrites(mux))))
+	return s.wrapListener(s.guardCrossOriginWrites(mux))
 }
 
 // ContentHandler returns the artifact-serving handler: GET /{slug} only. It is
@@ -195,7 +222,24 @@ func (s *Server) ContentHandler() http.Handler {
 	// The bare content root has no landing on this plane (the landing lives on the
 	// control origin); serve the themed 404 rather than ServeMux's plaintext one.
 	mux.HandleFunc("GET /{$}", s.serveContentNotFound)
-	return withSecurityHeaders(s.hostPolicy(canonicalPaths(mux)))
+	// The content plane's only writes are module submit routes (the reply
+	// module's POST /answer/{slug}). A cross-origin write guard keeps another
+	// site from posting to them through a visitor's browser. It admits an
+	// opaque origin (a sandboxed page, as demiplane serves artifacts) unless
+	// the Referer names another origin, and it cannot tell apart two pages on
+	// this origin, so it is defence in depth: reply admission rests on the
+	// per-artifact opt-in, the view password and the reply limits.
+	return s.wrapListener(s.guardContentWrites(mux))
+}
+
+// wrapListener is the middleware every listener's handler sits behind, in
+// order: body and write deadlines (before anything can answer, so refusals
+// are bounded too), the baseline headers and the service-worker refusal, the
+// accepted-host policy, path canonicalization, then admission, which counts
+// only requests that will be routed. The cross-origin guard and the mux are
+// inside. One call per listener: admission counts are per listener.
+func (s *Server) wrapListener(guarded http.Handler) http.Handler {
+	return s.withRequestDeadlines(withSecurityHeaders(s.hostPolicy(canonicalPaths(s.withAdmission(guarded)))))
 }
 
 // Handler returns a single combined handler that serves BOTH the control plane
@@ -212,7 +256,9 @@ func (s *Server) Handler() http.Handler {
 	s.mountCoreContentRoutes(mux)
 	s.mountContentRouteModules(mux)
 	mux.HandleFunc("GET /{slug}", s.handleGet)
-	return withSecurityHeaders(s.hostPolicy(canonicalPaths(mux)))
+	// One origin serves both planes here, so the content plane's sandboxed
+	// pages post from an opaque origin too; see ContentHandler.
+	return s.wrapListener(s.guardContentWrites(mux))
 }
 
 // registerControlRoutes mounts every route except the artifact catch-all
@@ -265,6 +311,39 @@ func (s *Server) guardCrossOriginWrites(next http.Handler) http.Handler {
 	})
 }
 
+// guardContentWrites is guardCrossOriginWrites for a listener that serves
+// artifacts, judged against the content origin (contentBase) rather than the
+// control plane's. A write from an opaque origin ("Origin: null", as a
+// sandboxed artifact page sends) is admitted unless its Referer names an
+// origin other than the content origin. Browsers do not let a page forge
+// Referer, though a page can omit it; see ContentHandler for why this is
+// defence in depth only.
+func (s *Server) guardContentWrites(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		self, _ := normalizeOrigin(s.contentBase(r))
+		if crossOriginWrite(r, self) && !opaqueOriginWriteOK(r, self) {
+			http.Error(w, "cross-origin write rejected", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// opaqueOriginWriteOK reports whether a write that crossOriginWrite flags came
+// from an opaque origin with no Referer, or with a Referer whose full origin
+// is self.
+func opaqueOriginWriteOK(r *http.Request, self string) bool {
+	if r.Header.Get("Origin") != "null" {
+		return false
+	}
+	ref := r.Header.Get("Referer")
+	if ref == "" {
+		return true
+	}
+	got, ok := normalizeOrigin(ref)
+	return ok && self != "" && got == self
+}
+
 // isCrossOriginWrite reports whether a state-changing request came from a
 // different origin, per the browser's own fetch-metadata. Sec-Fetch-Site is
 // authoritative when present (every modern browser sends it): only same-origin
@@ -275,6 +354,32 @@ func (s *Server) guardCrossOriginWrites(next http.Handler) http.Handler {
 // configured, else with the request's own origin. No header at all ⇒ a
 // non-browser client ⇒ allowed.
 func (s *Server) isCrossOriginWrite(r *http.Request) bool {
+	return crossOriginWrite(r, s.controlOrigin(r))
+}
+
+// controlOrigin is the control plane's own origin, normalized: the --base-url
+// origin when one is configured, else the request's. With --base-url set its
+// origin is authoritative: behind a TLS-terminating proxy the listener sees
+// plain HTTP from the proxy, so an origin inferred from the request would
+// accept an http:// page writing to the https:// control plane. "" (never
+// matched) when the configured base URL does not parse as an origin.
+func (s *Server) controlOrigin(r *http.Request) string {
+	if s.baseURL != "" {
+		base, _ := normalizeOrigin(s.baseURL)
+		return base
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	self, _ := normalizeOrigin(scheme + "://" + r.Host)
+	return self
+}
+
+// crossOriginWrite is the check behind both write guards: whether a
+// state-changing request came from an origin other than self (a normalized
+// origin; "" matches nothing).
+func crossOriginWrite(r *http.Request, self string) bool {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return false // reads/preflights don't change state
@@ -292,20 +397,7 @@ func (s *Server) isCrossOriginWrite(r *http.Request) bool {
 		if !ok {
 			return true // opaque ("null") or unparseable Origin on a write ⇒ refuse
 		}
-		// With --base-url set its origin is authoritative: behind a
-		// TLS-terminating proxy the listener sees plain HTTP from the proxy,
-		// so an origin inferred from the request would accept an http://
-		// page writing to the https:// control plane.
-		if s.baseURL != "" {
-			base, ok := normalizeOrigin(s.baseURL)
-			return !ok || got != base
-		}
-		scheme := "http"
-		if r.TLS != nil {
-			scheme = "https"
-		}
-		self, ok := normalizeOrigin(scheme + "://" + r.Host)
-		return !ok || got != self
+		return self == "" || got != self
 	}
 	return false // no browser signals ⇒ non-browser client (curl/SSH/agent)
 }
@@ -479,13 +571,23 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	}
 	defer body.Close()
 
+	// Replies are accepted only for artifacts whose publish enabled them; the
+	// choice is stored with the artifact and replaced by the next publish.
+	// ?reply=form enables the reply module's Approve/Defer/Comment form at
+	// /reply/<slug> without changing the page. Neither mode works on a private
+	// artifact, whose slug is never offered to a replier.
+	mode := replyMode(q)
+	if mode != "" && private {
+		http.Error(w, "?reply cannot be combined with ?private: a private capability page cannot collect replies", http.StatusBadRequest)
+		return
+	}
 	// An inline reply box (?reply=question) only makes sense baked into a
 	// server-rendered page that answers at a stable, publicly-addressable URL: the
 	// box posts to /answer/<slug> on the content plane, and the submit handler
 	// answers only for public (non-private) slugs. Require ?render=md and a named
 	// ?slug=, and reject ?private — the combinations that would otherwise produce a
 	// box that can never record an answer.
-	replyBox := replyRequested(q)
+	replyBox := mode == replyModeQuestion
 	if replyBox {
 		if !renderRequested(q) {
 			http.Error(w, "?reply requires ?render=md — the reply box is baked into the rendered page", http.StatusBadRequest)
@@ -543,6 +645,10 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "upload exceeds the configured size limit", http.StatusRequestEntityTooLarge)
 				return
 			}
+			if isBodyTimeout(rerr) {
+				http.Error(w, bodyTimeoutMessage, http.StatusRequestTimeout)
+				return
+			}
 			log.Printf("render read failed: %s", logsafe.Err(rerr))
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
@@ -560,7 +666,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		// nav (a generated slug is not a stable link target). A List error is
 		// non-fatal — the colophon just shows the meta row with no series nav.
 		published := time.Now()
-		src = bytes.NewReader(render.Markdown(data, render.Options{
+		page, rerr := s.renderDoc(r.Context(), data, render.Options{
 			Theme:       s.renderTheme,
 			CSS:         s.renderCSS,
 			Title:       named, // slug fallback; the body's first H1 wins when present
@@ -576,7 +682,14 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 			Siblings:    s.seriesSiblings(series, named),
 			ContentBase: s.contentBase(r),
 			IndexURL:    s.requestBase(r) + "/gallery",
-		}))
+		})
+		if rerr != nil {
+			// Nothing has been stored yet: a rejected render leaves the slug
+			// as it was.
+			writeRenderError(w, rerr)
+			return
+		}
+		src = bytes.NewReader(page)
 		filename = renderedName(filename)
 		// Retain the markdown and the request-side render arguments, so this page
 		// can be rebaked by a later renderer without its author still holding a
@@ -596,6 +709,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		// this slug by an earlier rendered publish (store.Put).
 		Source:     sourceBody,
 		RenderSpec: renderSpec,
+		Replies:    mode != "",
 	}
 	art, err := s.store.Put(opts, src)
 	if err != nil {
@@ -604,8 +718,16 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "upload exceeds the configured size limit", http.StatusRequestEntityTooLarge)
 			return
 		}
+		if errors.Is(err, store.ErrQuota) {
+			http.Error(w, quotaMessage, http.StatusInsufficientStorage)
+			return
+		}
 		if isClientError(err) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if isBodyTimeout(err) {
+			http.Error(w, bodyTimeoutMessage, http.StatusRequestTimeout)
 			return
 		}
 		log.Printf("publish failed: %s", logsafe.Err(err, named))
@@ -624,6 +746,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 			"password":     art.HasPassword(),
 			"expires_at":   rfc3339OrEmpty(art.ExpiresAt),
 			"series":       art.Series,
+			"replies":      art.Replies,
 		})
 		return
 	}
@@ -683,9 +806,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		setProtectedHeaders(w)
 	}
 
-	if art.HasPassword() && !passwordOK(r, art.PasswordHash) {
-		w.Header().Set("WWW-Authenticate", passwordChallenge(slug))
-		http.Error(w, "password required", http.StatusUnauthorized)
+	if res, wait := s.CheckView(r, art); writeViewDenied(w, slug, res, wait) {
 		return
 	}
 
@@ -731,6 +852,8 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 			r.Header.Del("Range")
 		}
 	}
+	// Time to send the body to a slow but honest reader, and no more.
+	s.extendWriteDeadline(w, art.Size)
 	// ServeContent handles Range requests, conditional GETs, and keeps the
 	// content-type we set above.
 	http.ServeContent(w, r, art.Filename, lastModified, f)
@@ -847,6 +970,9 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"artifacts": items, "count": len(items)})
 }
 
+// quotaMessage is the 507 body when a write would pass the store quota.
+const quotaMessage = "storage quota exceeded; delete artifacts or raise --store-quota"
+
 // maxRenderBytes bounds how much markdown the render path will buffer.
 const maxRenderBytes = 8 << 20 // 8 MiB
 
@@ -860,18 +986,30 @@ func renderRequested(q url.Values) bool {
 	return false
 }
 
-// replyRequested reports whether the publish asked for an inline reply box via
-// ?reply=question (the Q&A/teaching mode) or a plain truthy ?reply. The box is a
-// server-rendered, JS-free form that posts same-origin to the page's own URL.
-func replyRequested(q url.Values) bool {
+// Reply modes a publish can ask for (replyMode).
+const (
+	// replyModeQuestion bakes the inline answer box into a rendered page.
+	replyModeQuestion = "question"
+	// replyModeForm enables replies through the reply module's own form,
+	// leaving the page as published.
+	replyModeForm = "form"
+)
+
+// replyMode reports which reply mode the publish asked for: "" (replies off),
+// replyModeForm for ?reply=form, and replyModeQuestion for ?reply=question or
+// any other truthy ?reply (the inline box: a server-rendered, JS-free form that
+// posts same-origin to the page's own URL).
+func replyMode(q url.Values) string {
 	if !q.Has("reply") {
-		return false
+		return ""
 	}
 	switch strings.ToLower(strings.TrimSpace(q.Get("reply"))) {
 	case "0", "false", "no", "off":
-		return false
+		return ""
+	case replyModeForm:
+		return replyModeForm
 	default: // "question", "comment", "1", "true", "on", bare ?reply
-		return true
+		return replyModeQuestion
 	}
 }
 
@@ -1216,16 +1354,6 @@ func queryFlag(q url.Values, key string) bool {
 	default:
 		return true
 	}
-}
-
-// passwordOK reports whether the request carries HTTP Basic credentials whose
-// password matches the artifact's hash. The username is ignored.
-func passwordOK(r *http.Request, hash string) bool {
-	_, pass, ok := r.BasicAuth()
-	if !ok {
-		return false
-	}
-	return store.PasswordMatches(hash, pass)
 }
 
 // rfc3339OrEmpty formats t as RFC3339, or "" for the zero time.

@@ -283,6 +283,9 @@ func (s *Server) handleLiveEvents(hub *liveHub, w http.ResponseWriter, r *http.R
 		return
 	}
 	defer hub.unsubscribe(slug, client, ch)
+	// Subscribed: the stream is bounded by the subscriber caps and per-write
+	// deadlines now, not by the request limits.
+	detachLongLived(w, r)
 
 	rc := http.NewResponseController(w)
 

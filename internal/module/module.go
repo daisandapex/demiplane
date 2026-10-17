@@ -13,14 +13,42 @@
 package module
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
+	"time"
 
 	"github.com/daisandapex/demiplane/internal/store"
 )
 
+// ViewAccess is the outcome of a view-password check (Host.CheckView).
+type ViewAccess int
+
+const (
+	// ViewOK: the artifact has no password, or the request carries it.
+	ViewOK ViewAccess = iota
+	// ViewNeedPassword: no or wrong password; answer 401 with
+	// PasswordChallenge(slug).
+	ViewNeedPassword
+	// ViewThrottled: too many recent failed attempts; answer 429.
+	ViewThrottled
+	// ViewBusy: no password-check capacity right now; answer 503.
+	ViewBusy
+)
+
+// PasswordChallenge is the WWW-Authenticate value for the password-gated
+// artifact slug. The realm is per artifact (a short hash, so the slug itself
+// is not echoed), so a browser does not answer one artifact's challenge with
+// credentials it cached for another. Core and modules answer with the same
+// realm for the same artifact, so one entry of the password covers both.
+func PasswordChallenge(slug string) string {
+	sum := sha256.Sum256([]byte(slug))
+	return `Basic realm="demiplane ` + hex.EncodeToString(sum[:])[:12] + `", charset="UTF-8"`
+}
+
 // Host is the capability surface core hands to a module at startup. It is an
 // interface (not the concrete *server.Server) so a module can reach only these
-// five methods — the entire blast radius of any module is reviewing its use of
+// six methods; the entire blast radius of any module is reviewing its use of
 // this surface. Implemented by *server.Server.
 type Host interface {
 	// Store is the shared artifact content store.
@@ -38,6 +66,10 @@ type Host interface {
 	// persistence (e.g. the reply module's SQLite db) live here, isolated from
 	// the artifact blobs and from each other.
 	ModuleDataDir(name string) (string, error)
+	// CheckView runs core's view-password check for art against r's HTTP Basic
+	// credentials, with core's rate and concurrency limits. The duration is a
+	// Retry-After hint for ViewThrottled and ViewBusy.
+	CheckView(r *http.Request, art store.Artifact) (ViewAccess, time.Duration)
 }
 
 // Module is the base every module implements. Name must be a short, stable,

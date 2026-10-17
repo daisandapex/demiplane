@@ -27,7 +27,19 @@ content — to a built-in dark theme, and `--theme catppuccin|dracula|one-dark` 
 of the named developer palettes (dark-only, so they pin their look and drop the light/dark
 toggle); or point `serve --css <file>` at your own stylesheet to rebrand rendered content.
 The header/footer and the default theme are configurable via flags or
-`~/.config/demiplane/config` (see [Config file](./deployment.md#config-file)). An opt-in
+`~/.config/demiplane/config` (see [Config file](./deployment.md#config-file)).
+
+Rendering is bounded. A table may have at most 128 columns, and a document at
+most 1,000,000 table body cells (rows times header columns, since short rows
+are padded to the header width). The rendered page may be at most
+`--render-max-output` bytes (default 32 MiB; an 8 MiB document of prose or
+highlighted code renders to about 15 MB). A document over a limit is refused
+with `413` and a message naming the limit: nothing is stored, and an existing
+page at that slug is kept. At most `--render-concurrency` renders run at once
+(default GOMAXPROCS, at most 4); a render that waits 5s for a slot gets `503`
+with `Retry-After: 5`. `POST /rerender/{slug}` answers the same way, and
+`POST /rerender` lists refused pages under `failed` with the reason; a refused
+rebake leaves the stored page unchanged. An opt-in
 **browse page** (`serve --browse`) lists non-private artifacts at `GET /` — private/capability
 artifacts are never listed.
 
@@ -75,11 +87,22 @@ binary stays tiny:
 
 ```sh
 go build -tags reply -o demiplane ./cmd/demiplane
-# submit is mesh-only (a replier is a viewer); reading replies needs the bearer token
+# replies are accepted only where the publish enabled them
+curl --data-binary @proposal.html "http://demiplane.mesh:8080/publish?slug=proposal&reply=form"
+# submitting is a viewer action; reading replies needs the bearer token
 curl -X POST -H 'Content-Type: application/json' \
      --data '{"kind":"approve","body":"ship it"}' http://demiplane.mesh:8080/reply/proposal
 curl -H "Authorization: Bearer $TOKEN" "http://demiplane.mesh:8080/replies?status=pending"
 ```
+
+A publish enables replies with `?reply=form` (the Approve/Defer/Comment form at
+`/reply/{slug}`, page unchanged) or `?reply=question` (the inline box below);
+any later publish to the slug without `?reply` turns them off. A
+password-protected page needs its password to reply, as it does to view.
+Submissions are rate-limited per client, per page and in all, and stored replies
+are capped per page and in all; see
+[SECURITY.md](../SECURITY.md#resource-limits) for the limits and their
+`reply_*` config keys.
 
 Storage is module-owned and isolated; core's API and security model are
 untouched. See [`internal/modules/reply/`](../internal/modules/reply/) and
@@ -107,7 +130,7 @@ The reader gets a single answer box at the foot of the page. The form is
 
 Each answer is stored as a `comment`-kind reply; read them with
 `GET /replies?slug=lesson-01` (bearer auth), same as any other reply. The
-same-origin submit route (`POST /{slug}` on the content plane) is contributed by
+same-origin submit route (`POST /answer/{slug}` on the content plane) is contributed by
 the reply module via the optional `ContentRouteModule` seam (ADR 0002).
 
 ### Reply-event hook + forward flow (auto-advance lessons)
@@ -126,10 +149,15 @@ Two additions close the answer → next-lesson loop without any polling:
   reply_hook_url = http://127.0.0.1:9099/reply-event
   ```
 
-  Dispatch is **fire-and-forget**: a failing or slow hook is logged and can never
-  fail, delay, or roll back the reply write (the exec action is bounded at 5
-  minutes — long-running work should enqueue/detach). A malformed value is a
-  hard startup error, like any other config key.
+  Dispatch is **asynchronous** through a bounded pool (`reply_hook_workers`,
+  default 2, behind a queue of `reply_hook_queue`, default 32). A submission
+  takes its place in the pool before the reply is stored, so a full pool
+  refuses the submission with `503` and records nothing. Once admitted, a
+  failing or slow hook is logged and can never fail, delay, or roll back the
+  reply write. The exec action runs in its own process group, which is killed
+  when the shell exits or `reply_hook_timeout` (default 5m) passes, so
+  long-running work must detach (`systemd-run`, as above, or `setsid`). A
+  malformed value is a hard startup error, like any other config key.
 
 - **Forward flow (`?next=`).** Publish a lesson with the sequel's slug:
 

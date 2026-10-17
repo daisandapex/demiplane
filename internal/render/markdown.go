@@ -12,6 +12,7 @@
 package render
 
 import (
+	"context"
 	"html"
 	"regexp"
 	"strconv"
@@ -97,6 +98,8 @@ type Options struct {
 	// student there. Validated at publish (slug-shaped, ≠ ReplySlug) and
 	// re-validated at submit (a hidden field is client-tamperable).
 	ReplyNext string
+	// Limits bounds the render; zero fields take DefaultLimits.
+	Limits Limits
 }
 
 var (
@@ -124,11 +127,19 @@ var (
 	reItalicU = regexp.MustCompile(`\b_([^_]+)_\b`)
 )
 
-// Markdown renders src as a complete, styled HTML document (used for the
+// Render renders src as a complete, styled HTML document (used for the
 // ?render=md publish path). opts selects the theme/custom stylesheet and the
 // optional masthead + footer chrome; the design tokens and typography are the
 // same the /docs pages use, shared via internal/theme.
-func Markdown(src []byte, opts Options) []byte {
+//
+// The render is bounded by opts.Limits (see budget.go): a document that would
+// exceed a limit is rejected with an error matching ErrBudget, never
+// truncated. It stops with the context's error once ctx is done.
+func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
+	st := newState(ctx, opts.Limits.withDefaults())
+	if err := st.ctxErr(); err != nil {
+		return nil, err
+	}
 	body := src
 
 	// Frontmatter: a leading `---`-fenced key:value block. When the meta-header is
@@ -201,7 +212,10 @@ func Markdown(src []byte, opts Options) []byte {
 		css += printCSS
 	}
 
-	bodyHTML := Body(body)
+	bodyHTML, err := renderBlocks(st, string(body))
+	if err != nil {
+		return nil, err
+	}
 	if opts.Header {
 		// The first body paragraph is the document's dek. Tag it explicitly so the
 		// lead treatment targets .lead, not a positional selector that breaks the
@@ -281,9 +295,12 @@ func Markdown(src []byte, opts Options) []byte {
 		b.WriteString(tstampScript)
 	}
 	b.WriteString(docTail)
+	if err := st.output(b.Len()); err != nil {
+		return nil, err
+	}
 	// The colophon's size sentinel is now resolved against the finished document
 	// length — the exact byte count the store will record for this artifact.
-	return []byte(fillSize(b.String()))
+	return []byte(fillSize(b.String())), nil
 }
 
 // splitFirstH1 returns the inline-rendered text of the document's first level-1
@@ -384,21 +401,52 @@ func slugify(s string) string {
 	return strings.TrimRight(b.String(), "-")
 }
 
-// uniqueSlug returns slugify(text) made unique within one document by appending
-// a numeric suffix (-1, -2, …) on collision, recording every id it hands out
-// (including the suffixed forms) so a later natural "foo-1" heading cannot
-// duplicate a generated one. An empty slug (a heading of only punctuation or
-// emoji) falls back to "section". Deterministic for a given heading sequence.
-func uniqueSlug(text string, used map[string]bool) string {
+// slugger hands out heading ids that are unique within one document:
+// slugify(text), with a numeric suffix (-1, -2, ...) on collision. Every id
+// handed out is recorded (including the suffixed forms), so a later natural
+// "foo-1" heading cannot duplicate a generated one. An empty slug (a heading
+// of only punctuation or emoji) falls back to "section". Deterministic for a
+// given heading sequence.
+//
+// next remembers, per base, the lowest suffix that may still be free: every
+// smaller suffix was either handed out or found taken, and ids are never
+// released, so resuming there yields the same id a search from 1 would. A
+// candidate "base-i" belongs to exactly one base (the text before its last
+// hyphen), so each taken id is skipped at most once and the total work is
+// linear in the number of headings.
+type slugger struct {
+	used map[string]bool
+	next map[string]int
+}
+
+func newSlugger() slugger {
+	return slugger{used: map[string]bool{}, next: map[string]int{}}
+}
+
+func (sg slugger) unique(text string) string {
 	base := slugify(text)
 	if base == "" {
 		base = "section"
 	}
 	s := base
-	for i := 1; used[s]; i++ {
-		s = base + "-" + strconv.Itoa(i)
+	if sg.used[s] {
+		i := sg.next[base]
+		if i == 0 {
+			i = 1
+		}
+		for {
+			s = base + "-" + strconv.Itoa(i)
+			if !sg.used[s] {
+				break
+			}
+			if workProbe != nil {
+				workProbe(1)
+			}
+			i++
+		}
+		sg.next[base] = i + 1
 	}
-	used[s] = true
+	sg.used[s] = true
 	return s
 }
 
@@ -497,31 +545,53 @@ const replyBoxCSS = `
 // Body renders src to inner HTML only (no <html>/<head> wrapper), so callers
 // such as the /docs route can place it inside their own page chrome while
 // reusing this single markdown engine.
+//
+// Body is for trusted, operator-shipped documents and applies no limits; the
+// publish path uses Render.
 func Body(src []byte) string {
-	return renderBlocks(string(src))
+	out, _ := renderBlocks(newState(context.Background(), unlimited), string(src))
+	return out
 }
 
-// renderBlocks converts markdown block structure to HTML.
-func renderBlocks(src string) string {
+// renderBlocks converts markdown block structure to HTML. Heading ids come from
+// st.slugs, scoped per render, so ids are stable for a given source and
+// independent across documents.
+func renderBlocks(st *state, src string) (string, error) {
 	lines := strings.Split(strings.ReplaceAll(src, "\r\n", "\n"), "\n")
 	var out strings.Builder
 	var para []string
-	// used records the heading ids emitted so far in this document so colliding
-	// slugs get a deterministic numeric suffix (uniqueSlug). Scoped per render, so
-	// ids are stable for a given source and independent across documents.
-	used := map[string]bool{}
+	// paraErr holds a paragraph refused by inlineFits; it is returned at the
+	// top of the next iteration (or after the loop).
+	var paraErr error
 
 	flushPara := func() {
-		if len(para) == 0 {
+		if len(para) == 0 || paraErr != nil {
+			return
+		}
+		text := strings.Join(para, " ")
+		para = para[:0]
+		if paraErr = st.inlineFits(text, out.Len()); paraErr != nil {
 			return
 		}
 		out.WriteString("<p>")
-		out.WriteString(inline(strings.Join(para, " ")))
+		out.WriteString(inline(text))
 		out.WriteString("</p>\n")
-		para = para[:0]
 	}
 
 	for i := 0; i < len(lines); i++ {
+		// Every block is checked against the output cap once it is written, and
+		// the context is checked as lines are consumed. A block that can expand
+		// a lot (inline text, a code block) is also held to the remaining
+		// budget before or while it is produced.
+		if paraErr != nil {
+			return "", paraErr
+		}
+		if err := st.output(out.Len()); err != nil {
+			return "", err
+		}
+		if err := st.tick(); err != nil {
+			return "", err
+		}
 		line := lines[i]
 		trimmed := strings.TrimSpace(line)
 
@@ -533,6 +603,9 @@ func renderBlocks(src string) string {
 			lang := strings.TrimSpace(trimmed[3:])
 			var code []string
 			for i++; i < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[i]), "```"); i++ {
+				if err := st.tick(); err != nil {
+					return "", err
+				}
 				code = append(code, lines[i])
 			}
 			joined := strings.Join(code, "\n")
@@ -544,7 +617,11 @@ func renderBlocks(src string) string {
 			// highlight() escapes every byte it emits (classed span or plain run);
 			// an unsupported language returns the source HTML-escaped and unstyled,
 			// so the raw-HTML-in-code XSS guard holds either way.
-			out.WriteString(highlight(lang, joined))
+			codeHTML, err := highlightTo(st, st.lim.MaxOutputBytes-out.Len(), lang, joined)
+			if err != nil {
+				return "", err
+			}
+			out.WriteString(codeHTML)
 			out.WriteString("</code></pre>\n")
 
 		case trimmed == "":
@@ -559,7 +636,10 @@ func renderBlocks(src string) string {
 			m := reHeading.FindStringSubmatch(trimmed)
 			level := len(m[1])
 			plain := headingText(m[2])
-			id := uniqueSlug(plain, used)
+			if err := st.inlineFits(m[2], out.Len()); err != nil {
+				return "", err
+			}
+			id := st.slugs.unique(plain)
 			lvl := byte('0' + level)
 			out.WriteString("<h")
 			out.WriteByte(lvl)
@@ -578,6 +658,9 @@ func renderBlocks(src string) string {
 			// rules the list continuation uses.
 			var quote []string
 			for i < len(lines) {
+				if err := st.tick(); err != nil {
+					return "", err
+				}
 				qt := strings.TrimSpace(lines[i])
 				if strings.HasPrefix(qt, "> ") {
 					quote = append(quote, strings.TrimPrefix(qt, "> "))
@@ -590,21 +673,43 @@ func renderBlocks(src string) string {
 				i++
 			}
 			i--
+			qtext := strings.Join(quote, " ")
+			if err := st.inlineFits(qtext, out.Len()); err != nil {
+				return "", err
+			}
 			out.WriteString("<blockquote>")
-			out.WriteString(inline(strings.Join(quote, " ")))
+			out.WriteString(inline(qtext))
 			out.WriteString("</blockquote>\n")
 
 		case isUnordered(trimmed) || reOrdered.MatchString(trimmed):
 			flushPara()
-			listHTML, next := renderList(lines, i)
+			listHTML, next, err := renderList(st, lines, i, out.Len())
+			if err != nil {
+				return "", err
+			}
 			out.WriteString(listHTML)
 			i = next - 1
 
 		case strings.Contains(trimmed, "|") && i+1 < len(lines) && reTableSep.MatchString(lines[i+1]):
 			// GFM pipe table: header row, |---| separator, then body rows until a
 			// blank or non-pipe line.
+			//
+			// The width is counted before the header is split, and every body row
+			// is admitted against the document's cell budget at that width (rows
+			// are padded to it) before it is split, so an oversized table is
+			// rejected before its cells are allocated.
 			flushPara()
-			header := splitCells(trimmed)
+			cols := countCells(trimmed)
+			if err := st.tableColumns(cols); err != nil {
+				return "", err
+			}
+			// Cell text is held to the remaining output budget, row by row,
+			// before it is split and formatted.
+			tableText := escapedLen(trimmed)
+			if err := st.inlineFits(trimmed, out.Len()); err != nil {
+				return "", err
+			}
+			header := splitCells(trimmed, cols)
 			i += 2 // consume header + separator; i now at the first body row
 			var rows [][]string
 			for i < len(lines) {
@@ -612,7 +717,17 @@ func renderBlocks(src string) string {
 				if lt == "" || !strings.Contains(lt, "|") {
 					break
 				}
-				rows = append(rows, splitCells(lt))
+				if err := st.tick(); err != nil {
+					return "", err
+				}
+				if err := st.tableRow(cols); err != nil {
+					return "", err
+				}
+				tableText += escapedLen(lt)
+				if tableText > st.lim.MaxOutputBytes-out.Len() {
+					return "", &BudgetError{Limit: "output bytes", Max: st.lim.MaxOutputBytes}
+				}
+				rows = append(rows, splitCells(lt, cols))
 				i++
 			}
 			i-- // the outer loop's i++ advances past the last consumed row
@@ -623,7 +738,13 @@ func renderBlocks(src string) string {
 		}
 	}
 	flushPara()
-	return out.String()
+	if paraErr != nil {
+		return "", paraErr
+	}
+	if err := st.output(out.Len()); err != nil {
+		return "", err
+	}
+	return out.String(), nil
 }
 
 func isUnordered(s string) bool {
@@ -663,7 +784,10 @@ func interruptsParagraph(trimmed string) bool {
 // deferred until a sibling replaces it, a child list closes above it, or the run
 // unwinds — which is what lets a nested list live inside its parent's still-open
 // <li>.
-func renderList(lines []string, start int) (string, int) {
+//
+// used is the output already emitted before the list, so item text can be
+// held to the remaining budget before it is formatted.
+func renderList(st *state, lines []string, start, used int) (string, int, error) {
 	type frame struct {
 		indent  int
 		ordered bool
@@ -691,15 +815,27 @@ func renderList(lines []string, start int) (string, int) {
 	}
 	// flushItem emits the current item's buffered content: a tight single
 	// paragraph renders bare, a loose item wraps each paragraph in <p>.
+	// itemErr holds item text refused by inlineFits, returned by the loop.
+	var itemErr error
+	emit := func(p []string) string {
+		text := strings.Join(p, " ")
+		if itemErr == nil {
+			itemErr = st.inlineFits(text, used+b.Len())
+		}
+		if itemErr != nil {
+			return ""
+		}
+		return inline(text)
+	}
 	flushItem := func() {
 		if para == nil && paras == nil {
 			return
 		}
 		if len(paras) == 0 {
-			b.WriteString(inline(strings.Join(para, " ")))
+			b.WriteString(emit(para))
 		} else {
 			for _, p := range append(paras, para) {
-				b.WriteString("<p>" + inline(strings.Join(p, " ")) + "</p>")
+				b.WriteString("<p>" + emit(p) + "</p>")
 			}
 		}
 		para, paras = nil, nil
@@ -707,6 +843,12 @@ func renderList(lines []string, start int) (string, int) {
 
 	i := start
 	for i < len(lines) {
+		if itemErr != nil {
+			return "", 0, itemErr
+		}
+		if err := st.tick(); err != nil {
+			return "", 0, err
+		}
 		raw := lines[i]
 		trimmed := strings.TrimSpace(raw)
 
@@ -782,6 +924,9 @@ func renderList(lines []string, start int) (string, int) {
 		i++
 	}
 	flushItem()
+	if itemErr != nil {
+		return "", 0, itemErr
+	}
 
 	// Unwind any levels left open at the end of the run.
 	for len(stack) > 0 {
@@ -789,17 +934,33 @@ func renderList(lines []string, start int) (string, int) {
 		closeTag(stack[len(stack)-1].ordered)
 		stack = stack[:len(stack)-1]
 	}
-	return b.String(), i
+	return b.String(), i, nil
 }
 
-// splitCells splits a GFM table row into inline-rendered cell HTML. Leading and
-// trailing pipes are stripped; each cell goes through inline(), which escapes
-// before formatting — so cell content (including raw HTML) cannot inject.
-func splitCells(row string) []string {
+// rowInner strips a table row's surrounding whitespace and its leading and
+// trailing pipe.
+func rowInner(row string) string {
 	s := strings.TrimSpace(row)
 	s = strings.TrimPrefix(s, "|")
-	s = strings.TrimSuffix(s, "|")
-	parts := strings.Split(s, "|")
+	return strings.TrimSuffix(s, "|")
+}
+
+// countCells returns how many cells splitCells would find in row, without
+// allocating them.
+func countCells(row string) int {
+	return strings.Count(rowInner(row), "|") + 1
+}
+
+// splitCells splits a GFM table row into at most max inline-rendered cells.
+// Leading and trailing pipes are stripped; cells past max are dropped (a body
+// row is truncated to the header width anyway) without being split or
+// rendered. Each cell goes through inline(), which escapes before formatting,
+// so cell content (including raw HTML) cannot inject.
+func splitCells(row string, max int) []string {
+	parts := strings.SplitN(rowInner(row), "|", max+1)
+	if len(parts) > max {
+		parts = parts[:max]
+	}
 	cells := make([]string, len(parts))
 	for i, p := range parts {
 		cells[i] = inline(strings.TrimSpace(p))
@@ -842,12 +1003,22 @@ func renderTable(header []string, rows [][]string) string {
 // placeholder shape highlight.go uses for escaping.
 const codeSentinel = "\x00"
 
+// workProbe, when set by a test, is told how much work the slug and code-span
+// passes do, so their growth can be checked without timing.
+var workProbe func(n int)
+
 // inline escapes text and applies inline formatting. Escaping happens first so
 // raw HTML in the source is rendered as text, never executed. Code spans are
 // then lifted into placeholders BEFORE the emphasis passes run, so `_`/`*`
 // inside inline code (most snake_case identifiers) are never rewritten into
 // <em>/<strong>; the finished spans are restored last.
 func inline(s string) string {
+	// NUL is the placeholder frame and html.EscapeString leaves it alone, so a
+	// source NUL becomes U+FFFD (as CommonMark replaces it) before the
+	// placeholders are cut.
+	if strings.IndexByte(s, 0) >= 0 {
+		s = strings.ReplaceAll(s, "\x00", "\uFFFD")
+	}
 	s = html.EscapeString(s)
 	var spans []string
 	s = reCode.ReplaceAllStringFunc(s, func(m string) string {
@@ -858,10 +1029,45 @@ func inline(s string) string {
 	s = reBold.ReplaceAllString(s, "<strong>$1</strong>")
 	s = reItalic.ReplaceAllString(s, "<em>$1</em>")
 	s = reItalicU.ReplaceAllString(s, "<em>$1</em>")
-	for i, span := range spans {
-		s = strings.Replace(s, codeSentinel+strconv.Itoa(i)+codeSentinel, span, 1)
+	return restoreSpans(s, spans)
+}
+
+// restoreSpans puts each code span back in place of its placeholder in one
+// pass over s. Each placeholder occurs once and is restored once; anything
+// else between NULs is copied through unchanged.
+func restoreSpans(s string, spans []string) string {
+	if len(spans) == 0 {
+		return s
 	}
-	return s
+	if workProbe != nil {
+		workProbe(len(s))
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	restored := make([]bool, len(spans))
+	for {
+		j := strings.IndexByte(s, codeSentinel[0])
+		if j < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		b.WriteString(s[:j])
+		rest := s[j+1:]
+		k := strings.IndexByte(rest, codeSentinel[0])
+		if k < 0 {
+			b.WriteString(s[j:])
+			return b.String()
+		}
+		if idx, err := strconv.Atoi(rest[:k]); err == nil && idx >= 0 && idx < len(spans) && !restored[idx] {
+			restored[idx] = true
+			b.WriteString(spans[idx])
+			s = rest[k+1:]
+			continue
+		}
+		// Not a placeholder: keep the NUL and rescan from the next byte.
+		b.WriteByte(codeSentinel[0])
+		s = rest
+	}
 }
 
 // renderLink turns [text](url) into an anchor. Two layers of XSS defense:

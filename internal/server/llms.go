@@ -75,7 +75,12 @@ Query parameters (all optional):
                   (auth). Needs the -tags reply build. A recorded reply can fire
                   a configurable server-side hook (exec and/or webhook; config
                   keys reply_hook_exec / reply_hook_url) so an agent reacts with
-                  zero polling.
+                  zero polling. A password-protected page needs its password to
+                  answer.
+  ?reply=form     Accept replies through the reply module's form at
+                  /reply/<slug> without changing the page (not valid with
+                  ?private). A publish without ?reply turns replies off for the
+                  slug; replies are accepted only where a publish enabled them.
   ?next=<slug>    Forward flow (requires ?reply): names the page that follows
                   this one. After a recorded answer the confirmation page waits
                   (JS-free meta-refresh via GET /answer/<slug>/next?to=<next>)

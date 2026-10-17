@@ -77,15 +77,16 @@ func (s *Store) sourceFile(slug, gen string) string {
 	return filepath.Join(s.sourceDir, slug+genSep+gen)
 }
 
-// removeGenFiles removes the blob at blobGen and the source at sourceGen. A file
-// that is already gone is not an error.
+// removeGenFiles removes the blob at blobGen and the source at sourceGen,
+// releasing their bytes from the store quota. A file that is already gone is
+// not an error.
 func (s *Store) removeGenFiles(slug, blobGen, sourceGen string) error {
 	var errs []error
-	if err := os.Remove(s.blobFile(slug, blobGen)); err != nil && !os.IsNotExist(err) {
+	if err := s.removeLive(s.blobFile(slug, blobGen)); err != nil {
 		errs = append(errs, fmt.Errorf("remove blob: %w", err))
 	}
 	if sourceGen != noSourceGen {
-		if err := os.Remove(s.sourceFile(slug, sourceGen)); err != nil && !os.IsNotExist(err) {
+		if err := s.removeLive(s.sourceFile(slug, sourceGen)); err != nil {
 			errs = append(errs, fmt.Errorf("remove source: %w", err))
 		}
 	}
@@ -159,8 +160,8 @@ var beforeMetaCommit func(slug string)
 // it committed; its files may be gone, so the write must not commit.
 var errWriteReclaimed = errors.New("write was reclaimed as abandoned before it committed")
 
-// tempPrefix starts every temp file name in blobs/ and sources/.
-const tempPrefix = ".tmp-"
+// Every temp file name in blobs/ and sources/ starts with tempPrefix
+// (quota.go).
 
 // tempPattern is the os.CreateTemp pattern for a temp file that will be
 // renamed to final: it embeds final's name ("<slug>~<gen>"), so Reconcile can

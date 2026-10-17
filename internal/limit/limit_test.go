@@ -1,0 +1,183 @@
+// SPDX-FileCopyrightText: 2026 Dais & Apex
+// SPDX-License-Identifier: AGPL-3.0-only
+
+package limit
+
+import (
+	"context"
+	"net/http/httptest"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+)
+
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *fakeClock) add(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+func TestKeyedBurstThenRefill(t *testing.T) {
+	clk := &fakeClock{t: time.Unix(1000, 0)}
+	k := NewKeyed(Rate{Every: time.Second, Burst: 3}, 0)
+	k.SetClock(clk.now)
+
+	for i := 0; i < 3; i++ {
+		if ok, _ := k.Allow("a"); !ok {
+			t.Fatalf("attempt %d refused inside the burst", i)
+		}
+	}
+	ok, wait := k.Allow("a")
+	if ok {
+		t.Fatal("fourth attempt admitted past the burst")
+	}
+	if wait <= 0 || wait > time.Second {
+		t.Fatalf("wait = %v, want (0, 1s]", wait)
+	}
+	// Another key has its own bucket.
+	if ok, _ := k.Allow("b"); !ok {
+		t.Fatal("independent key refused")
+	}
+	clk.add(time.Second)
+	if ok, _ := k.Allow("a"); !ok {
+		t.Fatal("no token after one refill interval")
+	}
+	if ok, _ := k.Allow("a"); ok {
+		t.Fatal("refill granted more than one token per interval")
+	}
+}
+
+func TestKeyedRefundCapsAtBurst(t *testing.T) {
+	k := NewKeyed(Rate{Every: time.Hour, Burst: 2}, 0)
+	k.Allow("a")
+	k.Refund("a")
+	k.Refund("a")
+	k.Refund("a")
+	for i := 0; i < 2; i++ {
+		if ok, _ := k.Allow("a"); !ok {
+			t.Fatalf("attempt %d refused", i)
+		}
+	}
+	if ok, _ := k.Allow("a"); ok {
+		t.Fatal("refunds raised the bucket past its burst")
+	}
+}
+
+func TestKeyedBoundedKeys(t *testing.T) {
+	k := NewKeyed(Rate{Every: time.Hour, Burst: 1}, 64)
+	for i := 0; i < 10000; i++ {
+		k.Allow("k" + strconv.Itoa(i))
+		if n := k.Len(); n > 64 {
+			t.Fatalf("tracking %d keys, cap 64", n)
+		}
+	}
+}
+
+func TestUnlimitedAlwaysAllows(t *testing.T) {
+	var nilKeyed *Keyed
+	for _, k := range []*Keyed{nilKeyed, NewKeyed(Rate{}, 0)} {
+		for i := 0; i < 100; i++ {
+			if ok, _ := k.Allow("x"); !ok {
+				t.Fatal("unlimited limiter refused")
+			}
+		}
+	}
+}
+
+func TestAllowAllIsAllOrNothing(t *testing.T) {
+	a := NewKeyed(Rate{Every: time.Hour, Burst: 5}, 0)
+	b := NewKeyed(Rate{Every: time.Hour, Burst: 1}, 0)
+	if ok, _ := AllowAll(Charge{a, "x"}, Charge{b, "y"}); !ok {
+		t.Fatal("first combined attempt refused")
+	}
+	if ok, _ := AllowAll(Charge{a, "x"}, Charge{b, "y"}); ok {
+		t.Fatal("second combined attempt admitted though b is empty")
+	}
+	// a was refunded after b refused, so 4 tokens remain in a.
+	for i := 0; i < 4; i++ {
+		if ok, _ := a.Allow("x"); !ok {
+			t.Fatalf("a lost a token to a refused combined attempt (at %d)", i)
+		}
+	}
+	if ok, _ := a.Allow("x"); ok {
+		t.Fatal("a has more tokens than expected")
+	}
+}
+
+func TestGateBoundsHolders(t *testing.T) {
+	g := NewGate(2)
+	if !g.TryAcquire() || !g.TryAcquire() {
+		t.Fatal("could not take both slots")
+	}
+	if g.TryAcquire() {
+		t.Fatal("third holder admitted")
+	}
+	start := time.Now()
+	if g.Acquire(context.Background(), 30*time.Millisecond) {
+		t.Fatal("Acquire succeeded on a full gate")
+	}
+	if time.Since(start) < 25*time.Millisecond {
+		t.Fatal("Acquire did not wait")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if g.Acquire(ctx, time.Minute) {
+		t.Fatal("Acquire succeeded with a cancelled context")
+	}
+	g.Release()
+	if !g.Acquire(context.Background(), time.Second) {
+		t.Fatal("slot not reusable after Release")
+	}
+	if g.InUse() != 2 {
+		t.Fatalf("InUse = %d, want 2", g.InUse())
+	}
+	var nilGate Gate
+	if !nilGate.TryAcquire() || !nilGate.Acquire(context.Background(), 0) {
+		t.Fatal("nil gate refused")
+	}
+	nilGate.Release()
+}
+
+func TestClientKey(t *testing.T) {
+	cases := []struct{ addr, want string }{
+		{"192.0.2.7:4242", "192.0.2.7"},
+		{"[2001:db8:1:2:aaaa::1]:80", "2001:db8:1:2::/64"},
+		{"[2001:db8:1:2:bbbb::9]:81", "2001:db8:1:2::/64"},
+		{"[::ffff:192.0.2.7]:1", "192.0.2.7"},
+		{"not-an-ip", "not-an-ip"},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = c.addr
+		if got := ClientKey(r); got != c.want {
+			t.Errorf("ClientKey(%q) = %q, want %q", c.addr, got, c.want)
+		}
+	}
+}
+
+func TestRetryAfter(t *testing.T) {
+	for _, c := range []struct {
+		d    time.Duration
+		want string
+	}{{0, "1"}, {time.Millisecond, "1"}, {time.Second, "1"}, {1500 * time.Millisecond, "2"}} {
+		if got := RetryAfter(c.d); got != c.want {
+			t.Errorf("RetryAfter(%v) = %q, want %q", c.d, got, c.want)
+		}
+	}
+}
+
+func TestRateString(t *testing.T) {
+	if got := PerMinute(20, 10).String(); got != "20/min burst 10" {
+		t.Errorf("PerMinute(20,10) = %q", got)
+	}
+	if got := (Rate{}).String(); got != "unlimited" {
+		t.Errorf("zero rate = %q", got)
+	}
+}

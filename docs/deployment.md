@@ -108,7 +108,17 @@ stylesheet for `?render=md` pages that replaces the built-in theme), `--header` 
 `--footer-link <url>` (optional; the footer link target, default the demiplane repo),
 `--meta-header` (optional; default on — render a frontmatter-driven meta-header on
 `?render=md` pages, with `--meta-header=false` stripping frontmatter instead),
-`--write-timeout` / `--idle-timeout` (optional HTTP timeouts). Content-type
+`--idle-timeout` (idle keep-alive timeout, default `120s`), `--write-timeout` (legacy
+whole-response timeout, default off; it also ends live-reload streams). Resource limits
+(defaults in brackets; `0` disables each of these): `--body-timeout` [`30s`] and
+`--upload-min-rate` [16 KiB/s] for request bodies, `--response-timeout` [`60s`] and
+`--download-min-rate` [16 KiB/s] for responses, `--max-requests` [256] and
+`--max-requests-per-client` [32] in progress per listener, `--max-conns` [1024] and
+`--max-conns-per-client` [64] open per listener, and `--store-quota` [0 = unlimited] for the
+store as a whole. For `?render=md`, `--render-max-output` [32 MiB] must be positive and
+`--render-concurrency` [GOMAXPROCS, at most 4] takes its default at `0`. Behind a
+reverse proxy every client shares the proxy's address, so set the per-client limits at the
+proxy (or raise them here). See [SECURITY.md](../SECURITY.md#resource-limits). Content-type
 is inferred from the filename extension, then sniffed from the bytes; known web types
 serve **inline**, everything else as a download.
 

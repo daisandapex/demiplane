@@ -7,7 +7,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no cgo), same as core's store
@@ -29,12 +31,29 @@ type Reply struct {
 // about replies (ADR 0002).
 type replyStore struct {
 	db *sql.DB
+
+	// mu serializes limited inserts in this process and guards lastSweep;
+	// the IMMEDIATE transaction serializes them across connections.
+	mu        sync.Mutex
+	lastSweep time.Time // last retention pass
 }
+
+// retentionEvery is how often the retention pass runs, at most.
+const retentionEvery = time.Hour
+
+var (
+	// errReplyCap: the target artifact has its maximum number of replies.
+	errReplyCap = errors.New("reply limit reached for this artifact")
+	// errReplyStoreFull: the aggregate reply count or byte limit is reached.
+	errReplyStoreFull = errors.New("reply storage is full")
+)
 
 // openReplyStore opens (creating + migrating if needed) replies.db under dir.
 func openReplyStore(dir string) (*replyStore, error) {
 	dbPath := filepath.Join(dir, "replies.db")
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	// _txlock=immediate takes the write lock at BEGIN, so the count that
+	// admits a reply and the insert happen under one lock.
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("open replies db: %w", err)
 	}
@@ -57,9 +76,41 @@ CREATE TABLE IF NOT EXISTS replies (
     status     TEXT NOT NULL DEFAULT 'pending'
 );
 CREATE INDEX IF NOT EXISTS idx_replies_slug   ON replies(slug);
-CREATE INDEX IF NOT EXISTS idx_replies_status ON replies(status);`
+CREATE INDEX IF NOT EXISTS idx_replies_status ON replies(status);
+CREATE INDEX IF NOT EXISTS idx_replies_created ON replies(created_at);`
 	if _, err := rs.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate replies schema: %w", err)
+	}
+	// Aggregate totals for the storage limits, kept in the database by
+	// triggers so they change in the same transaction as the rows they count.
+	// Created once, seeded from the rows already there.
+	const stats = `
+CREATE TABLE IF NOT EXISTS reply_stats (
+    id    INTEGER PRIMARY KEY CHECK (id = 1),
+    n     INTEGER NOT NULL,
+    bytes INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO reply_stats (id, n, bytes)
+    SELECT 1, COUNT(*), COALESCE(SUM(LENGTH(CAST(body AS BLOB))), 0) FROM replies;
+CREATE TRIGGER IF NOT EXISTS replies_stats_insert AFTER INSERT ON replies BEGIN
+    UPDATE reply_stats SET n = n + 1, bytes = bytes + LENGTH(CAST(NEW.body AS BLOB)) WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS replies_stats_delete AFTER DELETE ON replies BEGIN
+    UPDATE reply_stats SET n = n - 1, bytes = bytes - LENGTH(CAST(OLD.body AS BLOB)) WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS replies_stats_update AFTER UPDATE OF body ON replies BEGIN
+    UPDATE reply_stats SET bytes = bytes - LENGTH(CAST(OLD.body AS BLOB)) + LENGTH(CAST(NEW.body AS BLOB)) WHERE id = 1;
+END;`
+	tx, err := rs.db.Begin()
+	if err != nil {
+		return fmt.Errorf("migrate reply stats: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(stats); err != nil {
+		return fmt.Errorf("migrate reply stats: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("migrate reply stats: %w", err)
 	}
 	return nil
 }
@@ -80,6 +131,71 @@ func (rs *replyStore) add(slug, kind, body string, now time.Time) (Reply, error)
 		return Reply{}, fmt.Errorf("reply id: %w", err)
 	}
 	return Reply{ID: id, Slug: slug, Kind: kind, Body: body, CreatedAt: now.UTC(), Status: "pending"}, nil
+}
+
+// addLimited inserts a reply if lim allows it: fewer than lim.PerArtifact
+// replies for slug, and room under lim.Total and lim.TotalBytes. The checks
+// and the insert run in one IMMEDIATE transaction, so concurrent submissions,
+// from this process or another one sharing the database, cannot all pass a
+// check that only one of them fits.
+// Replies older than lim.Retention are deleted first, at most once per
+// retentionEvery.
+func (rs *replyStore) addLimited(slug, kind, body string, now time.Time, lim Limits) (Reply, error) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if lim.Retention > 0 && now.Sub(rs.lastSweep) >= retentionEvery {
+		if err := rs.sweepLocked(now, lim.Retention); err != nil {
+			// Not fatal: the limits below still hold with the old rows counted.
+			log.Printf("reply: retention pass failed: %v", err)
+		}
+	}
+	tx, err := rs.db.Begin()
+	if err != nil {
+		return Reply{}, fmt.Errorf("insert reply: %w", err)
+	}
+	defer tx.Rollback()
+	var (
+		total      int
+		totalBytes int64
+	)
+	if err := tx.QueryRow(`SELECT n, bytes FROM reply_stats WHERE id = 1`).Scan(&total, &totalBytes); err != nil {
+		return Reply{}, fmt.Errorf("read reply totals: %w", err)
+	}
+	if total >= lim.Total || totalBytes+int64(len(body)) > lim.TotalBytes {
+		return Reply{}, errReplyStoreFull
+	}
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM replies WHERE slug = ?`, slug).Scan(&n); err != nil {
+		return Reply{}, fmt.Errorf("count replies: %w", err)
+	}
+	if n >= lim.PerArtifact {
+		return Reply{}, errReplyCap
+	}
+	res, err := tx.Exec(
+		`INSERT INTO replies (slug, kind, body, created_at, status) VALUES (?, ?, ?, ?, 'pending')`,
+		slug, kind, body, now.Unix(),
+	)
+	if err != nil {
+		return Reply{}, fmt.Errorf("insert reply: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return Reply{}, fmt.Errorf("reply id: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return Reply{}, fmt.Errorf("insert reply: %w", err)
+	}
+	return Reply{ID: id, Slug: slug, Kind: kind, Body: body, CreatedAt: now.UTC(), Status: "pending"}, nil
+}
+
+// sweepLocked deletes replies created before now-retention (the triggers
+// update the totals). Caller holds rs.mu.
+func (rs *replyStore) sweepLocked(now time.Time, retention time.Duration) error {
+	rs.lastSweep = now
+	if _, err := rs.db.Exec(`DELETE FROM replies WHERE created_at < ?`, now.Add(-retention).Unix()); err != nil {
+		return fmt.Errorf("delete old replies: %w", err)
+	}
+	return nil
 }
 
 // count returns how many replies exist for slug (for the per-artifact cap).

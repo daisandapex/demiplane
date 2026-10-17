@@ -74,17 +74,21 @@ func (s *Store) writeSource(path string, body []byte) error {
 		return fmt.Errorf("create temp source: %w", err)
 	}
 	tmpName := tmp.Name()
-	if _, err := tmp.Write(body); err != nil {
+	cw := &chargedWriter{s: s, w: tmp}
+	if _, err := cw.Write(body); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
+		s.release(cw.charged)
 		return fmt.Errorf("write source: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
+		s.release(cw.charged)
 		return fmt.Errorf("close source: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := s.commitRename(tmpName, path, cw.charged); err != nil {
 		os.Remove(tmpName)
+		s.release(cw.charged)
 		return fmt.Errorf("commit source: %w", err)
 	}
 	return nil

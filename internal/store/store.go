@@ -59,6 +59,9 @@ type Artifact struct {
 	// Version is an opaque token that changes on every write of the bytes, for
 	// use as an HTTP entity tag. "" for rows whose bytes predate it.
 	Version string
+	// Replies is whether the publisher enabled replies (the reply module) for
+	// this artifact. Off unless the publish asked for it.
+	Replies bool
 }
 
 // LastModified is when the stored bytes last changed, falling back to the
@@ -89,6 +92,8 @@ type Store struct {
 	notifier Notifier
 	// locks serializes writers to the same slug (generation.go).
 	locks slugLocks
+	// quota is the optional aggregate storage accounting (quota.go).
+	quota quotaState
 }
 
 // Open opens (creating if needed) a store rooted at dir. The store root, its
@@ -242,6 +247,26 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	if _, err := s.db.Exec(pendingWritesSchema); err != nil {
 		return fmt.Errorf("create pending writes table: %w", err)
 	}
+	// Reply enablement, persisted per artifact so the reply module accepts
+	// replies only where the publisher asked for them.
+	hadReplies, err := s.hasColumn("replies")
+	if err != nil {
+		return err
+	}
+	if !hadReplies {
+		if _, err := s.db.Exec(`ALTER TABLE artifacts ADD COLUMN replies INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("add column replies: %w", err)
+		}
+		// Pages published with an inline reply box before the column existed
+		// keep accepting answers. Their retained render spec names the slug
+		// the box posts to; the key matches the server's renderSpec.ReplySlug
+		// (pinned by a server test).
+		if _, err := s.db.Exec(
+			`UPDATE artifacts SET replies = 1 WHERE render_spec LIKE '%"reply_slug":"_%'`,
+		); err != nil {
+			return fmt.Errorf("backfill replies: %w", err)
+		}
+	}
 	// Index the sweeper's predicate (expires_at > 0 AND <= now).
 	if _, err := s.db.Exec(
 		`CREATE INDEX IF NOT EXISTS idx_artifacts_expires_at ON artifacts(expires_at) WHERE expires_at > 0`,
@@ -253,9 +278,21 @@ CREATE TABLE IF NOT EXISTS artifacts (
 
 // addColumnIfMissing runs ddl only when the named column is absent.
 func (s *Store) addColumnIfMissing(name, ddl string) error {
+	has, err := s.hasColumn(name)
+	if err != nil || has {
+		return err
+	}
+	if _, err := s.db.Exec(ddl); err != nil {
+		return fmt.Errorf("add column %s: %w", name, err)
+	}
+	return nil
+}
+
+// hasColumn reports whether the artifacts table has the named column.
+func (s *Store) hasColumn(name string) (bool, error) {
 	rows, err := s.db.Query(`PRAGMA table_info(artifacts)`)
 	if err != nil {
-		return fmt.Errorf("inspect schema: %w", err)
+		return false, fmt.Errorf("inspect schema: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -268,19 +305,16 @@ func (s *Store) addColumnIfMissing(name, ddl string) error {
 			primaryKey int
 		)
 		if err := rows.Scan(&cid, &colName, &colType, &notNull, &dfltValue, &primaryKey); err != nil {
-			return fmt.Errorf("scan schema: %w", err)
+			return false, fmt.Errorf("scan schema: %w", err)
 		}
 		if colName == name {
-			return rows.Close()
+			return true, rows.Close()
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("inspect schema: %w", err)
+		return false, fmt.Errorf("inspect schema: %w", err)
 	}
-	if _, err := s.db.Exec(ddl); err != nil {
-		return fmt.Errorf("add column %s: %w", name, err)
-	}
-	return nil
+	return false, nil
 }
 
 // PutOptions carries the per-publish settings for Put. The zero value is a
@@ -299,6 +333,9 @@ type PutOptions struct {
 	// RenderSpec is the opaque render-parameter blob that goes with Source. The
 	// store persists it verbatim and never parses it.
 	RenderSpec string
+	// Replies enables replies for the artifact. Like the password and expiry,
+	// it is replaced by every publish to the slug.
+	Replies bool
 }
 
 // Put stores r under a slug and records its metadata, returning the artifact.
@@ -386,6 +423,7 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 		RenderSpec:   opts.RenderSpec,
 		ModifiedAt:   now,
 		Version:      gen,
+		Replies:      opts.Replies,
 	}
 
 	if beforeMetaCommit != nil {
@@ -533,11 +571,15 @@ func (s *Store) writeBlob(final string, r io.Reader) (sniffed string, size int64
 		return "", 0, fmt.Errorf("create temp blob: %w", err)
 	}
 	tmpName := tmp.Name()
+	// Every byte written is charged against the store quota first (quota.go).
+	cw := &chargedWriter{s: s, w: tmp}
 	defer func() {
-		// Remove the temp file if we did not successfully rename it away.
+		// Remove the temp file if we did not successfully rename it away, and
+		// give back what it was charged.
 		if err != nil {
 			tmp.Close()
 			os.Remove(tmpName)
+			s.release(cw.charged)
 		}
 	}()
 
@@ -549,10 +591,10 @@ func (s *Store) writeBlob(final string, r io.Reader) (sniffed string, size int64
 	head = head[:n]
 	sniffed = http.DetectContentType(head)
 
-	if _, werr := tmp.Write(head); werr != nil {
+	if _, werr := cw.Write(head); werr != nil {
 		return "", 0, fmt.Errorf("write blob head: %w", werr)
 	}
-	copied, cerr := io.Copy(tmp, r)
+	copied, cerr := io.Copy(cw, r)
 	if cerr != nil {
 		return "", 0, fmt.Errorf("stream blob: %w", cerr)
 	}
@@ -562,7 +604,7 @@ func (s *Store) writeBlob(final string, r io.Reader) (sniffed string, size int64
 		err = fmt.Errorf("close blob: %w", cerr)
 		return "", 0, err
 	}
-	if rerr := os.Rename(tmpName, final); rerr != nil {
+	if rerr := s.commitRename(tmpName, final, cw.charged); rerr != nil {
 		err = fmt.Errorf("commit blob: %w", rerr)
 		return "", 0, err
 	}
@@ -586,8 +628,8 @@ type priorGen struct {
 // exactly the files this write replaced.
 func (s *Store) swapMeta(a *Artifact, sourceGen string) (priorGen, error) {
 	const q = `
-INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, source_gen, modified_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, source_gen, modified_at, replies)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(slug) DO UPDATE SET
     filename      = excluded.filename,
     content_type  = excluded.content_type,
@@ -607,7 +649,8 @@ ON CONFLICT(slug) DO UPDATE SET
     render_spec   = excluded.render_spec,
     blob_gen      = excluded.blob_gen,
     source_gen    = excluded.source_gen,
-    modified_at   = excluded.modified_at
+    modified_at   = excluded.modified_at,
+    replies       = excluded.replies
 RETURNING modified_at;`
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -640,7 +683,7 @@ RETURNING modified_at;`
 	if err := tx.QueryRow(q,
 		a.Slug, a.Filename, a.ContentType, a.Size, a.CreatedAt.Unix(), a.Owner,
 		boolToInt(a.Private), a.PasswordHash, unixOrZero(a.ExpiresAt), a.Series, a.RenderSpec,
-		a.Version, sourceGen, unixOrZero(a.ModifiedAt),
+		a.Version, sourceGen, unixOrZero(a.ModifiedAt), boolToInt(a.Replies),
 	).Scan(&modified); err != nil {
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 	}
@@ -718,12 +761,13 @@ func (s *Store) lookup(slug string) (Artifact, error) {
 		expires  int64
 		modified int64
 		private  int
+		replies  int
 	)
 	err := s.db.QueryRow(
-		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, modified_at
+		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, modified_at, replies
 		   FROM artifacts WHERE slug = ?`,
 		slug,
-	).Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec, &a.Version, &modified)
+	).Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec, &a.Version, &modified, &replies)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Artifact{}, ErrNotFound
 	}
@@ -732,11 +776,27 @@ func (s *Store) lookup(slug string) (Artifact, error) {
 	}
 	a.CreatedAt = time.Unix(created, 0).UTC()
 	a.Private = private != 0
+	a.Replies = replies != 0
 	if expires > 0 {
 		a.ExpiresAt = time.Unix(expires, 0).UTC()
 	}
 	if modified > 0 {
 		a.ModifiedAt = time.Unix(modified, 0).UTC()
+	}
+	return a, nil
+}
+
+// LookupPublic returns the metadata of a currently VISIBLE artifact (it
+// exists, is not private and has not expired) without opening its bytes, or
+// ErrNotFound. Like HasPublic, it never distinguishes a private or expired
+// artifact from a missing one.
+func (s *Store) LookupPublic(slug string) (Artifact, error) {
+	a, err := s.lookup(slug)
+	if err != nil {
+		return Artifact{}, err
+	}
+	if a.Private || (!a.ExpiresAt.IsZero() && !a.ExpiresAt.After(time.Now())) {
+		return Artifact{}, ErrNotFound
 	}
 	return a, nil
 }

@@ -4,6 +4,7 @@
 package render
 
 import (
+	"context"
 	"html"
 	"strings"
 )
@@ -98,23 +99,101 @@ func canonLang(lang string) string {
 	return ""
 }
 
-// highlight tokenizes src for lang into HTML with classed token spans. For an
-// unsupported language it returns src HTML-escaped and unstyled. Every code byte
-// is escaped on output, so the result is always injection-safe.
+// highlight tokenizes src for lang into HTML with classed token spans, with no
+// output limit (trusted callers and tests). See highlightTo.
 func highlight(lang, src string) string {
+	out, _ := highlightTo(newState(context.Background(), unlimited), unlimited.MaxOutputBytes, lang, src)
+	return out
+}
+
+// highlightChecks is how many scanner steps pass between context checks.
+const highlightChecks = 4096
+
+// escapeChunk is the slice of an unhighlighted block escaped at a time.
+const escapeChunk = 64 << 10
+
+// highlightTo tokenizes src for lang into HTML with classed token spans. For an
+// unsupported language it returns src HTML-escaped and unstyled. Every code
+// byte is escaped on output, so the result is always injection-safe.
+//
+// Highlighting can expand a block more than tenfold (every call token becomes
+// a span), so the output is held to limit bytes before anything is built: a
+// first pass only counts the output, stopping with a budget error at the
+// first step past limit, and a second pass writes into a buffer of exactly
+// that size. st's context is checked every highlightChecks steps of either
+// pass.
+func highlightTo(st *state, limit int, lang, src string) (string, error) {
 	spec := langs[canonLang(lang)]
 	if spec == nil {
-		return html.EscapeString(src)
+		n := escapedLen(src)
+		if n > limit {
+			return "", over(st)
+		}
+		var b strings.Builder
+		b.Grow(n)
+		for len(src) > 0 {
+			k := min(len(src), escapeChunk)
+			b.WriteString(html.EscapeString(src[:k]))
+			src = src[k:]
+			if err := st.ctxErr(); err != nil {
+				return "", err
+			}
+		}
+		return b.String(), nil
 	}
-
+	count := &emitter{}
+	if err := scanHighlight(st, spec, src, count, limit); err != nil {
+		return "", err
+	}
 	var b strings.Builder
-	b.Grow(len(src) + len(src)/2)
+	b.Grow(count.n)
+	if err := scanHighlight(st, spec, src, &emitter{b: &b}, limit); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+// over is the budget error for highlighted output past its limit.
+func over(st *state) error {
+	return &BudgetError{Limit: "output bytes", Max: st.lim.MaxOutputBytes}
+}
+
+// emitter receives highlighted output. With b nil it only counts the bytes
+// that would be written, so a pass can size or refuse the output without
+// building it.
+type emitter struct {
+	b *strings.Builder
+	n int
+}
+
+// raw emits markup that needs no escaping.
+func (e *emitter) raw(s string) {
+	e.n += len(s)
+	if e.b != nil {
+		e.b.WriteString(s)
+	}
+}
+
+// esc emits source text HTML-escaped.
+func (e *emitter) esc(s string) {
+	if e.b == nil {
+		e.n += escapedLen(s)
+		return
+	}
+	before := e.b.Len()
+	e.b.WriteString(html.EscapeString(s))
+	e.n += e.b.Len() - before
+}
+
+// scanHighlight runs the shared scanner for spec over src into e, failing once
+// the output passes limit or st's context is done.
+func scanHighlight(st *state, spec *langSpec, src string, e *emitter, limit int) error {
 	span := func(class, s string) {
-		b.WriteString(`<span class="`)
-		b.WriteString(class)
-		b.WriteString(`">`)
-		b.WriteString(html.EscapeString(s))
-		b.WriteString(`</span>`)
+		e.raw(`<span class="`)
+		e.raw(class)
+		e.raw(`">`)
+		e.esc(s)
+		e.raw(`</span>`)
 	}
 
 	n := len(src)
@@ -122,11 +201,19 @@ func highlight(lang, src string) string {
 	plainStart := 0 // start of the pending run of unclassified bytes
 	flush := func(upto int) {
 		if upto > plainStart {
-			b.WriteString(html.EscapeString(src[plainStart:upto]))
+			e.esc(src[plainStart:upto])
 		}
 	}
 
-	for i < n {
+	for steps := 1; i < n; steps++ {
+		if e.n > limit {
+			return over(st)
+		}
+		if steps%highlightChecks == 0 {
+			if err := st.ctxErr(); err != nil {
+				return err
+			}
+		}
 		c := src[i]
 
 		// Line comment: consume to end of line.
@@ -250,7 +337,10 @@ func highlight(lang, src string) string {
 		i++
 	}
 	flush(n)
-	return b.String()
+	if e.n > limit {
+		return over(st)
+	}
+	return nil
 }
 
 // nextNonSpaceIsColon reports whether the first non-space/tab byte at or after i

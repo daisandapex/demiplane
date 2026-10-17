@@ -12,7 +12,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"path"
 	"strings"
 
@@ -99,22 +98,31 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 	// Buffer the archive to a scratch file. This bounds detection (magic sniff),
 	// unifies tar (stream) and zip (needs io.ReaderAt + size), and the
 	// MaxBytesReader above stops an oversize body loudly (*http.MaxBytesError).
-	tmp, err := os.CreateTemp("", "demiplane-site-*.arc")
+	// The scratch file lives inside the store, not the system temp dir: its
+	// bytes count against the store quota for as long as the publish runs, it
+	// sits on the filesystem the quota measures (a tmpfs /tmp would spend RAM),
+	// and it inherits the store's owner-only directory.
+	tmp, err := s.store.NewScratch()
 	if err != nil {
 		log.Printf("site publish: scratch file: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	defer func() {
-		tmp.Close()
-		os.Remove(tmp.Name())
-	}()
+	defer tmp.Close()
 
 	size, err := io.Copy(tmp, r.Body)
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			http.Error(w, "upload exceeds the configured size limit", http.StatusRequestEntityTooLarge)
+			return
+		}
+		if errors.Is(err, store.ErrQuota) {
+			http.Error(w, quotaMessage, http.StatusInsufficientStorage)
+			return
+		}
+		if isBodyTimeout(err) {
+			http.Error(w, bodyTimeoutMessage, http.StatusRequestTimeout)
 			return
 		}
 		http.Error(w, "read upload: "+err.Error(), http.StatusBadRequest)
@@ -148,6 +156,10 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 
 	count, err := sw.Commit()
 	if err != nil {
+		if errors.Is(err, store.ErrQuota) {
+			http.Error(w, quotaMessage, http.StatusInsufficientStorage)
+			return
+		}
 		if isClientError(err) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -180,6 +192,8 @@ func (s *Server) writeSiteExtractError(w http.ResponseWriter, err error) {
 		http.Error(w, "site archive contains too many files", http.StatusRequestEntityTooLarge)
 	case errors.Is(err, store.ErrDecompressBudget):
 		http.Error(w, "site archive expands beyond the size limit", http.StatusRequestEntityTooLarge)
+	case errors.Is(err, store.ErrQuota):
+		http.Error(w, quotaMessage, http.StatusInsufficientStorage)
 	case isClientError(err):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
@@ -332,6 +346,9 @@ func (s *Server) serveSiteFile(w http.ResponseWriter, r *http.Request, site, rel
 	} else {
 		w.Header().Set("Content-Disposition",
 			fmt.Sprintf("attachment; filename=%q", sanitizeFilename(path.Base(rel))))
+	}
+	if fi, err := f.Stat(); err == nil {
+		s.extendWriteDeadline(w, fi.Size())
 	}
 	http.ServeContent(w, r, path.Base(rel), mod, f)
 }

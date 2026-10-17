@@ -162,6 +162,7 @@ defaults, and TTL/expiry, with **no dependency on pico.sh**.
 | **Live reload** | `?live` streams updates over SSE while you iterate. |
 | **SSH ingest** | `demiplane receive` publishes over your existing `sshd` via an `authorized_keys` forced command. |
 | **Optional TLS** | Self-signed, ACME, or bring-your-own, via `-tags tls`. |
+| **Bounded by default** | Password checks, request bodies and responses, requests and connections in progress, markdown rendering, and replies all have limits; an aggregate storage quota is one flag away (`--store-quota`). See [SECURITY.md](SECURITY.md#resource-limits). |
 
 ## When to use it
 
