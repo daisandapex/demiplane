@@ -74,7 +74,10 @@ All notable changes to demiplane are documented here. The format follows
   the instance cannot submit a reply as a viewer who holds the target's
   password. Clients that are not browsers need none. Tokens are bound to a
   random identifier each publish gets, so any republish invalidates earlier
-  ones, and a submission racing a republish is refused (`409`). Reply retention runs in an
+  ones, and a reply is recorded only if its artifact's publish is still
+  current when the reply store admits it, inside the reply transaction; a
+  submission overtaken by a republish is refused (`409`) without storing
+  anything or firing a hook. Reply retention runs in an
   hourly background sweep, never on the submit path. Reply hooks run on a
   bounded pool, in their own process group, with output capped while it
   streams.

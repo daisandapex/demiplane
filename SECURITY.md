@@ -442,11 +442,14 @@ Notes on the limits:
   on every browser submission (one carrying `Origin` or `Sec-Fetch-Site`) and
   refused unless it names exactly that slug and its current publish. Every
   publish, including one that only changes the password or privacy, gets a
-  new random identifier (a rebake keeps it), and a reply is recorded only if
-  the slug still names the publish it was checked against, so a republish
-  that lands while a submission is in flight refuses it (`409`). A republish
-  landing between that last check and the insert into the reply database is
-  not caught. A sandboxed
+  new random identifier (a rebake keeps it), and a reply is recorded only if,
+  inside the reply database's write transaction and immediately before the
+  insert, the slug still names the publish the submission was checked against
+  with replies enabled. A republish that commits before that check refuses
+  the submission (`409`: nothing is stored and no hook fires), including one
+  that lands while the submission waits for the reply store; one that commits
+  after it is ordered after the reply, which was admitted under the publish
+  still current at that point. A sandboxed
   page cannot read another artifact's page to learn its token. Admission also
   needs the per-artifact opt-in, the view password and the reply limits. Not
   covered: with `--unsafe-no-sandbox` a page can read others' tokens, and
