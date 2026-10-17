@@ -413,6 +413,7 @@ only in `-tags reply` builds.
 | Browse index | index entries examined for families / per series counted (a series is counted to 100, shown as "100+") | 1,000 / 404 | (code) |
 | Site archives | entries of every kind / zip central directory / tar headers in front of one entry / archives parsed at once (others wait 5s, then `503`) | 4,096 / 2 MiB / 64 KiB / 2 | (code) |
 | TTL | `ttl` value length; longer is `400` before parsing | 64 bytes | (code) |
+| Publish | bytes before a multipart publish's file part body (preamble, earlier form fields, the part's headers); over it `431` | 16 KiB | (code) |
 | Bulk rerender | sweeps at once (another gets `409`) / slugs read per page / results and failures listed | 1 / 500 / 100 each | (code) |
 | Downloads | byte ranges honoured per request (more, or a `Range` header over 128 bytes, gets the whole body) | 1 | (code) |
 | Admission | requests in progress per listener / per client; excess `503` | 256 / 32 | `--max-requests`, `--max-requests-per-client` |
@@ -466,7 +467,10 @@ Notes on the limits:
   arrives, so slow or stalled uploads hold neither memory nor a render slot;
   the document and its rendered page are held in memory only under a render
   slot, through the store write, so memory for renders is bounded by
-  `--render-concurrency` × (8 MiB + `--render-max-output`).
+  `--render-concurrency` × (8 MiB + `--render-max-output`). A multipart
+  publish may send at most 16 KiB before its file part's body (`431`
+  otherwise), so part headers are never held beyond that, and only the
+  filename is kept while the body streams.
 - **Order of checks.** Body and write deadlines are set first, so they also
   bound a request refused before routing (a service-worker fetch, an unknown
   `Host`, an ambiguous path). Admission counts only requests that pass those

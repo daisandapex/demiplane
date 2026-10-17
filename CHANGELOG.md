@@ -162,6 +162,9 @@ All notable changes to demiplane are documented here. The format follows
   cannot be removed keeps its storage quota charge, and the failure is
   logged; such leftovers, and any left by a crash, are counted until the
   hourly reconcile removes them.
+- **Multipart publish headers are limited to 16 KiB.** At most 16 KiB may
+  precede a multipart publish's file part body (preamble, earlier form
+  fields and the part's headers); more is refused with `431`.
 - **Bulk rerender is bounded.** `POST /rerender` reads the store a page at a
   time, lists at most 100 results and 100 failures, stops when its request
   ends, and runs one sweep at a time (another gets `409`).
