@@ -510,8 +510,9 @@ Notes on the limits:
   bounded), the filesystem cost of a site entry beyond its 4 KiB allowance,
   module data (replies, TLS material) and filesystem block overhead.
   Temporary files that a failed cleanup or a crash left in the store are
-  counted until the hourly reconcile removes them, an hour after they were
-  last written; a temporary file `demiplane receive` is still writing counts
+  counted until the hourly reconcile removes them: an hour after they were
+  last written, or, for the files of a write that was still in progress (its
+  write intent is recorded), 24 hours after it started; a temporary file `demiplane receive` is still writing counts
   toward the server's usage too.
   An overwrite or rebake needs room for the new copy while the old one still
   exists; a site publish needs room for its archive plus the extracted files.

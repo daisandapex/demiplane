@@ -162,6 +162,9 @@ All notable changes to demiplane are documented here. The format follows
   cannot be removed keeps its storage quota charge, and the failure is
   logged; such leftovers, and any left by a crash, are counted until the
   hourly reconcile removes them.
+- **Downloads honour a single byte range.** A request for several ranges,
+  or with a `Range` header over 128 bytes, gets the whole body instead of a
+  multipart response the server sizes range by range.
 - **IPv6 clients with an interface zone are grouped by /64** for per-client
   limits, like other IPv6 clients.
 - **Render uploads are spooled to disk.** A `?render=md` body is received
