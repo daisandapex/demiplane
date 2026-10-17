@@ -72,7 +72,7 @@ type SourceRecord struct {
 // valid artifact. Only called with a path built from a slug that passed
 // validation, so a caller-supplied path segment never reaches the filesystem.
 func (s *Store) writeSource(path string, body []byte) error {
-	tmp, err := os.CreateTemp(s.sourceDir, tempPattern(path))
+	tmp, err := s.createTemp(s.sourceDir, tempPattern(path))
 	if err != nil {
 		return fmt.Errorf("create temp source: %w", err)
 	}
@@ -80,18 +80,15 @@ func (s *Store) writeSource(path string, body []byte) error {
 	cw := &chargedWriter{s: s, w: tmp}
 	if _, err := cw.Write(body); err != nil {
 		tmp.Close()
-		os.Remove(tmpName)
-		s.release(cw.charged)
+		s.discardTemp(tmpName, cw.charged)
 		return fmt.Errorf("write source: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		s.release(cw.charged)
+		s.discardTemp(tmpName, cw.charged)
 		return fmt.Errorf("close source: %w", err)
 	}
 	if err := s.commitRename(tmpName, path, cw.charged); err != nil {
-		os.Remove(tmpName)
-		s.release(cw.charged)
+		s.discardTemp(tmpName, cw.charged)
 		return fmt.Errorf("commit source: %w", err)
 	}
 	return nil

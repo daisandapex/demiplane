@@ -75,6 +75,11 @@ type quotaState struct {
 	// writer in this process owns (siteentry.go). They are charged in flight;
 	// any other ".tmp-" tree there is abandoned, counted as live and reclaimed.
 	staging map[string]struct{}
+	// temps holds the paths of the temp files in blobs/ and sources/ that a
+	// write or scratch file in this process owns (tempfile.go). They are
+	// charged in flight; any other ".tmp-" file there is abandoned, counted
+	// as live and reclaimed.
+	temps map[string]struct{}
 }
 
 // SetQuota sets the aggregate storage quota in bytes and measures the bytes
@@ -238,6 +243,7 @@ func (s *Store) commitRename(from, to string, charged int64) error {
 		s.endTransition(0, 0)
 		return err
 	}
+	s.unregisterTemp(from)
 	if afterLiveRename != nil {
 		afterLiveRename()
 	}
@@ -255,7 +261,7 @@ var afterUsageWalk, afterLiveRename func()
 func (s *Store) measureUsage() (used, siteEntries int64, err error) {
 	var total int64
 	for _, dir := range []string{s.blobDir, s.sourceDir} {
-		n, _, err := treeStats(dir)
+		n, err := s.contentStats(dir)
 		if err != nil {
 			return 0, 0, fmt.Errorf("measure store usage: %w", err)
 		}
@@ -478,7 +484,7 @@ type Scratch struct {
 // NewScratch creates an owner-only scratch file under the store root (in the
 // blob directory, so it shares the store's filesystem and permissions).
 func (s *Store) NewScratch() (*Scratch, error) {
-	f, err := os.CreateTemp(s.blobDir, tempPrefix+"arc-*")
+	f, err := s.createTemp(s.blobDir, tempPrefix+"arc-*")
 	if err != nil {
 		return nil, fmt.Errorf("create scratch file: %w", err)
 	}
@@ -497,17 +503,17 @@ func (sc *Scratch) ReadAt(p []byte, off int64) (int, error) { return sc.f.ReadAt
 // Seek moves the read offset.
 func (sc *Scratch) Seek(off int64, whence int) (int64, error) { return sc.f.Seek(off, whence) }
 
-// Close closes and removes the scratch file and releases its bytes. Safe to
-// call more than once.
+// Close closes and removes the scratch file and releases its bytes. A file
+// that cannot be removed stays charged and is left for Reconcile
+// (discardTemp). Safe to call more than once.
 func (sc *Scratch) Close() error {
 	if sc.f == nil {
 		return nil
 	}
 	err := sc.f.Close()
-	if rerr := os.Remove(sc.f.Name()); rerr != nil && !os.IsNotExist(rerr) && err == nil {
+	if rerr := sc.s.discardTemp(sc.f.Name(), sc.cw.charged); rerr != nil && err == nil {
 		err = rerr
 	}
-	sc.s.release(sc.cw.charged)
 	sc.cw.charged = 0
 	sc.f = nil
 	return err

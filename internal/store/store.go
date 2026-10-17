@@ -666,7 +666,7 @@ func (s *Store) exists(slug string) (bool, error) {
 // rename) and returns the sniffed content-type and total byte count. Only the
 // first sniffLen bytes are held in memory; the rest is copied straight through.
 func (s *Store) writeBlob(final string, r io.Reader) (sniffed string, size int64, err error) {
-	tmp, err := os.CreateTemp(s.blobDir, tempPattern(final))
+	tmp, err := s.createTemp(s.blobDir, tempPattern(final))
 	if err != nil {
 		return "", 0, fmt.Errorf("create temp blob: %w", err)
 	}
@@ -675,11 +675,11 @@ func (s *Store) writeBlob(final string, r io.Reader) (sniffed string, size int64
 	cw := &chargedWriter{s: s, w: tmp}
 	defer func() {
 		// Remove the temp file if we did not successfully rename it away, and
-		// give back what it was charged.
+		// give back what it was charged (or, if it cannot be removed, leave it
+		// charged for Reconcile).
 		if err != nil {
 			tmp.Close()
-			os.Remove(tmpName)
-			s.release(cw.charged)
+			s.discardTemp(tmpName, cw.charged)
 		}
 	}()
 

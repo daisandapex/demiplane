@@ -371,16 +371,23 @@ func (s *Store) Reconcile(now time.Time) (int, error) {
 			name := e.Name()
 			p := filepath.Join(dir.path, name)
 			if strings.HasPrefix(name, tempPrefix) {
-				// A temp file of a live write (its intent still recorded) is
-				// a write in flight however old it is; any other temp file is
-				// a crash leftover once past the grace.
+				// A temp file of a live write (one this process owns, or one
+				// whose intent is still recorded) is a write in flight however
+				// old it is; any other temp file is a leftover once past the
+				// grace. A leftover is counted as live, so its removal is
+				// released from the live count.
+				if s.tempLive(p) {
+					continue
+				}
 				if t := tempTarget(name); t != "" {
 					if slug, gen := splitGenName(t); s.writeLive(slug, gen) {
 						continue
 					}
 				}
 				if info.ModTime().Before(cutoff) {
-					if err := os.Remove(p); err == nil {
+					if gone, err := s.removeLiveFile(p); err != nil {
+						log.Printf("store: could not remove a leftover temp file, will retry: %s", logsafe.Err(err))
+					} else if gone {
 						removed++
 					}
 				}
