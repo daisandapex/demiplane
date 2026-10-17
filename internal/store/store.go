@@ -300,6 +300,11 @@ type PutOptions struct {
 //
 // The body is streamed to disk — it is never fully buffered in memory.
 func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
+	if opts.TTL < 0 {
+		// Zero is the only "never expires" value. A negative TTL is a caller
+		// bug, and storing it as no expiry would fail open.
+		return Artifact{}, &InputError{Msg: "ttl must not be negative"}
+	}
 	slug, _, err := s.resolveSlug(opts.Slug, opts.Private)
 	if err != nil {
 		return Artifact{}, err
