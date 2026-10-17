@@ -35,7 +35,7 @@ type Limits struct {
 //
 // The output default sits above the worst ordinary expansion measured for an
 // 8 MiB input (TestDefaultOutputCapFitsMaxInput, full chrome): the README as
-// prose renders at 1.68x its source (14.1 MB) and highlighted Go at 1.83x
+// prose renders at 1.68x its source (14.1 MB) and highlighted Go at 1.84x
 // (15.4 MB). 32 MiB leaves about twice that for denser markup and escapes,
 // and still bounds the transient copies a render makes of its output.
 var DefaultLimits = Limits{
@@ -117,6 +117,33 @@ func (st *state) ctxErr() error {
 // output fails once n bytes exceed the output cap.
 func (st *state) output(n int) error {
 	if n > st.lim.MaxOutputBytes {
+		return &BudgetError{Limit: "output bytes", Max: st.lim.MaxOutputBytes}
+	}
+	return nil
+}
+
+// escapedLen is the length of html.EscapeString(s), counted without
+// allocating it.
+func escapedLen(s string) int {
+	n := len(s)
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '&', '\'', '"':
+			n += 4
+		case '<', '>':
+			n += 3
+		}
+	}
+	return n
+}
+
+// inlineFits fails when inline text s, once escaped, would carry output past
+// the cap given used bytes already emitted. It runs before inline() so an
+// oversized block is refused before it is escaped and formatted (each
+// formatting pass copies the escaped text). Formatting only adds markup, apart
+// from the address of a link it refuses, so the escaped size is a fair floor.
+func (st *state) inlineFits(s string, used int) error {
+	if escapedLen(s) > st.lim.MaxOutputBytes-used {
 		return &BudgetError{Limit: "output bytes", Max: st.lim.MaxOutputBytes}
 	}
 	return nil

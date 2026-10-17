@@ -560,20 +560,32 @@ func renderBlocks(st *state, src string) (string, error) {
 	lines := strings.Split(strings.ReplaceAll(src, "\r\n", "\n"), "\n")
 	var out strings.Builder
 	var para []string
+	// paraErr holds a paragraph refused by inlineFits; it is returned at the
+	// top of the next iteration (or after the loop).
+	var paraErr error
 
 	flushPara := func() {
-		if len(para) == 0 {
+		if len(para) == 0 || paraErr != nil {
+			return
+		}
+		text := strings.Join(para, " ")
+		para = para[:0]
+		if paraErr = st.inlineFits(text, out.Len()); paraErr != nil {
 			return
 		}
 		out.WriteString("<p>")
-		out.WriteString(inline(strings.Join(para, " ")))
+		out.WriteString(inline(text))
 		out.WriteString("</p>\n")
-		para = para[:0]
 	}
 
 	for i := 0; i < len(lines); i++ {
 		// Every block is checked against the output cap once it is written, and
-		// the context is checked as lines are consumed.
+		// the context is checked as lines are consumed. A block that can expand
+		// a lot (inline text, a code block) is also held to the remaining
+		// budget before or while it is produced.
+		if paraErr != nil {
+			return "", paraErr
+		}
 		if err := st.output(out.Len()); err != nil {
 			return "", err
 		}
@@ -605,7 +617,11 @@ func renderBlocks(st *state, src string) (string, error) {
 			// highlight() escapes every byte it emits (classed span or plain run);
 			// an unsupported language returns the source HTML-escaped and unstyled,
 			// so the raw-HTML-in-code XSS guard holds either way.
-			out.WriteString(highlight(lang, joined))
+			codeHTML, err := highlightTo(st, st.lim.MaxOutputBytes-out.Len(), lang, joined)
+			if err != nil {
+				return "", err
+			}
+			out.WriteString(codeHTML)
 			out.WriteString("</code></pre>\n")
 
 		case trimmed == "":
@@ -620,6 +636,9 @@ func renderBlocks(st *state, src string) (string, error) {
 			m := reHeading.FindStringSubmatch(trimmed)
 			level := len(m[1])
 			plain := headingText(m[2])
+			if err := st.inlineFits(m[2], out.Len()); err != nil {
+				return "", err
+			}
 			id := st.slugs.unique(plain)
 			lvl := byte('0' + level)
 			out.WriteString("<h")
@@ -654,13 +673,17 @@ func renderBlocks(st *state, src string) (string, error) {
 				i++
 			}
 			i--
+			qtext := strings.Join(quote, " ")
+			if err := st.inlineFits(qtext, out.Len()); err != nil {
+				return "", err
+			}
 			out.WriteString("<blockquote>")
-			out.WriteString(inline(strings.Join(quote, " ")))
+			out.WriteString(inline(qtext))
 			out.WriteString("</blockquote>\n")
 
 		case isUnordered(trimmed) || reOrdered.MatchString(trimmed):
 			flushPara()
-			listHTML, next, err := renderList(st, lines, i)
+			listHTML, next, err := renderList(st, lines, i, out.Len())
 			if err != nil {
 				return "", err
 			}
@@ -680,6 +703,12 @@ func renderBlocks(st *state, src string) (string, error) {
 			if err := st.tableColumns(cols); err != nil {
 				return "", err
 			}
+			// Cell text is held to the remaining output budget, row by row,
+			// before it is split and formatted.
+			tableText := escapedLen(trimmed)
+			if err := st.inlineFits(trimmed, out.Len()); err != nil {
+				return "", err
+			}
 			header := splitCells(trimmed, cols)
 			i += 2 // consume header + separator; i now at the first body row
 			var rows [][]string
@@ -694,6 +723,10 @@ func renderBlocks(st *state, src string) (string, error) {
 				if err := st.tableRow(cols); err != nil {
 					return "", err
 				}
+				tableText += escapedLen(lt)
+				if tableText > st.lim.MaxOutputBytes-out.Len() {
+					return "", &BudgetError{Limit: "output bytes", Max: st.lim.MaxOutputBytes}
+				}
 				rows = append(rows, splitCells(lt, cols))
 				i++
 			}
@@ -705,6 +738,9 @@ func renderBlocks(st *state, src string) (string, error) {
 		}
 	}
 	flushPara()
+	if paraErr != nil {
+		return "", paraErr
+	}
 	if err := st.output(out.Len()); err != nil {
 		return "", err
 	}
@@ -748,7 +784,10 @@ func interruptsParagraph(trimmed string) bool {
 // deferred until a sibling replaces it, a child list closes above it, or the run
 // unwinds — which is what lets a nested list live inside its parent's still-open
 // <li>.
-func renderList(st *state, lines []string, start int) (string, int, error) {
+//
+// used is the output already emitted before the list, so item text can be
+// held to the remaining budget before it is formatted.
+func renderList(st *state, lines []string, start, used int) (string, int, error) {
 	type frame struct {
 		indent  int
 		ordered bool
@@ -776,15 +815,27 @@ func renderList(st *state, lines []string, start int) (string, int, error) {
 	}
 	// flushItem emits the current item's buffered content: a tight single
 	// paragraph renders bare, a loose item wraps each paragraph in <p>.
+	// itemErr holds item text refused by inlineFits, returned by the loop.
+	var itemErr error
+	emit := func(p []string) string {
+		text := strings.Join(p, " ")
+		if itemErr == nil {
+			itemErr = st.inlineFits(text, used+b.Len())
+		}
+		if itemErr != nil {
+			return ""
+		}
+		return inline(text)
+	}
 	flushItem := func() {
 		if para == nil && paras == nil {
 			return
 		}
 		if len(paras) == 0 {
-			b.WriteString(inline(strings.Join(para, " ")))
+			b.WriteString(emit(para))
 		} else {
 			for _, p := range append(paras, para) {
-				b.WriteString("<p>" + inline(strings.Join(p, " ")) + "</p>")
+				b.WriteString("<p>" + emit(p) + "</p>")
 			}
 		}
 		para, paras = nil, nil
@@ -792,6 +843,9 @@ func renderList(st *state, lines []string, start int) (string, int, error) {
 
 	i := start
 	for i < len(lines) {
+		if itemErr != nil {
+			return "", 0, itemErr
+		}
 		if err := st.tick(); err != nil {
 			return "", 0, err
 		}
@@ -870,6 +924,9 @@ func renderList(st *state, lines []string, start int) (string, int, error) {
 		i++
 	}
 	flushItem()
+	if itemErr != nil {
+		return "", 0, itemErr
+	}
 
 	// Unwind any levels left open at the end of the run.
 	for len(stack) > 0 {

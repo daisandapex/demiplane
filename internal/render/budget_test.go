@@ -269,3 +269,89 @@ func BenchmarkCodeSpans(b *testing.B) {
 func BenchmarkTableRows(b *testing.B) {
 	benchDoubling(b, func(n int) string { return "|a|b|c|\n|-|-|-|\n" + strings.Repeat("|1|2|3|\n", n) })
 }
+
+// callFence is a go fence of n bytes of "a(" call tokens on 2000-byte lines;
+// each token highlights to a 26-byte span, a 13x expansion.
+func callFence(n int) []byte {
+	line := strings.Repeat("a(", 1000) + "\n"
+	return []byte("```go\n" + strings.Repeat(line, n/len(line)+1) + "```\n")
+}
+
+func TestExpandingBlockAllocationBounded(t *testing.T) {
+	quotes := func(n int) []byte { return []byte(strings.Repeat(`"`, n) + "\n") }
+	for _, c := range []struct {
+		name string
+		src  []byte
+		cap  int
+	}{
+		{"code block, small cap", callFence(2 << 20), 1 << 20},
+		{"code block, default cap", callFence(8 << 20), 0},
+		{"unhighlighted fence", []byte("```\n" + strings.Repeat(`"<`, 2<<20) + "\n```\n"), 2 << 20},
+		{"paragraph", quotes(4 << 20), 2 << 20},
+		{"list item", append([]byte("- "), quotes(4<<20)...), 2 << 20},
+		{"blockquote", append([]byte("> "), quotes(4<<20)...), 2 << 20},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			lim := Limits{MaxOutputBytes: c.cap}.withDefaults()
+			var m0, m1 runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&m0)
+			_, err := Render(context.Background(), c.src, Options{Limits: lim})
+			runtime.ReadMemStats(&m1)
+			alloc := m1.TotalAlloc - m0.TotalAlloc
+			// The input's own copies (string, lines, join) plus at most three
+			// times the output cap.
+			bound := uint64(3*lim.MaxOutputBytes + 4*len(c.src))
+			t.Logf("input %d, cap %d: allocated %d (bound %d)", len(c.src), lim.MaxOutputBytes, alloc, bound)
+			if !errors.Is(err, ErrBudget) {
+				t.Fatalf("err = %v, want a budget error", err)
+			}
+			if alloc > bound {
+				t.Fatalf("allocated %d bytes, want at most %d", alloc, bound)
+			}
+		})
+	}
+}
+
+func TestCancelInsideOneCodeBlock(t *testing.T) {
+	// One fence of one long line: no line ticks, so only the highlighter can
+	// notice the cancellation.
+	src := []byte("```go\n" + strings.Repeat("a(", 1<<20) + "\n```\n")
+	ctx := &countingCtx{Context: context.Background(), after: 1}
+	_, err := Render(ctx, src, Options{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if ctx.calls != 2 {
+		t.Fatalf("highlighting kept going: %d context checks, want 2", ctx.calls)
+	}
+}
+
+func TestHighlightCountMatchesOutput(t *testing.T) {
+	code, err := os.ReadFile("highlight.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := newState(context.Background(), unlimited)
+	for _, lang := range []string{"go", "bash", "json", "yaml", "python", "ruby", ""} {
+		for _, src := range []string{string(code), `x := "<a href='&'>" // <b>`, "echo $HOME ${X} $? 'a\"b'", ""} {
+			count := &emitter{}
+			spec := langs[canonLang(lang)]
+			if spec == nil {
+				count.n = escapedLen(src)
+			} else if err := scanHighlight(st, spec, src, count, unlimited.MaxOutputBytes); err != nil {
+				t.Fatal(err)
+			}
+			out, err := highlightTo(st, count.n, lang, src)
+			if err != nil || len(out) != count.n {
+				t.Fatalf("%s: counted %d, wrote %d (err %v)", lang, count.n, len(out), err)
+			}
+			// One byte less is refused, so the limit is exact.
+			if count.n > 0 {
+				if _, err := highlightTo(st, count.n-1, lang, src); !errors.Is(err, ErrBudget) {
+					t.Fatalf("%s: limit one under the output: err = %v", lang, err)
+				}
+			}
+		}
+	}
+}
