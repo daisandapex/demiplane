@@ -635,8 +635,10 @@ curl "$CONTENT/marketing/css/app.css" # any path within it
 ## GET /gallery
 
 An HTML index of the instance's non-private artifacts, on the control plane. It
-is a human browse surface (like `serve --browse` for `GET /`), never a JSON API,
-and it never lists private capability slugs.
+is a human browse surface, never a JSON API, and it never lists private
+capability slugs. It follows `serve --browse`: with browsing on it is public,
+like the `GET /` listing; with browsing off (the default) it needs the bearer
+token, like `GET /list`.
 
 ## Status codes
 

@@ -41,7 +41,14 @@ import (
 // that already carry inline chrome script and style.
 func init() {
 	registerCoreControlRoute([]string{"gallery"}, func(mux *http.ServeMux, s *Server) {
-		mux.HandleFunc("GET /gallery", s.handleGallery)
+		// The gallery enumerates every public artifact, password-protected ones
+		// included. It is public only when the operator opted into browsing
+		// (--browse); otherwise it takes the same bearer token as GET /list.
+		if s.browse {
+			mux.HandleFunc("GET /gallery", s.handleGallery)
+		} else {
+			mux.HandleFunc("GET /gallery", s.requireAuth(s.handleGallery))
+		}
 	})
 }
 

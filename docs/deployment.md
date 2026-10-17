@@ -70,7 +70,8 @@ on one origin — legacy footgun), `--store <dir>` (**required**), `--base-url <
 `--token-file <path>` (optional; bearer token for write/list — `DEMIPLANE_TOKEN` is the
 env-var alternative), `--sweep-interval <dur>` (optional; how often to reap past-TTL
 artifacts, default `1m`), `--browse` (optional; serve an HTML index of non-private
-artifacts at `GET /`), `--max-upload <bytes>` (optional; cap publish size, default
+artifacts at `GET /` and make `GET /gallery` public; without it `/gallery` needs the bearer
+token), `--max-upload <bytes>` (optional; cap publish size, default
 100 MiB, `0` = unlimited), `--theme <name>` (optional; skins the whole instance — chrome and
 `?render=md` pages — one of `light` (default house style), `dark`, or the pinned dark
 developer palettes `catppuccin` / `dracula` / `one-dark`), `--css <file>` (optional; a custom

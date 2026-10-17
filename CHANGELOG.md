@@ -11,6 +11,8 @@ All notable changes to demiplane are documented here. The format follows
 - **Site uploads refuse options sites do not support.** `?site=` with
   `?private`, `?ttl`, `?password` or `X-Demiplane-Password` is a `400` before
   the archive is read; previously the options were ignored.
+- **`/gallery` follows `--browse`.** Without `--browse` it needs the bearer
+  token, like `/list`.
 - **`demiplane receive` refuses route names.** Route names are reserved when a
   route registers, not when the HTTP handlers are built, so SSH ingest can no
   longer create an artifact a route shadows (`gallery`, `connect`, `answer`
@@ -32,6 +34,7 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Changed
 
+- **Upgrade note: `/gallery` needs the token unless `--browse` is set.**
 - **Upgrade note: `demiplane mcp` refuses `path` outside its publish root.** An
   MCP client that publishes files from outside the directory it starts
   `demiplane mcp` in (a scratch or temp directory, another repository) now gets

@@ -176,6 +176,9 @@ inherits the posture above and was reviewed adversarially before release.
   (`?private=true` slug) is not disclosed in the `Referer` header when a hosted
   page links out cross-origin. The `?live` wrapper keeps its stronger
   `no-referrer` for the preview frame.
+- **Artifact index.** `GET /gallery` lists every public artifact, including
+  password-protected ones. It is public only with `--browse`; otherwise it
+  takes the bearer token, like `GET /list`.
 - **HSTS.** When native TLS terminates at demiplane (the request arrives over
   TLS), responses carry `Strict-Transport-Security: max-age=63072000`
   (two years). It is deliberately emitted **without** `includeSubDomains` and
