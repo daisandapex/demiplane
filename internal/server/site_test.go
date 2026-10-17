@@ -586,6 +586,8 @@ func TestSitePublishRejectsUnsupportedSecurityOptions(t *testing.T) {
 		{"password header", "", map[string]string{PasswordHeader: "hunter2"}, true, "password"},
 		{"empty password header", "", map[string]string{PasswordHeader: ""}, true, "password"},
 		{"all together", "private=1&ttl=2h&password=x", map[string]string{PasswordHeader: "y"}, true, "private"},
+		{"malformed private", "private=true;", nil, true, "query"},
+		{"malformed password", "password=%ZZ", nil, true, "query"},
 		{"private=false is no request", "private=false", nil, false, ""},
 		{"empty ttl is no request", "ttl=", nil, false, ""},
 	}

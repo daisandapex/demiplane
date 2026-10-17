@@ -22,7 +22,9 @@ All notable changes to demiplane are documented here. The format follows
   Basic realm.
 - **Site uploads refuse options sites do not support.** `?site=` with
   `?private`, `?ttl`, `?password` or `X-Demiplane-Password` is a `400` before
-  the archive is read; previously the options were ignored.
+  the archive is read; previously the options were ignored. A publish whose
+  query string does not parse is a `400` too, rather than having the
+  unreadable parameters silently dropped.
 - **`/gallery` follows `--browse`.** Without `--browse` it needs the bearer
   token, like `/list`.
 - **Live-reload streams are authorized.** `GET /_events/{slug}` requires an

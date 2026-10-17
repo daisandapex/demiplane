@@ -1334,3 +1334,28 @@ func TestSeriesParamValidation(t *testing.T) {
 		}
 	}
 }
+
+// TestPublishRejectsMalformedQuery: a query parameter the parser cannot read
+// is dropped by url.Values, so a malformed ?private or ?password would vanish
+// and the artifact would be published without the protection asked for. Any
+// unparseable publish query is a 400 and nothing is stored.
+func TestPublishRejectsMalformedQuery(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	h := New(st, Config{}).Handler()
+	for _, q := range []string{"private=true;", "slug=a&private=1;x", "password=%ZZ", "ttl=1h&%zz"} {
+		t.Run(q, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/publish?"+q, strings.NewReader("body")))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status %d (%s), want 400", rec.Code, rec.Body)
+			}
+			if n, _ := st.Count(store.DefaultOwner); n != 0 {
+				t.Errorf("%d artifacts stored after a rejected publish", n)
+			}
+		})
+	}
+}

@@ -663,7 +663,7 @@ token, like `GET /list`.
 | `204 No Content` | Delete or ack succeeded. |
 | `304 Not Modified` | Conditional `GET /{slug}` whose `If-None-Match` or `If-Modified-Since` still matches. |
 | `302 Found` | Forward-flow redirect once a `?next` slug exists. |
-| `400 Bad Request` | Invalid or reserved slug, `private` + named slug, password in the URL query, bad `ttl`, a site upload asking for `?private`/`?ttl`/a password, or a malformed reply/site. |
+| `400 Bad Request` | Invalid or reserved slug, `private` + named slug, password in the URL query, bad `ttl`, a malformed publish query string, a site upload asking for `?private`/`?ttl`/a password, or a malformed reply/site. |
 | `401 Unauthorized` | Missing or invalid bearer token (write/list/delete/reply admin, `/gallery` without `--browse`), or a wrong view password (read, `?live`, live-reload stream). |
 | `403 Forbidden` | A service-worker script fetch (never permitted), or a cross-origin write to the control plane. |
 | `404 Not Found` | No such artifact or reply, or it expired. |

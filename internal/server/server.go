@@ -350,7 +350,14 @@ const PasswordHeader = "X-Demiplane-Password"
 // Query params: ?slug= (named), ?private=, ?ttl= (e.g. 30m, 2h, 7d). The view
 // password is supplied via the X-Demiplane-Password header, never the URL.
 func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
+	// URL.Query drops any pair it cannot parse, so a malformed ?private or
+	// ?password would vanish and the artifact would be stored without the
+	// protection the caller asked for. Refuse an unparseable query instead.
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		http.Error(w, "malformed query string: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	// Multi-file / directory publish hook (feature T2.2): POST /publish?site=<name>
 	// ingests a tar/zip/multipart archive as a path-structured site. site.go owns
