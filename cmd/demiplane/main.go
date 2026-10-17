@@ -185,10 +185,10 @@ func runServe(args []string) error {
 	passwordRateClient := fs.String("password-rate-client", "20:10", "failed view-password attempts a minute by one client on any artifact, N or N:BURST (0 = off)")
 	passwordRateTarget := fs.String("password-rate-target", "10:10", "failed view-password attempts a minute by all clients on one artifact; once spent, clients that failed recently there get 429 (0 = off)")
 	passwordRateGlobal := fs.String("password-rate-global", "120:30", "failed view-password attempts a minute in all; once spent, clients that failed recently get 429 (0 = off)")
-	liveMaxPerSlug := fs.Int("live-max-per-slug", 16, "live-reload streams watching one artifact; when full, a new client replaces the oldest stream of the client holding the most")
+	liveMaxPerSlug := fs.Int("live-max-per-slug", 16, "live-reload streams watching one artifact; when full, a new client replaces the oldest stream of a client holding at least two more, else gets 503")
 	liveMaxPerClient := fs.Int("live-max-per-client", 16, "live-reload streams from one client on all artifacts; past it 503")
 	liveMaxPerClientSlug := fs.Int("live-max-per-client-slug", 2, "live-reload streams from one client on one artifact; past it 503")
-	liveMaxTotal := fs.Int("live-max-total", 256, "live-reload streams in all; when full, a new client replaces the oldest stream of the client holding the most")
+	liveMaxTotal := fs.Int("live-max-total", 256, "live-reload streams in all; when full, a new client replaces the oldest stream of a client holding at least two more, else gets 503")
 	renderConcurrency := fs.Int("render-concurrency", 0, "max markdown renders at once (0 = GOMAXPROCS, capped at 4); a render that waits 5s for a slot gets 503")
 	if err := fs.Parse(args); err != nil {
 		return err

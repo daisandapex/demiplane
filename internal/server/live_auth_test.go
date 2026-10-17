@@ -188,14 +188,14 @@ func TestSSEPerClientCap(t *testing.T) {
 
 	h := newLiveHub(LiveLimits{})
 	for i := 0; i < liveMaxPerClient; i++ {
-		if _, ok := h.subscribe(fmt.Sprintf("x%d", i), "client-a"); !ok {
+		if _, ok := subscribeNow(h, fmt.Sprintf("x%d", i), "client-a"); !ok {
 			t.Fatalf("client-a subscription %d refused", i)
 		}
 	}
-	if _, ok := h.subscribe("y", "client-a"); ok {
+	if _, ok := subscribeNow(h, "y", "client-a"); ok {
 		t.Error("client-a admitted past its cap")
 	}
-	if _, ok := h.subscribe("y", "client-b"); !ok {
+	if _, ok := subscribeNow(h, "y", "client-b"); !ok {
 		t.Error("client-b refused while client-a is at its cap")
 	}
 }

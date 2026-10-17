@@ -384,7 +384,7 @@ func TestLiveHubNotifyIsNonBlocking(t *testing.T) {
 	// Notify must never block on a full/absent consumer: a subscriber that never
 	// drains its channel still leaves Notify returning promptly.
 	h := newLiveHub(LiveLimits{})
-	sub, ok := h.subscribe("s", "c")
+	sub, ok := subscribeNow(h, "s", "c")
 	if !ok {
 		t.Fatal("subscribe failed")
 	}
@@ -414,7 +414,7 @@ func TestLiveHubConcurrentSubscribeNotify(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
-				sub, ok := h.subscribe("hot", "c")
+				sub, ok := subscribeNow(h, "hot", "c")
 				if !ok {
 					continue
 				}

@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -136,10 +137,12 @@ func (l LiveLimits) resolved() LiveLimits {
 // Admission is fair rather than first come: a client's own caps (per slug,
 // and in all) refuse its further streams, and when a shared cap (the slug's,
 // or the total) is full, a newcomer takes the place of the oldest stream of
-// the client holding the most, provided that client holds more than the
-// newcomer. The ended stream's EventSource reconnects and is admitted the
-// same way, so streams spread across clients instead of staying with whoever
-// connected first.
+// the client holding the most, provided the move improves balance: that
+// client holds at least two more than the newcomer. Otherwise the newcomer
+// is refused, so a stream is never moved between clients holding about as
+// many, which its reconnect would only move back. An ended stream keeps its
+// slot until its handler returns (at most liveWriteTimeout, if it is blocked
+// in a write); the newcomer waits for that, so the caps are never exceeded.
 type liveHub struct {
 	mu        sync.Mutex
 	limits    LiveLimits
@@ -148,16 +151,22 @@ type liveHub struct {
 	total     int
 	seq       uint64
 	heartbeat time.Duration // liveHeartbeat, captured when the hub is built
+	// drainWait bounds how long a newcomer waits for an ended stream's
+	// handler to return; a field so tests can shorten it.
+	drainWait time.Duration
 }
 
 // liveSub is one stream. ch carries reload signals; gone is closed when the
-// hub ends the stream to make room for another client.
+// hub ends the stream to make room for another client, and done when its
+// handler has unsubscribed and its slot is free.
 type liveSub struct {
 	ch     chan struct{}
 	gone   chan struct{}
+	done   chan struct{}
 	slug   string
 	client string
 	seq    uint64 // admission order: lower is older
+	ended  bool   // gone is closed; the slot is held until done
 }
 
 func newLiveHub(l LiveLimits) *liveHub {
@@ -166,6 +175,7 @@ func newLiveHub(l LiveLimits) *liveHub {
 		subs:      make(map[string]map[*liveSub]struct{}),
 		byClient:  make(map[string]map[*liveSub]struct{}),
 		heartbeat: liveHeartbeat,
+		drainWait: liveWriteTimeout + time.Second,
 	}
 }
 
@@ -186,85 +196,124 @@ func (h *liveHub) Notify(slug string) {
 
 // subscribe admits a stream for slug on behalf of client. It returns
 // ok=false when the client is at one of its own caps, or a shared cap is full
-// and no other client holds more streams than this one.
-func (h *liveHub) subscribe(slug, client string) (*liveSub, bool) {
+// and no other client holds at least two more streams than this one. When it
+// ends another client's stream to make room, it waits (bounded by drainWait
+// and ctx) for that stream's handler to return before taking the slot.
+func (h *liveHub) subscribe(ctx context.Context, slug, client string) (*liveSub, bool) {
+	// A slug cap and the total cap may each need a stream ended; the last
+	// pass only admits.
+	for pass := 0; pass < 3; pass++ {
+		sub, ended := h.admit(slug, client, pass < 2)
+		if sub != nil {
+			return sub, true
+		}
+		if ended == nil {
+			return nil, false
+		}
+		t := time.NewTimer(h.drainWait)
+		select {
+		case <-ended.done:
+			t.Stop()
+		case <-ctx.Done():
+			t.Stop()
+			return nil, false
+		case <-t.C:
+			return nil, false
+		}
+	}
+	return nil, false
+}
+
+// admit takes a slot for client on slug if the caps allow. If a shared cap
+// is full and mayEnd is set, it ends one stream to make room and returns it
+// instead, for the caller to wait on.
+func (h *liveHub) admit(slug, client string, mayEnd bool) (sub, ended *liveSub) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	mine := h.byClient[client]
-	onSlug := 0
-	for sub := range mine {
-		if sub.slug == slug {
-			onSlug++
+	// A client's own caps count its live streams; ended ones are leaving.
+	mine, onSlug := 0, 0
+	for s := range h.byClient[client] {
+		if !s.ended {
+			mine++
+			if s.slug == slug {
+				onSlug++
+			}
 		}
 	}
-	if len(mine) >= h.limits.PerClient || onSlug >= h.limits.PerClientSlug {
-		return nil, false
+	if mine >= h.limits.PerClient || onSlug >= h.limits.PerClientSlug {
+		return nil, nil
 	}
-	if len(h.subs[slug]) >= h.limits.PerSlug && !h.makeRoom(h.subs[slug], slug, client, onSlug) {
-		return nil, false
+	// The shared caps count every slot held, ended streams included.
+	if len(h.subs[slug]) >= h.limits.PerSlug {
+		if !mayEnd {
+			return nil, nil
+		}
+		return nil, h.endOne(h.subs[slug], client, onSlug)
 	}
-	if h.total >= h.limits.Total && !h.makeRoom(nil, "", client, len(mine)) {
-		return nil, false
+	if h.total >= h.limits.Total {
+		if !mayEnd {
+			return nil, nil
+		}
+		return nil, h.endOne(nil, client, mine)
 	}
 	h.seq++
-	sub := &liveSub{ch: make(chan struct{}, 1), gone: make(chan struct{}), slug: slug, client: client, seq: h.seq}
+	sub = &liveSub{
+		ch: make(chan struct{}, 1), gone: make(chan struct{}), done: make(chan struct{}),
+		slug: slug, client: client, seq: h.seq,
+	}
 	h.add(sub)
-	return sub, true
+	return sub, nil
 }
 
-// makeRoom ends the oldest stream of the client holding the most streams
-// (within set when slug is set, else in all) if that client holds more than
-// held, the requester's own count there. Caller holds mu.
-func (h *liveHub) makeRoom(set map[*liveSub]struct{}, slug, requester string, held int) bool {
+// endOne returns a stream whose slot the requester may wait for: the oldest
+// live stream of the client holding the most live streams (in set, or in all
+// when set is nil), which it ends, if that client holds at least two more
+// than held, the requester's own count there; otherwise a stream already
+// ended and still draining, if any; otherwise nil. Caller holds mu.
+func (h *liveHub) endOne(set map[*liveSub]struct{}, requester string, held int) *liveSub {
 	counts := map[string]int{}
-	if slug != "" {
-		for sub := range set {
-			counts[sub.client]++
+	oldest := map[string]*liveSub{}
+	var draining *liveSub
+	consider := func(s *liveSub) {
+		if s.ended {
+			draining = s
+			return
+		}
+		if s.client == requester {
+			return
+		}
+		counts[s.client]++
+		if o := oldest[s.client]; o == nil || s.seq < o.seq {
+			oldest[s.client] = s
+		}
+	}
+	if set != nil {
+		for s := range set {
+			consider(s)
 		}
 	} else {
-		for c, subs := range h.byClient {
-			counts[c] = len(subs)
+		for _, subs := range h.byClient {
+			for s := range subs {
+				consider(s)
+			}
 		}
 	}
-	most := held
-	for c, n := range counts {
-		if c != requester && n > most {
-			most = n
-		}
+	most := 0
+	for _, n := range counts {
+		most = max(most, n)
 	}
-	if most <= held {
-		return false
+	if most < held+2 {
+		return draining
 	}
-	// Among the clients holding the most, end the oldest stream.
 	var victim *liveSub
 	for c, n := range counts {
-		if c == requester || n != most {
-			continue
-		}
-		if o := h.oldest(c, slug); o != nil && (victim == nil || o.seq < victim.seq) {
-			victim = o
+		if n == most && (victim == nil || oldest[c].seq < victim.seq) {
+			victim = oldest[c]
 		}
 	}
-	if victim == nil {
-		return false
-	}
-	h.remove(victim)
+	victim.ended = true
 	close(victim.gone)
-	return true
-}
-
-// oldest returns client's oldest stream (on slug, when slug is set).
-func (h *liveHub) oldest(client, slug string) *liveSub {
-	var o *liveSub
-	for sub := range h.byClient[client] {
-		if slug != "" && sub.slug != slug {
-			continue
-		}
-		if o == nil || sub.seq < o.seq {
-			o = sub
-		}
-	}
-	return o
+	return victim
 }
 
 func (h *liveHub) add(sub *liveSub) {
@@ -279,8 +328,10 @@ func (h *liveHub) add(sub *liveSub) {
 	h.total++
 }
 
-// remove drops sub from every index; a sub already removed is a no-op.
-func (h *liveHub) remove(sub *liveSub) {
+// unsubscribe frees sub's slot; its handler calls it on the way out.
+func (h *liveHub) unsubscribe(sub *liveSub) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	set := h.subs[sub.slug]
 	if _, ok := set[sub]; !ok {
 		return
@@ -295,13 +346,7 @@ func (h *liveHub) remove(sub *liveSub) {
 		delete(h.byClient, sub.client)
 	}
 	h.total--
-}
-
-// unsubscribe releases sub's slots (a no-op if the hub already ended it).
-func (h *liveHub) unsubscribe(sub *liveSub) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.remove(sub)
+	close(sub.done)
 }
 
 // liveClientKey is the client a stream counts against for the per-client cap:
@@ -387,7 +432,7 @@ func (s *Server) handleLiveEvents(hub *liveHub, w http.ResponseWriter, r *http.R
 	}
 
 	client := liveClientKey(r)
-	sub, ok := hub.subscribe(slug, client)
+	sub, ok := hub.subscribe(r.Context(), slug, client)
 	if !ok {
 		http.Error(w, "too many live subscribers", http.StatusServiceUnavailable)
 		return
