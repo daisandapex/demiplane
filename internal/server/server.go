@@ -893,6 +893,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	s.extendWriteDeadline(w, art.Size)
 	// ServeContent handles Range requests, conditional GETs, and keeps the
 	// content-type we set above.
+	singleRangeOnly(r)
 	http.ServeContent(w, r, art.Filename, lastModified, f)
 }
 
@@ -1436,4 +1437,20 @@ func sanitizeFilename(name string) string {
 		return "download"
 	}
 	return name
+}
+
+// maxRangeHeader bounds the Range header a download honours.
+const maxRangeHeader = 128
+
+// singleRangeOnly drops a Range header that asks for more than one range or
+// is longer than maxRangeHeader, so the response is the whole body (a server
+// may always ignore Range). http.ServeContent parses every range of a
+// multi-range request and sizes a multipart response for it, work that grows
+// with the header and that a client can repeat on every request; demiplane
+// serves no client that needs multiple ranges.
+func singleRangeOnly(r *http.Request) {
+	if v := r.Header.Get("Range"); v != "" &&
+		(len(v) > maxRangeHeader || strings.Contains(v, ",") || len(r.Header.Values("Range")) > 1) {
+		r.Header.Del("Range")
+	}
 }

@@ -395,5 +395,6 @@ func (s *Server) serveSiteFile(w http.ResponseWriter, r *http.Request, site, rel
 	if fi, err := f.Stat(); err == nil {
 		s.extendWriteDeadline(w, fi.Size())
 	}
+	singleRangeOnly(r)
 	http.ServeContent(w, r, path.Base(rel), mod, f)
 }

@@ -90,15 +90,16 @@ func hashPassword(pw string) (string, error) {
 func HashPassword(pw string) (string, error) { return newHash(pw) }
 
 // validPasswordHash reports whether encoded has the shape hashPassword
-// produces, with no more than the default work factor, so a hash passed to
-// Put cannot make later checks slower than ordinary ones.
+// produces, at exactly the store's work factor: a hash passed to Put can make
+// later checks neither slower than ordinary ones nor weaker against offline
+// guessing.
 func validPasswordHash(encoded string) bool {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 4 || parts[0] != pbkdf2Scheme {
 		return false
 	}
 	iter, err := strconv.Atoi(parts[1])
-	if err != nil || iter <= 0 || iter > DefaultPBKDF2Iter {
+	if err != nil || iter != pbkdf2Iter {
 		return false
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[2])

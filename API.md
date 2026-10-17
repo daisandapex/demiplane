@@ -218,8 +218,9 @@ func main() {
 
 Fetch an artifact's bytes as-is, with the stored content-type, on the content
 origin. Always open, except that a password-gated artifact requires HTTP Basic
-credentials (username ignored, password is the password). Range requests and
-conditional GETs are supported. Public artifacts carry `Cache-Control: no-cache`;
+credentials (username ignored, password is the password). Single byte-range
+requests and conditional GETs are supported; a request for several ranges, or
+with a `Range` header over 128 bytes, gets the whole body (`200`). Public artifacts carry `Cache-Control: no-cache`;
 private and password-protected ones (and their `401`) carry
 `Cache-Control: private, no-store` and `Referrer-Policy: no-referrer`. Every
 response has a `Last-Modified` with one-second resolution (two writes in the

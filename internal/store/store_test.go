@@ -788,8 +788,8 @@ func TestNewestPerFamily(t *testing.T) {
 }
 
 // TestPutPasswordHash: a hash from HashPassword is stored as is; a malformed
-// one, one above the default work factor, or one together with a plaintext
-// password is refused.
+// one, one at any other work factor than the store's, or one together with a
+// plaintext password is refused.
 func TestPutPasswordHash(t *testing.T) {
 	st, err := Open(t.TempDir())
 	if err != nil {
@@ -815,5 +815,28 @@ func TestPutPasswordHash(t *testing.T) {
 		if _, err := st.Put(opts, strings.NewReader("x")); !errors.As(err, &ie) {
 			t.Errorf("%s: err = %v, want an InputError", name, err)
 		}
+	}
+}
+
+// TestPutPasswordHashBelowWorkFactor: a hash computed with fewer iterations
+// than the store uses is refused, since it would weaken the stored password
+// against offline guessing.
+func TestPutPasswordHashBelowWorkFactor(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	saved := pbkdf2Iter
+	t.Cleanup(func() { pbkdf2Iter = saved })
+	pbkdf2Iter = 2
+	weak, err := HashPassword("hunter2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pbkdf2Iter = 4
+	var ie *InputError
+	if _, err := st.Put(PutOptions{Slug: "weak", PasswordHash: weak}, strings.NewReader("x")); !errors.As(err, &ie) {
+		t.Fatalf("a hash below the work factor: err = %v, want an InputError", err)
 	}
 }
