@@ -86,12 +86,11 @@ func (s *Store) writeSource(path string, body []byte) error {
 		s.release(cw.charged)
 		return fmt.Errorf("close source: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := s.commitRename(tmpName, path, cw.charged); err != nil {
 		os.Remove(tmpName)
 		s.release(cw.charged)
 		return fmt.Errorf("commit source: %w", err)
 	}
-	s.settle(cw.charged)
 	return nil
 }
 

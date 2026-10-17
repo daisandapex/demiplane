@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // quota.go bounds the store's aggregate size on disk.
@@ -56,6 +57,12 @@ type quotaState struct {
 	limit     int64
 	committed int64 // bytes of live files on disk
 	inflight  int64 // bytes charged to writes not yet committed
+	// active counts filesystem transitions in progress (a file becoming live
+	// or being removed, plus its accounting), and gen changes whenever one
+	// starts or ends. A recount applies its walk only if no transition
+	// overlapped it, so a commit is never lost or counted twice.
+	active int
+	gen    uint64
 }
 
 // SetQuota sets the aggregate storage quota in bytes and measures the bytes
@@ -86,28 +93,106 @@ func (s *Store) Usage() (used, limit int64) {
 	return s.quota.committed + s.quota.inflight, s.quota.limit
 }
 
+// recountAttempts and recountBackoff bound how long a recount waits for a
+// quiet moment before it gives up and keeps the current counts.
+const (
+	recountAttempts = 5
+	recountBackoff  = 10 * time.Millisecond
+)
+
 // RecountUsage re-measures the committed bytes on disk, picking up writes made
-// by other processes (the SSH receive path). In-flight charges are kept. A
-// write that commits while the walk runs can be counted once too often or too
-// rarely until the next recount. No-op without a quota.
+// by other processes (the SSH receive path). In-flight charges are kept, and
+// temp files (already charged as in-flight) are not walked. The new figure is
+// applied only if no in-process file transition started, ran or ended during
+// the walk; otherwise the walk is retried, and after recountAttempts busy
+// walks the counts are left as they are until the next recount. No-op without
+// a quota.
 func (s *Store) RecountUsage() error {
-	s.quota.mu.Lock()
-	on := s.quota.limit > 0
-	s.quota.mu.Unlock()
-	if !on {
-		return nil
+	q := &s.quota
+	for attempt := 0; attempt < recountAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(recountBackoff)
+		}
+		q.mu.Lock()
+		on, busy, start := q.limit > 0, q.active > 0, q.gen
+		q.mu.Unlock()
+		if !on {
+			return nil
+		}
+		if busy {
+			continue
+		}
+		used, err := s.measureUsage()
+		if err != nil {
+			return err
+		}
+		if afterUsageWalk != nil {
+			afterUsageWalk()
+		}
+		q.mu.Lock()
+		applied := q.limit > 0 && q.active == 0 && q.gen == start
+		if applied {
+			q.committed = used
+		}
+		q.mu.Unlock()
+		if applied {
+			return nil
+		}
 	}
-	used, err := s.measureUsage()
-	if err != nil {
-		return err
-	}
-	s.quota.mu.Lock()
-	if s.quota.limit > 0 {
-		s.quota.committed = used
-	}
-	s.quota.mu.Unlock()
 	return nil
 }
+
+// beginTransition marks the start of a change to the live files (a rename into
+// place or a removal). Every call is paired with endTransition, which applies
+// the accounting for the change.
+func (s *Store) beginTransition() {
+	q := &s.quota
+	q.mu.Lock()
+	q.active++
+	q.gen++
+	q.mu.Unlock()
+}
+
+// endTransition ends a transition: settled bytes move from in-flight to
+// committed (a write became live) and removed bytes leave committed (a live
+// file was deleted). The floor at zero covers removing a file another process
+// wrote after the last measurement.
+func (s *Store) endTransition(settled, removed int64) {
+	q := &s.quota
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.active--
+	q.gen++
+	if q.limit <= 0 {
+		return
+	}
+	if settled > 0 {
+		q.inflight = max(q.inflight-settled, 0)
+		q.committed += settled
+	}
+	if removed > 0 {
+		q.committed = max(q.committed-removed, 0)
+	}
+}
+
+// commitRename renames a fully written temp file or directory into place and
+// moves its charged bytes to committed, as one transition.
+func (s *Store) commitRename(from, to string, charged int64) error {
+	s.beginTransition()
+	if err := os.Rename(from, to); err != nil {
+		s.endTransition(0, 0)
+		return err
+	}
+	if afterLiveRename != nil {
+		afterLiveRename()
+	}
+	s.endTransition(charged, 0)
+	return nil
+}
+
+// Test hooks: afterUsageWalk runs between a recount's walk and its update;
+// afterLiveRename runs between a file becoming live and its accounting.
+var afterUsageWalk, afterLiveRename func()
 
 // measureUsage sums the live regular files under the content directories.
 func (s *Store) measureUsage() (int64, error) {
@@ -187,41 +272,12 @@ func (s *Store) release(n int64) {
 	q.inflight = max(q.inflight-n, 0)
 }
 
-// settle moves n bytes from in-flight to committed, for a write whose file
-// became live.
-func (s *Store) settle(n int64) {
-	if n <= 0 {
-		return
-	}
-	q := &s.quota
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.limit <= 0 {
-		return
-	}
-	q.inflight = max(q.inflight-n, 0)
-	q.committed += n
-}
-
-// uncommit releases n committed bytes, for a live file that was removed. The
-// floor at zero covers removing a file another process wrote after the last
-// measurement.
-func (s *Store) uncommit(n int64) {
-	if n <= 0 {
-		return
-	}
-	q := &s.quota
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.limit <= 0 {
-		return
-	}
-	q.committed = max(q.committed-n, 0)
-}
-
 // removeLive removes a live file and releases its size. A file already gone is
 // not an error (and releases nothing).
 func (s *Store) removeLive(path string) error {
+	s.beginTransition()
+	var removed int64
+	defer func() { s.endTransition(0, removed) }()
 	fi, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -236,7 +292,7 @@ func (s *Store) removeLive(path string) error {
 		return err
 	}
 	if fi.Mode().IsRegular() {
-		s.uncommit(fi.Size())
+		removed = fi.Size()
 	}
 	return nil
 }
@@ -244,6 +300,9 @@ func (s *Store) removeLive(path string) error {
 // removeLiveTree removes a live directory tree and releases the size of the
 // files it held. On a partial failure only what is gone is released.
 func (s *Store) removeLiveTree(dir string) error {
+	s.beginTransition()
+	var removed int64
+	defer func() { s.endTransition(0, removed) }()
 	before, err := treeSize(dir)
 	if err != nil {
 		return err
@@ -253,7 +312,7 @@ func (s *Store) removeLiveTree(dir string) error {
 	if rerr != nil {
 		after, _ = treeSize(dir)
 	}
-	s.uncommit(before - after)
+	removed = before - after
 	return rerr
 }
 

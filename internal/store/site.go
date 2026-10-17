@@ -201,10 +201,14 @@ func (w *SiteWriter) Commit() (int, error) {
 		w.Abort()
 		return 0, inputErrorf("site archive contained no publishable files")
 	}
+	// Both renames and the accounting are one quota transition, so a
+	// concurrent usage recount never walks the tree halfway through the swap.
+	w.store.beginTransition()
 	var backup string
 	if _, err := os.Stat(w.finalDir); err == nil {
 		backup = w.finalDir + ".old-" + filepath.Base(w.tmpDir)
 		if err := os.Rename(w.finalDir, backup); err != nil {
+			w.store.endTransition(0, 0)
 			w.Abort()
 			return 0, fmt.Errorf("stage site replace: %w", err)
 		}
@@ -214,11 +218,12 @@ func (w *SiteWriter) Commit() (int, error) {
 			// Restore the previous site; best-effort.
 			_ = os.Rename(backup, w.finalDir)
 		}
+		w.store.endTransition(0, 0)
 		w.Abort()
 		return 0, fmt.Errorf("commit site: %w", err)
 	}
 	w.done = true
-	w.store.settle(w.charged)
+	w.store.endTransition(w.charged, 0)
 	if backup != "" {
 		_ = w.store.removeLiveTree(backup)
 	}

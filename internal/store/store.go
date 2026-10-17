@@ -579,11 +579,10 @@ func (s *Store) writeBlob(final string, r io.Reader) (sniffed string, size int64
 		err = fmt.Errorf("close blob: %w", cerr)
 		return "", 0, err
 	}
-	if rerr := os.Rename(tmpName, final); rerr != nil {
+	if rerr := s.commitRename(tmpName, final, cw.charged); rerr != nil {
 		err = fmt.Errorf("commit blob: %w", rerr)
 		return "", 0, err
 	}
-	s.settle(cw.charged)
 	return sniffed, size, nil
 }
 

@@ -431,3 +431,67 @@ func TestQuotaRecountPicksUpOutOfProcessWrites(t *testing.T) {
 		t.Fatalf("Put after recount: %v, want ErrQuota", err)
 	}
 }
+
+// TestQuotaRecountMissesNoConcurrentCommit commits a write after the recount
+// walked the disk and before it updated the counter: the write's bytes must
+// not be lost.
+func TestQuotaRecountMissesNoConcurrentCommit(t *testing.T) {
+	s := newQuotaStore(t, 10_000)
+	if _, err := s.Put(PutOptions{Slug: "a"}, bytes.NewReader(payload(500))); err != nil {
+		t.Fatalf("Put a: %v", err)
+	}
+	var once sync.Once
+	afterUsageWalk = func() {
+		once.Do(func() {
+			if _, err := s.Put(PutOptions{Slug: "b"}, bytes.NewReader(payload(300))); err != nil {
+				t.Errorf("Put b during the recount: %v", err)
+			}
+		})
+	}
+	defer func() { afterUsageWalk = nil }()
+	if err := s.RecountUsage(); err != nil {
+		t.Fatalf("RecountUsage: %v", err)
+	}
+	afterUsageWalk = nil
+	assertAccounted(t, s)
+}
+
+// TestQuotaRecountDoesNotDoubleCount runs a recount after a file became live
+// on disk and before its write was accounted: the bytes must be counted once.
+func TestQuotaRecountDoesNotDoubleCount(t *testing.T) {
+	s := newQuotaStore(t, 10_000)
+	var once sync.Once
+	afterLiveRename = func() {
+		once.Do(func() {
+			if err := s.RecountUsage(); err != nil {
+				t.Errorf("RecountUsage during a commit: %v", err)
+			}
+		})
+	}
+	defer func() { afterLiveRename = nil }()
+	if _, err := s.Put(PutOptions{Slug: "a"}, bytes.NewReader(payload(500))); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	afterLiveRename = nil
+	assertAccounted(t, s)
+}
+
+// TestQuotaRecountSkipsInFlight checks that a recount does not count a
+// scratch file that is already charged as in-flight.
+func TestQuotaRecountSkipsInFlight(t *testing.T) {
+	s := newQuotaStore(t, 10_000)
+	sc, err := s.NewScratch()
+	if err != nil {
+		t.Fatalf("NewScratch: %v", err)
+	}
+	defer sc.Close()
+	if _, err := io.Copy(sc, bytes.NewReader(payload(700))); err != nil {
+		t.Fatalf("write scratch: %v", err)
+	}
+	if err := s.RecountUsage(); err != nil {
+		t.Fatalf("RecountUsage: %v", err)
+	}
+	if used, _ := s.Usage(); used != 700 {
+		t.Errorf("usage with an in-flight scratch after a recount = %d, want 700", used)
+	}
+}
