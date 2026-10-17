@@ -189,7 +189,13 @@ func TestTrustedProxyClientIdentity(t *testing.T) {
 				resp.Body.Close()
 				return resp.StatusCode
 			}
-			go get("/hold", "203.0.113.1")
+			go func() {
+				req, _ := http.NewRequest(http.MethodGet, ts.URL+"/hold", nil)
+				req.Header.Set("X-Forwarded-For", "203.0.113.1")
+				if resp, err := http.DefaultClient.Do(req); err == nil {
+					resp.Body.Close()
+				}
+			}()
 			<-held
 			if got := get("/ok", "203.0.113.2"); got != tc.otherClient {
 				t.Errorf("another forwarded client: %d, want %d", got, tc.otherClient)
