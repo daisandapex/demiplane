@@ -397,13 +397,15 @@ func TestSlowValidUploadOutlastsResponseTimeout(t *testing.T) {
 	s, st := limitServer(t, Config{Requests: RequestLimits{
 		BodyTimeout:     time.Second,
 		UploadMinRate:   1000,
-		ResponseTimeout: 200 * time.Millisecond,
+		// The body takes three seconds, three times the response timeout; the
+		// second left after it is room for the store write under load.
+		ResponseTimeout: time.Second,
 	}})
 	ts := httptest.NewServer(s.ControlHandler())
 	t.Cleanup(ts.Close)
-	const total = 3000
+	const total = 9000
 	c := rawPost(t, ts.Listener.Addr().String(), "/publish?slug=steady", total, func(c net.Conn) {
-		// 300 bytes every 100ms: 3000 B/s for one second.
+		// 300 bytes every 100ms: 3000 B/s for three seconds.
 		for i := 0; i < total/300; i++ {
 			if _, err := c.Write(bytes.Repeat([]byte("s"), 300)); err != nil {
 				return
@@ -411,7 +413,7 @@ func TestSlowValidUploadOutlastsResponseTimeout(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 	})
-	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
 	line, err := bufio.NewReader(c).ReadString('\n')
 	if err != nil {
 		t.Fatalf("no response to a steady upload: %v", err)
