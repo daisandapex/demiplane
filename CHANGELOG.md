@@ -173,7 +173,11 @@ All notable changes to demiplane are documented here. The format follows
   fields and the part's headers); more is refused with `431`.
 - **Bulk rerender is bounded.** `POST /rerender` reads the store a page at a
   time, lists at most 100 results and 100 failures, stops when its request
-  ends, and runs one sweep at a time (another gets `409`).
+  ends, and runs one sweep at a time (another gets `409`). It refuses a
+  request body (`400`), so a caller that disconnects is noticed.
+- **Live-reload streams over HTTP/2 (native TLS) no longer reset between
+  heartbeats:** the per-frame write deadline is cleared once the frame is
+  sent. With `--write-timeout` set, downloads keep the sendfile path.
 - **`--write-timeout` bounds each whole response again,** from the start of
   the request, live-reload streams included; per-route deadlines no longer
   replace it.
