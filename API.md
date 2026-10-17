@@ -67,7 +67,7 @@ after a `--body-timeout` grace, or the request gets `408`.
 |---|---|
 | `slug=<name>` | Named, stable URL that overwrites in place on re-publish. Charset `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. Omit for an auto friendly slug like `shadow-specter`. |
 | `private=true` | Mint a high-entropy, unguessable capability slug. Cannot be combined with `slug` (a named slug is guessable). |
-| `ttl=<dur>` | Auto-expire: `30m`, `2h`, `7d` (days), or any Go duration. Days are a plain decimal (`7d`, `0.5d`); exponents, signs, `NaN` and `Inf` are refused. The minimum is `1s` and the maximum about 292 years; anything outside that range, or a value of only whitespace, is a `400`, never a page that does not expire. An empty or omitted `ttl` means no expiry. After it lapses the slug returns 404. |
+| `ttl=<dur>` | Auto-expire: `30m`, `2h`, `7d` (days), or any Go duration. Days are a plain decimal (`7d`, `0.5d`); exponents, signs, `NaN` and `Inf` are refused, and so is any value longer than 64 bytes. The minimum is `1s` and the maximum about 292 years; anything outside that range, or a value of only whitespace, is a `400`, never a page that does not expire. An empty or omitted `ttl` means no expiry. After it lapses the slug returns 404. |
 | `render=md` | Render a markdown body to a styled HTML page on publish (house theme, sticky title header, optional light/dark toggle). |
 | `reply=question` | Bake a first-class inline reply box into the rendered page and accept replies. Requires `render=md` and a named `slug`; not valid with `private`. Needs the `reply` build tag. |
 | `reply=form` | Accept replies through the reply module's form at `/reply/{slug}`, without changing the page. Not valid with `private`. Without either `reply` value, a publish turns replies off for the slug. |
@@ -222,9 +222,14 @@ credentials (username ignored, password is the password). Range requests and
 conditional GETs are supported. Public artifacts carry `Cache-Control: no-cache`;
 private and password-protected ones (and their `401`) carry
 `Cache-Control: private, no-store` and `Referrer-Policy: no-referrer`. Every
-response has a `Last-Modified` that advances on every re-publish and every
-`POST /rerender`, and an `ETag` that changes on every write of the bytes, so a
-cached copy is revalidated and replaced after either. HTML, SVG and XML are
+response has a `Last-Modified` with one-second resolution (two writes in the
+same second can share it), and, unless its bytes predate generation-tracked
+storage, an `ETag` that changes on every write of the bytes, including a
+re-publish and a `POST /rerender`. When there is an `ETag`, it alone decides a
+conditional request: `If-None-Match` can earn a `304`, `If-Modified-Since` is
+ignored, and an `If-Range` carrying a date returns the whole body. Only an
+artifact without an `ETag` (written before generation-tracked storage) is
+revalidated by `If-Modified-Since`. HTML, SVG and XML are
 served in a CSP sandbox, so each page runs in an opaque origin of its own and
 cannot read other artifacts, use storage, or register a service worker (see
 [SECURITY.md](SECURITY.md#content-isolation-between-artifacts) and
@@ -652,7 +657,14 @@ func main() {
 site instead of a single artifact. It runs on the control plane and returns the
 site's index URL on the content origin. A `?fmt=tar|zip` hint disambiguates the
 archive; otherwise the format is sniffed. Body size is always capped for a site
-publish (the archive is buffered for extraction). Read a site back at
+publish (the archive is buffered for extraction). An archive may hold at most
+4,096 entries, counting directories, links and other skipped entries as well
+as files; a zip's central directory may be at most 2 MiB and a tar's PAX or
+GNU long-name header at most 64 KiB (`413` otherwise). Entry paths use `/`
+only: a name containing a backslash, `..`, a dotfile segment or an absolute
+path is refused with `400`, and symlinks and other non-regular entries are
+skipped. Two archives are parsed at a time; a publish that waits more than five
+seconds for a turn gets `503` with `Retry-After`. Read a site back at
 `GET /{site}/{path}` on the content origin; `GET /{site}/` serves its index.
 Sites are public and do not expire: a site upload that asks for `?private`,
 `?ttl`, `?password` or an `X-Demiplane-Password` header is refused with `400`
@@ -689,7 +701,7 @@ filtering, sorting and grouping apply to the page shown.
 | `200 OK` | Read succeeded (`GET /{slug}`, `/list`, `/replies`). |
 | `201 Created` | Publish or reply stored. |
 | `204 No Content` | Delete or ack succeeded. |
-| `304 Not Modified` | Conditional `GET /{slug}` whose `If-None-Match` or `If-Modified-Since` still matches. |
+| `304 Not Modified` | Conditional `GET /{slug}` whose `If-None-Match` still matches the `ETag`, or, for an artifact without an `ETag`, whose `If-Modified-Since` is not older than `Last-Modified`. |
 | `302 Found` | Forward-flow redirect once a `?next` slug exists. |
 | `307 Temporary Redirect` | A non-canonical path (`//`, `/./`, `/../`); `Location` is the canonical path with its escaping and query kept. |
 | `400 Bad Request` | Invalid or reserved slug, `private` + named slug, password in the URL query, bad `ttl`, a malformed publish query string, a site upload asking for `?private`/`?ttl`/a password, a malformed reply/site, or an ambiguous path (a segment that decodes to `.` or `..`, or holds an encoded `/` or `\`, or a control character), a `Host` header longer than 255 bytes (on every listener, before routing), or a malformed `after` cursor (`/list`, `/gallery`). |
@@ -698,11 +710,11 @@ filtering, sorting and grouping apply to the page shown.
 | `404 Not Found` | No such artifact or reply, or it expired. |
 | `405 Method Not Allowed` | Wrong method for a known path (for example `POST /list`). |
 | `408 Request Timeout` | The request body arrived too slowly (`--body-timeout`, `--upload-min-rate`). |
-| `413 Payload Too Large` | Upload exceeds `--max-upload`, a reply/site exceeds its cap, or a `?render=md` document exceeds a render limit (table width, table cells, `--render-max-output`). |
+| `413 Payload Too Large` | Upload exceeds `--max-upload`, a reply/site exceeds its cap (a site archive: 4,096 entries of any kind, a 2 MiB zip central directory, a 64 KiB tar PAX or long-name header, the decompressed-bytes budget), or a `?render=md` document exceeds a render limit (table width, table cells, `--render-max-output`). |
 | `421 Misdirected Request` | `--allowed-hosts` is set and the `Host` is not one it (or a base URL) names. |
 | `429 Too Many Requests` | Too many failed view-password attempts or reply submissions (with `Retry-After`), or an artifact reached its reply limit. |
 | `501 Not Implemented` | A feature (for example `?site=`) is not compiled into this build. |
-| `503 Service Unavailable` | A module (for example reply storage) is temporarily unavailable, or the server is at a concurrency limit (requests in progress, password checks, renders, the reply hook pool); retry after `Retry-After`. |
+| `503 Service Unavailable` | A module (for example reply storage) is temporarily unavailable, or the server is at a concurrency limit (requests in progress, password checks, renders, site archive parsing, the reply hook pool); retry after `Retry-After`. |
 | `507 Insufficient Storage` | The write would pass `--store-quota`, the sites would hold more than 100,000 files and directories in all, or the aggregate reply limits are reached. |
 
 ## Reserved slugs
