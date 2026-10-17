@@ -29,9 +29,11 @@ import (
 // site replacement) releases the size it had on disk.
 //
 // What is counted: the apparent size of regular files under blobs/, sources/
-// and sites/. Not counted: the metadata database, module data (replies, TLS
-// material), filesystem block overhead, and temp files abandoned by a crash
-// (their ".tmp-" names are skipped when usage is measured).
+// and sites/, plus a fixed metadata allowance per artifact row
+// (metaAllowance), which stands in for the metadata database. Not counted:
+// the database's actual size, module data (replies, TLS material),
+// filesystem block overhead, and temp files abandoned by a crash (their
+// ".tmp-" names are skipped when usage is measured).
 //
 // Other processes: `demiplane receive` opens the same store in its own process.
 // Each process charges its own writes against usage measured when it set its
@@ -204,7 +206,27 @@ func (s *Store) measureUsage() (int64, error) {
 		}
 		total += n
 	}
-	return total, nil
+	var rows int64
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM artifacts`).Scan(&rows); err != nil {
+		return 0, fmt.Errorf("measure store usage: %w", err)
+	}
+	return total + rows*metaAllowance, nil
+}
+
+// validateMeta bounds the user-supplied metadata a publish stores in its row.
+func validateMeta(opts PutOptions) error {
+	if len(opts.Filename) > maxFilenameBytes {
+		return inputErrorf("filename is longer than %d bytes", maxFilenameBytes)
+	}
+	if opts.Series != "" {
+		if err := ValidateSeries(opts.Series); err != nil {
+			return err
+		}
+	}
+	if len(opts.RenderSpec) > maxRenderSpecBytes {
+		return inputErrorf("render parameters are longer than %d bytes", maxRenderSpecBytes)
+	}
+	return nil
 }
 
 // treeSize sums the regular files under dir, skipping temp entries. A missing
@@ -389,3 +411,24 @@ func (sc *Scratch) Close() error {
 	sc.f = nil
 	return err
 }
+
+// MetaAllowance is what one artifact row counts against the quota, standing
+// in for its share of the metadata database (and WAL), which is not walked.
+// It is charged when a row is created and released when it is deleted or
+// reaped; overwriting a row changes nothing. The per-row fields are bounded
+// (maxFilenameBytes, maxRenderSpecBytes, the slug and series patterns), so
+// this covers a row with room to spare.
+const MetaAllowance = 4 << 10
+
+const metaAllowance = MetaAllowance
+
+// maxFilenameBytes caps a stored filename hint, and maxRenderSpecBytes the
+// opaque render spec, so one row cannot carry an arbitrary amount of
+// metadata.
+const (
+	maxFilenameBytes   = MaxFilenameBytes
+	maxRenderSpecBytes = 2 << 10
+)
+
+// MaxFilenameBytes is the longest filename hint a publish may carry.
+const MaxFilenameBytes = 255

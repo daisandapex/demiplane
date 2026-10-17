@@ -72,7 +72,7 @@ after a `--body-timeout` grace, or the request gets `408`.
 | `reply=question` | Bake a first-class inline reply box into the rendered page and accept replies. Requires `render=md` and a named `slug`; not valid with `private`. Needs the `reply` build tag. |
 | `reply=form` | Accept replies through the reply module's form at `/reply/{slug}`, without changing the page. Not valid with `private`. Without either `reply` value, a publish turns replies off for the slug. |
 | `next=<slug>` | Forward flow: names the page that follows this one's answer. Requires `reply`. Must differ from `slug`; need not exist yet. |
-| `filename=<name>` | Content-type hint for raw-body uploads (the extension informs the served type). |
+| `filename=<name>` | Content-type hint for raw-body uploads (the extension informs the served type). At most 255 bytes; longer is a `400`. |
 | `site=<name>` | Ingest a tar or zip body as a path-structured multi-file site (see Sites). Needs the site feature wired in. |
 
 ### Headers

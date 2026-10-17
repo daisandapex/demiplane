@@ -576,6 +576,11 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer body.Close()
+	// Checked before the body is read; the store enforces the same cap.
+	if len(filename) > store.MaxFilenameBytes {
+		http.Error(w, fmt.Sprintf("filename is longer than %d bytes", store.MaxFilenameBytes), http.StatusBadRequest)
+		return
+	}
 
 	// Replies are accepted only for artifacts whose publish enabled them; the
 	// choice is stored with the artifact and replaced by the next publish.

@@ -358,6 +358,9 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 		// bug, and storing it as no expiry would fail open.
 		return Artifact{}, &InputError{Msg: "ttl must not be negative"}
 	}
+	if err := validateMeta(opts); err != nil {
+		return Artifact{}, err
+	}
 	slug, _, err := s.resolveSlug(opts.Slug, opts.Private)
 	if err != nil {
 		return Artifact{}, err
@@ -684,6 +687,22 @@ RETURNING modified_at;`
 			return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 		}
 	}
+	// A new row takes its metadata allowance from the quota (quota.go). The
+	// transaction holds the write lock, so whether the row exists cannot
+	// change before the commit.
+	var charged int64
+	if !p.exists {
+		if err := s.charge(metaAllowance); err != nil {
+			return priorGen{}, err
+		}
+		charged = metaAllowance
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			s.release(charged)
+		}
+	}()
 	var modified int64
 	if err := tx.QueryRow(q,
 		a.Slug, a.Filename, a.ContentType, a.Size, a.CreatedAt.Unix(), a.Owner,
@@ -692,9 +711,13 @@ RETURNING modified_at;`
 	).Scan(&modified); err != nil {
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 	}
+	s.beginTransition()
 	if err := tx.Commit(); err != nil {
+		s.endTransition(0, 0)
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 	}
+	committed = true
+	s.endTransition(charged, 0)
 	a.ModifiedAt = time.Unix(modified, 0).UTC()
 	return p, nil
 }
@@ -847,9 +870,13 @@ func (s *Store) deleteRow(slug, query string, args ...any) (blobGen, sourceGen s
 	if err := queueDeletion(tx, slug, blobGen, sourceGen); err != nil {
 		return "", "", err
 	}
+	// The row's metadata allowance leaves the quota with the row (quota.go).
+	s.beginTransition()
 	if err := tx.Commit(); err != nil {
+		s.endTransition(0, 0)
 		return "", "", err
 	}
+	s.endTransition(0, metaAllowance)
 	return blobGen, sourceGen, nil
 }
 

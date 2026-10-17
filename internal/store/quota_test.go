@@ -79,8 +79,12 @@ func tempFiles(t *testing.T, s *Store) []string {
 func assertAccounted(t *testing.T, s *Store) {
 	t.Helper()
 	used, _ := s.Usage()
-	if disk := diskBytes(t, s); used != disk {
-		t.Errorf("usage = %d, bytes on disk = %d", used, disk)
+	var rows int64
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM artifacts`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if want := diskBytes(t, s) + rows*metaAllowance; used != want {
+		t.Errorf("usage = %d, bytes on disk + %d row allowances = %d", used, rows, want)
 	}
 	if left := tempFiles(t, s); len(left) != 0 {
 		t.Errorf("temp files left behind: %v", left)
@@ -90,7 +94,7 @@ func assertAccounted(t *testing.T, s *Store) {
 func payload(n int) []byte { return bytes.Repeat([]byte("q"), n) }
 
 func TestQuotaRejectsPutOverLimit(t *testing.T) {
-	s := newQuotaStore(t, 1000)
+	s := newQuotaStore(t, 1000+metaAllowance)
 	if _, err := s.Put(PutOptions{Slug: "a"}, bytes.NewReader(payload(600))); err != nil {
 		t.Fatalf("first Put: %v", err)
 	}
@@ -105,14 +109,14 @@ func TestQuotaRejectsPutOverLimit(t *testing.T) {
 	if _, _, err := s.Get("b"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("rejected artifact exists: %v", err)
 	}
-	if used, limit := s.Usage(); used != 600 || limit != 1000 {
-		t.Errorf("Usage = %d/%d, want 600/1000", used, limit)
+	if used, limit := s.Usage(); used != 600+metaAllowance || limit != 1000+metaAllowance {
+		t.Errorf("Usage = %d/%d, want 600/1000 plus one row allowance", used, limit)
 	}
 	assertAccounted(t, s)
 }
 
 func TestQuotaExactFit(t *testing.T) {
-	s := newQuotaStore(t, 1000)
+	s := newQuotaStore(t, 1000+metaAllowance)
 	if _, err := s.Put(PutOptions{Slug: "a"}, bytes.NewReader(payload(1000))); err != nil {
 		t.Fatalf("Put of exactly the quota: %v", err)
 	}
@@ -130,7 +134,9 @@ func TestQuotaZeroIsUnlimited(t *testing.T) {
 }
 
 func TestQuotaConcurrentPutsNeverExceed(t *testing.T) {
-	const limit, size, writers = 10_000, 1_000, 40
+	const size, writers = 1_000, 40
+	const perPut = size + metaAllowance // the bytes plus the row allowance
+	const limit = 10 * perPut
 	s := newQuotaStore(t, limit)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -153,8 +159,8 @@ func TestQuotaConcurrentPutsNeverExceed(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	if ok > limit/size {
-		t.Errorf("%d publishes succeeded, at most %d fit", ok, limit/size)
+	if ok > limit/perPut {
+		t.Errorf("%d publishes succeeded, at most %d fit", ok, limit/perPut)
 	}
 	if ok+rejected != writers {
 		t.Errorf("ok %d + rejected %d != %d", ok, rejected, writers)
@@ -181,7 +187,7 @@ func (f *failingReader) Read(p []byte) (int, error) {
 }
 
 func TestQuotaReleasesFailedUpload(t *testing.T) {
-	s := newQuotaStore(t, 1000)
+	s := newQuotaStore(t, 1000+metaAllowance)
 	if _, err := s.Put(PutOptions{Slug: "a"}, &failingReader{n: 700}); err == nil {
 		t.Fatal("Put of a failing body succeeded")
 	}
@@ -197,13 +203,13 @@ func TestQuotaReleasesFailedUpload(t *testing.T) {
 func TestQuotaOverwriteReleasesReplacedBytes(t *testing.T) {
 	// An overwrite writes the new bytes before the old ones go, so it needs
 	// room for both copies while it runs; afterwards only one is counted.
-	s := newQuotaStore(t, 1300)
+	s := newQuotaStore(t, 1300+2*metaAllowance)
 	for i := 0; i < 5; i++ {
 		if _, err := s.Put(PutOptions{Slug: "same"}, bytes.NewReader(payload(600))); err != nil {
 			t.Fatalf("overwrite %d: %v", i, err)
 		}
 	}
-	if used, _ := s.Usage(); used != 600 {
+	if used, _ := s.Usage(); used != 600+metaAllowance {
 		t.Errorf("usage after overwrites = %d, want 600", used)
 	}
 	if _, err := s.Put(PutOptions{Slug: "other"}, bytes.NewReader(payload(700))); err != nil {
@@ -219,11 +225,11 @@ func TestQuotaOverwriteReleasesReplacedBytes(t *testing.T) {
 }
 
 func TestQuotaDeleteReleasesBytes(t *testing.T) {
-	s := newQuotaStore(t, 1000)
+	s := newQuotaStore(t, 1000+metaAllowance)
 	if _, err := s.Put(PutOptions{Slug: "a", Source: payload(100)}, bytes.NewReader(payload(600))); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	if used, _ := s.Usage(); used != 700 {
+	if used, _ := s.Usage(); used != 700+metaAllowance {
 		t.Errorf("usage with source = %d, want 700", used)
 	}
 	if err := s.Delete("a"); err != nil {
@@ -239,7 +245,7 @@ func TestQuotaDeleteReleasesBytes(t *testing.T) {
 }
 
 func TestQuotaExpiryReleasesBytes(t *testing.T) {
-	s := newQuotaStore(t, 1000)
+	s := newQuotaStore(t, 1000+metaAllowance)
 	if _, err := s.Put(PutOptions{Slug: "a", TTL: time.Minute}, bytes.NewReader(payload(600))); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -253,7 +259,7 @@ func TestQuotaExpiryReleasesBytes(t *testing.T) {
 }
 
 func TestQuotaCountsSource(t *testing.T) {
-	s := newQuotaStore(t, 1000)
+	s := newQuotaStore(t, 1000+metaAllowance)
 	_, err := s.Put(PutOptions{Slug: "a", Source: payload(500)}, bytes.NewReader(payload(600)))
 	if !errors.Is(err, ErrQuota) {
 		t.Fatalf("Put whose bytes plus source exceed the quota: %v, want ErrQuota", err)
@@ -265,7 +271,7 @@ func TestQuotaCountsSource(t *testing.T) {
 }
 
 func TestQuotaRebakeReleasesOldBody(t *testing.T) {
-	s := newQuotaStore(t, 1000)
+	s := newQuotaStore(t, 1000+metaAllowance)
 	if _, err := s.Put(PutOptions{Slug: "a", Source: payload(100)}, bytes.NewReader(payload(400))); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -274,7 +280,7 @@ func TestQuotaRebakeReleasesOldBody(t *testing.T) {
 			t.Fatalf("rebake %d: %v", i, err)
 		}
 	}
-	if used, _ := s.Usage(); used != 500 {
+	if used, _ := s.Usage(); used != 500+metaAllowance {
 		t.Errorf("usage after rebakes = %d, want 500", used)
 	}
 	// A rebake writes its new bytes before the old ones go, so a body that
@@ -314,11 +320,11 @@ func TestQuotaCountsExistingStore(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer s2.Close()
-	if err := s2.SetQuota(1000); err != nil {
+	if err := s2.SetQuota(1000 + 2*metaAllowance); err != nil {
 		t.Fatalf("SetQuota: %v", err)
 	}
-	if used, _ := s2.Usage(); used != 800 {
-		t.Errorf("usage of an existing store = %d, want 800", used)
+	if used, _ := s2.Usage(); used != 800+metaAllowance {
+		t.Errorf("usage of an existing store = %d, want 800 plus one row allowance", used)
 	}
 	if _, err := s2.Put(PutOptions{Slug: "b"}, bytes.NewReader(payload(201))); !errors.Is(err, ErrQuota) {
 		t.Fatalf("Put past the existing usage: %v, want ErrQuota", err)
@@ -409,7 +415,7 @@ func TestQuotaRecountPicksUpOutOfProcessWrites(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer s.Close()
-	if err := s.SetQuota(1000); err != nil {
+	if err := s.SetQuota(1000 + metaAllowance); err != nil {
 		t.Fatalf("SetQuota: %v", err)
 	}
 	// A second handle stands in for the separate receive process.
@@ -424,8 +430,8 @@ func TestQuotaRecountPicksUpOutOfProcessWrites(t *testing.T) {
 	if err := s.RecountUsage(); err != nil {
 		t.Fatalf("RecountUsage: %v", err)
 	}
-	if used, _ := s.Usage(); used != 700 {
-		t.Errorf("usage after recount = %d, want 700", used)
+	if used, _ := s.Usage(); used != 700+metaAllowance {
+		t.Errorf("usage after recount = %d, want 700 plus one row allowance", used)
 	}
 	if _, err := s.Put(PutOptions{Slug: "b"}, bytes.NewReader(payload(400))); !errors.Is(err, ErrQuota) {
 		t.Fatalf("Put after recount: %v, want ErrQuota", err)
@@ -529,6 +535,79 @@ func TestReconcileReleasesQuota(t *testing.T) {
 	}
 	if n != 2 {
 		t.Fatalf("Reconcile removed %d files, want 2", n)
+	}
+	assertAccounted(t, s)
+}
+
+// dbBytes is the size of the metadata database and its WAL.
+func dbBytes(t *testing.T, s *Store) int64 {
+	t.Helper()
+	var n int64
+	for _, name := range []string{"meta.db", "meta.db-wal"} {
+		if fi, err := os.Stat(filepath.Join(s.root, name)); err == nil {
+			n += fi.Size()
+		}
+	}
+	return n
+}
+
+// TestQuotaBoundsMetadata: artifact metadata counts against the quota. A
+// filename hint over the cap is refused before anything is written, and a
+// flood of empty artifacts stops at the quota instead of growing the
+// metadata database without bound.
+func TestQuotaBoundsMetadata(t *testing.T) {
+	const limit = 1 << 20
+	s := newQuotaStore(t, limit)
+	long := strings.Repeat("f", 64<<10) + ".txt"
+	refused := 0
+	for i := 0; i < 100; i++ {
+		_, err := s.Put(PutOptions{Slug: fmt.Sprintf("long%d", i), Filename: long}, strings.NewReader(""))
+		var ie *InputError
+		if errors.As(err, &ie) {
+			refused++
+		} else if err != nil {
+			t.Fatalf("long filename %d: %v", i, err)
+		}
+	}
+	used, _ := s.Usage()
+	t.Logf("after 100 empty artifacts with 64 KiB filenames: Usage %d, meta.db+wal %d bytes", used, dbBytes(t, s))
+	if refused != 100 {
+		t.Fatalf("%d of 100 filename hints over %d bytes refused, want all", refused, maxFilenameBytes)
+	}
+	if _, err := s.Put(PutOptions{Slug: "edge", Filename: strings.Repeat("e", maxFilenameBytes-4) + ".txt"}, strings.NewReader("")); err != nil {
+		t.Fatalf("filename at the cap refused: %v", err)
+	}
+	if err := s.Delete("edge"); err != nil {
+		t.Fatal(err)
+	}
+
+	ok := 0
+	var err error
+	for i := 0; i < 2*limit/metaAllowance; i++ {
+		if _, err = s.Put(PutOptions{Slug: fmt.Sprintf("e%d", i)}, strings.NewReader("")); err != nil {
+			break
+		}
+		ok++
+	}
+	if !errors.Is(err, ErrQuota) {
+		t.Fatalf("empty artifacts never hit the quota (%d stored, last err %v)", ok, err)
+	}
+	if ok != limit/metaAllowance {
+		t.Fatalf("%d empty artifacts fit a %d-byte quota, want %d", ok, limit, limit/metaAllowance)
+	}
+	// An overwrite needs no new allowance; a delete releases one.
+	if _, err := s.Put(PutOptions{Slug: "e0"}, strings.NewReader("")); err != nil {
+		t.Fatalf("overwrite at a full quota: %v", err)
+	}
+	if err := s.Delete("e1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Put(PutOptions{Slug: "fresh"}, strings.NewReader("")); err != nil {
+		t.Fatalf("new artifact after a delete freed room: %v", err)
+	}
+	assertAccounted(t, s)
+	if err := s.RecountUsage(); err != nil {
+		t.Fatal(err)
 	}
 	assertAccounted(t, s)
 }

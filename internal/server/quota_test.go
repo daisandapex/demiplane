@@ -65,8 +65,12 @@ func storeDiskBytes(t *testing.T, st *store.Store) int64 {
 func assertStoreAccounted(t *testing.T, st *store.Store) {
 	t.Helper()
 	used, _ := st.Usage()
-	if disk := storeDiskBytes(t, st); used != disk {
-		t.Errorf("usage = %d, bytes on disk = %d", used, disk)
+	arts, err := st.List(store.DefaultOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := storeDiskBytes(t, st) + int64(len(arts))*store.MetaAllowance; used != want {
+		t.Errorf("usage = %d, bytes on disk + %d row allowances = %d", used, len(arts), want)
 	}
 	for _, dir := range []string{"blobs", "sources", "sites"} {
 		ents, _ := os.ReadDir(filepath.Join(st.Root(), dir))
@@ -79,7 +83,7 @@ func assertStoreAccounted(t *testing.T, st *store.Store) {
 }
 
 func TestPublishOverQuota507(t *testing.T) {
-	ts, st := newQuotaServer(t, 1000, Config{})
+	ts, st := newQuotaServer(t, 1000+store.MetaAllowance, Config{})
 	if code, b := do(t, http.MethodPost, ts.URL+"/publish?slug=a", "", strings.Repeat("x", 600)); code != http.StatusCreated {
 		t.Fatalf("first publish = %d %q", code, b)
 	}
@@ -98,7 +102,7 @@ func TestPublishOverQuota507(t *testing.T) {
 }
 
 func TestPublishOverMaxUploadReleasesQuota(t *testing.T) {
-	ts, st := newQuotaServer(t, 1000, Config{MaxUpload: 700})
+	ts, st := newQuotaServer(t, 1000+store.MetaAllowance, Config{MaxUpload: 700})
 	if code, _ := do(t, http.MethodPost, ts.URL+"/publish", "", strings.Repeat("x", 900)); code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversize publish = %d, want 413", code)
 	}
@@ -179,6 +183,27 @@ func TestRerenderOverQuota507KeepsPage(t *testing.T) {
 	}
 	if code, body := do(t, http.MethodGet, ts.URL+"/field-notes", "", ""); code != http.StatusOK || !strings.Contains(string(body), "must survive every rebake") {
 		t.Errorf("page after a refused rerender: %d", code)
+	}
+	assertStoreAccounted(t, st)
+}
+
+// TestPublishMetadataBounded: a filename hint over the cap is a 400, and
+// empty artifacts count against the quota through their row allowance, so a
+// flood of them gets 507 instead of growing the metadata database.
+func TestPublishMetadataBounded(t *testing.T) {
+	const rows = 5
+	ts, st := newQuotaServer(t, rows*store.MetaAllowance, Config{})
+	long := strings.Repeat("f", 64<<10) + ".txt"
+	if code, b := do(t, http.MethodPost, ts.URL+"/publish?slug=long&filename="+long, "", ""); code != http.StatusBadRequest {
+		t.Fatalf("64 KiB filename hint = %d %q, want 400", code, b)
+	}
+	for i := 0; i < rows; i++ {
+		if code, b := do(t, http.MethodPost, ts.URL+"/publish", "", ""); code != http.StatusCreated {
+			t.Fatalf("empty artifact %d = %d %q, want 201", i, code, b)
+		}
+	}
+	if code, b := do(t, http.MethodPost, ts.URL+"/publish", "", ""); code != http.StatusInsufficientStorage {
+		t.Fatalf("empty artifact past the quota = %d %q, want 507", code, b)
 	}
 	assertStoreAccounted(t, st)
 }
