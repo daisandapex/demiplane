@@ -40,7 +40,10 @@ want it.
   `X-Demiplane-Password` header on publish and HTTP Basic on read).
 - **Input handling.** Uploads stream to disk (bounded memory); slugs are
   validated against path traversal; the optional markdown renderer HTML-escapes
-  all source and allowlists link schemes.
+  all source and allowlists link schemes. Link destinations containing a
+  backslash or a control character, and `http(s)` links with userinfo
+  (`https://trusted@other`), are rendered as plain text, because a browser
+  resolves them to a different host than they appear to name.
 - **Log hygiene.** A private slug is a secret, so error logs never carry one:
   slugs are logged as a short hash tag (`slug#…`), and the filesystem paths
   inside wrapped I/O errors (which embed the slug) are replaced by `[path]` on

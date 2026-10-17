@@ -889,12 +889,32 @@ func renderLink(match string) string {
 // notably any other scheme. The input is already HTML-escaped; scheme tokens
 // (http, https, mailto) contain no escapable characters, so prefix checks are
 // reliable.
+//
+// Two classes of character are refused before any classification, because a
+// browser's URL parser reads them differently from the prefix checks below:
+// a backslash is a path separator in http(s) URLs ("/\host" and "\\host"
+// both resolve to another host), and tab, LF and CR are deleted wherever they
+// appear ("/\t/host" becomes "//host"). Other control characters have no
+// place in a link either. A web URL with userinfo ("https://trusted@evil") is
+// refused too: it names one host and navigates to another.
 func safeURL(u string) bool {
+	if strings.ContainsRune(u, '\\') || hasControl(u) {
+		return false
+	}
 	lu := strings.ToLower(strings.TrimSpace(u))
 	if lu == "" {
 		return false
 	}
-	if strings.HasPrefix(lu, "http://") || strings.HasPrefix(lu, "https://") || strings.HasPrefix(lu, "mailto:") {
+	for _, scheme := range []string{"http://", "https://"} {
+		if rest, ok := strings.CutPrefix(lu, scheme); ok {
+			authority := rest
+			if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+				authority = rest[:i]
+			}
+			return !strings.Contains(authority, "@")
+		}
+	}
+	if strings.HasPrefix(lu, "mailto:") {
 		return true
 	}
 	// Protocol-relative URLs ("//host/path") are external navigations, not
@@ -917,6 +937,16 @@ func safeURL(u string) bool {
 		}
 	}
 	return true
+}
+
+// hasControl reports whether s contains a C0 or C1 control character or DEL.
+func hasControl(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			return true
+		}
+	}
+	return false
 }
 
 // docHead returns the document head with css inlined. An explicit server theme

@@ -8,6 +8,9 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **Markdown links cannot disguise their destination.** A link destination
+  containing a backslash or a control character, or an `http(s)` URL with
+  userinfo, renders as plain text; the scheme allowlist is unchanged.
 - **Deleted and expired files are always reclaimed.** The files a delete,
   expiry or overwrite stops referencing are recorded in the same transaction;
   a failed unlink is retried on every sweep, and an hourly reconcile removes
