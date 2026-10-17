@@ -8,6 +8,9 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **The reply webhook follows no redirects.** A `3xx` from the configured
+  endpoint is logged as a failed delivery instead of resending the reply to
+  the `Location`.
 - **Logs no longer carry capability slugs, store paths or hook secrets.**
   Errors from the store and the filesystem are logged with every path
   replaced, rerender logs a slug tag instead of the slug, webhook failures log

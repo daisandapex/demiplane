@@ -48,7 +48,8 @@ want it.
   sweeper. Reply-hook failures log the webhook's origin only (no userinfo,
   path or query) and omit the exec hook's output unless
   `reply_hook_log_output = on`; logged hook output is truncated and has its
-  control characters escaped.
+  control characters escaped. The webhook client follows no redirects, so a
+  reply is never replayed to another origin or over plain HTTP.
 
 **Out of scope / explicitly accepted for v1:**
 

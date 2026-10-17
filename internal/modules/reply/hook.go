@@ -48,7 +48,17 @@ const (
 )
 
 // hookClient is the shared webhook HTTP client (bounded, reused connections).
-var hookClient = &http.Client{Timeout: hookHTTPTimeout}
+// It never follows a redirect: the request body is the reply, and Go replays
+// it to the Location on 307/308, which would hand a submitted answer to
+// whatever origin (or plain-HTTP downgrade) the endpoint names. A redirect
+// response is logged as a failed delivery like any other non-2xx status;
+// configure the final URL instead.
+var hookClient = &http.Client{
+	Timeout: hookHTTPTimeout,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
 
 // hookConfig is the resolved reply-event hook configuration.
 type hookConfig struct {
