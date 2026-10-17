@@ -235,7 +235,13 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 	if fLayout {
 		css += fCSS + fPrintCSS
 		bodyHTML = markCodeFirst(bodyHTML)
-		rail = railHTML(metaHTML, outlineFrom(bodyHTML))
+		if err := st.output(len(bodyHTML) + len(metaHTML)); err != nil {
+			return nil, err
+		}
+		rail, err = railHTML(st, len(bodyHTML)+len(metaHTML), metaHTML, outlineFrom(bodyHTML))
+		if err != nil {
+			return nil, err
+		}
 		if metaHTML != "" {
 			css += fMetaCSS
 		}
@@ -383,11 +389,15 @@ func headingText(raw string) string {
 // character (punctuation, entities, non-ASCII) is dropped, and leading/trailing
 // hyphens are trimmed. The output is drawn from [a-z0-9-] only, so it is safe to
 // interpolate into both an id attribute and an href fragment without escaping.
+// It stops at maxSlugLen bytes: an id is repeated in the heading, its anchor
+// and the outline, so its length must not follow the heading's.
 func slugify(s string) string {
 	var b strings.Builder
 	prevHyphen := false
 	for _, r := range strings.ToLower(s) {
 		switch {
+		case b.Len() >= maxSlugLen:
+			return strings.TrimRight(b.String(), "-")
 		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
 			b.WriteRune(r)
 			prevHyphen = false
@@ -400,6 +410,9 @@ func slugify(s string) string {
 	}
 	return strings.TrimRight(b.String(), "-")
 }
+
+// maxSlugLen caps a heading id built from its text.
+const maxSlugLen = 64
 
 // slugger hands out heading ids that are unique within one document:
 // slugify(text), with a numeric suffix (-1, -2, ...) on collision. Every id

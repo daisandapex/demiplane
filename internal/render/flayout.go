@@ -7,6 +7,7 @@ import (
 	"html"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -61,12 +62,18 @@ func markCodeFirst(bodyHTML string) string {
 // railHTML renders the right rail: the facts (the frontmatter meta-header, when
 // there is one) above the outline. An outline of fewer than two headings is
 // not worth a rail; a page with neither part renders no rail at all ("").
-func railHTML(metaHTML string, outline []outlineItem) string {
+//
+// The rail counts against the render's output budget like the body: used is
+// the output the page already holds, and the rail is checked as it grows, so
+// a document with many headings is refused before its outline is built rather
+// than after. Each entry names its section by a short index (data-sec="s3"),
+// never by repeating the section's heading id.
+func railHTML(st *state, used int, metaHTML string, outline []outlineItem) (string, error) {
 	if len(outline) < 2 {
 		outline = nil
 	}
 	if metaHTML == "" && outline == nil {
-		return ""
+		return "", nil
 	}
 	var b strings.Builder
 	b.WriteString(`<aside class="frail" aria-label="About this page">`)
@@ -75,21 +82,31 @@ func railHTML(metaHTML string, outline []outlineItem) string {
 	}
 	if outline != nil {
 		b.WriteString(`<details class="rail-outline" open><summary class="rail-h">On this page</summary><ol class="outline">`)
-		sec := ""
+		sec, n := "", 0
 		for _, it := range outline {
+			if err := st.tick(); err != nil {
+				return "", err
+			}
 			if it.level == 2 {
-				sec = it.id
+				n++
+				sec = "s" + strconv.Itoa(n)
 			}
 			cls := "l2"
 			if it.level == 3 {
 				cls = "l3"
+			}
+			if err := st.output(used + b.Len() + len(it.id) + len(it.text) + len(sec) + 48); err != nil {
+				return "", err
 			}
 			b.WriteString(`<li class="` + cls + `" data-sec="` + sec + `"><a href="#` + it.id + `">` + it.text + `</a></li>`)
 		}
 		b.WriteString(`</ol></details>`)
 	}
 	b.WriteString("</aside>\n")
-	return b.String()
+	if err := st.output(used + b.Len()); err != nil {
+		return "", err
+	}
+	return b.String(), nil
 }
 
 // seriesFamily returns the sorted family of slug and its siblings, the same

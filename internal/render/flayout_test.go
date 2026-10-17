@@ -25,9 +25,10 @@ func TestFRailCarriesOutline(t *testing.T) {
 		t.Fatalf("rail missing or not after the main column (rail %d, /main %d):\n%s", rail, main, out)
 	}
 	for _, want := range []string{
-		`<li class="l2" data-sec="first-part"><a href="#first-part">First part</a></li>`,
-		`<li class="l3" data-sec="first-part"><a href="#a-detail">A detail</a></li>`,
-		`<li class="l2" data-sec="second-part"><a href="#second-part">Second part</a></li>`,
+		// Entries name their section by index; an h3 shares its h2's.
+		`<li class="l2" data-sec="s1"><a href="#first-part">First part</a></li>`,
+		`<li class="l3" data-sec="s1"><a href="#a-detail">A detail</a></li>`,
+		`<li class="l2" data-sec="s2"><a href="#second-part">Second part</a></li>`,
 	} {
 		if !strings.Contains(out[rail:], want) {
 			t.Errorf("outline missing %q:\n%s", want, out[rail:])
