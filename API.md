@@ -497,13 +497,22 @@ is no version history, no diff, and no editor.
 {
   "rerendered": 33,
   "skipped": 5,
+  "failed_count": 0,
   "failed": {},
   "results": [
     { "slug": "notes", "rerendered": true, "size": 8192 },
     { "slug": "logo.svg", "rerendered": false, "reason": "no retained markdown source (published before source retention, or not a ?render=md page)" }
-  ]
+  ],
+  "truncated": false
 }
 ```
+
+The sweep's counts (`rerendered`, `skipped`, `failed_count`) cover every
+artifact, but `results` and `failed` each list at most 100 entries; `truncated`
+is `true` when either list was cut. One sweep runs at a time: a `POST /rerender`
+while another is running gets `409`. A sweep stops when its request ends, so a
+client that disconnects stops it partway (pages already rebaked stay rebaked;
+run it again to finish).
 
 Without `Accept: application/json` both routes answer in plain text.
 

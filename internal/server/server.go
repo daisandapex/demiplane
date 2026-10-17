@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/daisandapex/demiplane/internal/limit"
@@ -117,6 +118,7 @@ type Server struct {
 	sandbox          bool                        // per-document CSP sandbox on the content origin (isolation.go)
 	renderLimits     render.Limits               // work and output bounds for ?render=md
 	renderSem        chan struct{}               // render slots (renderlimit.go)
+	bulkRerender     sync.Mutex                  // held by the one running POST /rerender sweep
 	siteSem          chan struct{}               // site archive parse slots (sitearchive.go)
 	tokenMAC         []byte                      // random key for constant-time, length-hiding token comparison
 	views            *viewGate                   // view-password rate and concurrency limits

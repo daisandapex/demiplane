@@ -5,6 +5,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -160,35 +161,49 @@ func (s *Store) Source(slug string) (SourceRecord, error) {
 	}, nil
 }
 
-// Slugs lists owner's non-expired artifacts, oldest publish first. Unlike List
-// it includes PRIVATE artifacts and returns names only: it exists for
-// maintenance sweeps over everything stored (the bulk rebake), where excluding
-// private pages would quietly leave them on an old rendering forever, and where
-// nothing is being shown to a reader.
-func (s *Store) Slugs(owner string) ([]string, error) {
-	rows, err := s.db.Query(
-		`SELECT slug FROM artifacts
-		  WHERE owner = ? AND (expires_at = 0 OR expires_at > ?)
-		  ORDER BY created_at ASC, slug ASC`,
-		owner, time.Now().Unix(),
-	)
+const qSlugPage = `SELECT slug, expires_at FROM artifacts
+  WHERE owner = ? AND slug > ?
+  ORDER BY slug ASC LIMIT ?`
+
+// SlugPage returns, in slug order, up to limit of owner's unexpired slugs
+// after the slug after ("" = from the first). Unlike List it includes PRIVATE
+// artifacts and returns names only: it exists for maintenance sweeps over
+// everything stored (the bulk rebake), where excluding private pages would
+// quietly leave them on an old rendering forever, and where nothing is shown
+// to a reader. It examines at most limit index entries, skipping expired ones,
+// so a page may be short; next is the slug to continue after, or "" when the
+// walk is done.
+func (s *Store) SlugPage(ctx context.Context, owner, after string, limit int) (slugs []string, next string, err error) {
+	if limit < 1 {
+		limit = 1
+	}
+	rows, err := s.db.QueryContext(ctx, qSlugPage, owner, after, limit)
 	if err != nil {
-		return nil, fmt.Errorf("list slugs: %w", err)
+		return nil, "", fmt.Errorf("list slugs: %w", err)
 	}
 	defer rows.Close()
-
-	var out []string
+	now := time.Now().Unix()
+	examined := 0
+	last := ""
 	for rows.Next() {
 		var slug string
-		if err := rows.Scan(&slug); err != nil {
-			return nil, fmt.Errorf("scan slug: %w", err)
+		var expires int64
+		if err := rows.Scan(&slug, &expires); err != nil {
+			return nil, "", fmt.Errorf("scan slug: %w", err)
 		}
-		out = append(out, slug)
+		examined++
+		last = slug
+		if !expired(expires, now) {
+			slugs = append(slugs, slug)
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate slugs: %w", err)
+		return nil, "", fmt.Errorf("iterate slugs: %w", err)
 	}
-	return out, nil
+	if examined == limit {
+		next = last
+	}
+	return slugs, next, nil
 }
 
 // ReplaceBody swaps an existing artifact's bytes in place and returns its

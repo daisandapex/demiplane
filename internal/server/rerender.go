@@ -155,58 +155,106 @@ func (s *Server) handleRerender(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "rerendered %s (%d bytes)\n", res.Slug, res.Size)
 }
 
+// rerenderPage is how many slugs a sweep reads from the store at a time, and
+// rerenderListMax how many results (and, separately, failures) its report
+// lists; the counts always cover every artifact.
+const (
+	rerenderPage    = 500
+	rerenderListMax = 100
+)
+
 // handleRerenderAll walks every stored artifact and rebakes the ones that
-// retain a source, counting the rest as skipped — so the report an operator gets
+// retain a source, counting the rest as skipped, so the report an operator gets
 // after upgrading an instance accounts for the whole store, not just the part
-// that happened to be rebakeable. One artifact's
-// failure does not abandon the sweep: it is reported and the sweep continues, so
-// a single corrupt page cannot leave an instance half-upgraded with no account of
-// which pages made it.
+// that happened to be rebakeable. One artifact's failure does not abandon the
+// sweep: it is counted and the sweep continues, so a single corrupt page cannot
+// leave an instance half-upgraded with no account of how many pages made it.
+//
+// The walk reads the store a page at a time and the report lists at most
+// rerenderListMax results and failures, so a sweep's memory does not grow with
+// the store. One sweep runs at a time; another gets 409 while it does. A sweep
+// whose request ends (the client went away) stops where it is.
 func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
-	slugs, err := s.store.Slugs(store.DefaultOwner)
-	if err != nil {
-		log.Printf("rerender sweep list failed: %s", logsafe.Err(err))
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if !s.bulkRerender.TryLock() {
+		http.Error(w, "a rerender of every artifact is already running; try again when it finishes", http.StatusConflict)
 		return
 	}
+	defer s.bulkRerender.Unlock()
+	ctx := r.Context()
 
-	results := make([]rerenderResult, 0, len(slugs))
-	var rerendered, skipped int
-	failed := map[string]string{}
-	for _, slug := range slugs {
-		res, err := s.rerenderSlug(r, slug)
+	var (
+		results                      []rerenderResult
+		failed                       = map[string]string{}
+		rerendered, skipped, failedN int
+		truncated                    bool
+		after                        string
+	)
+	for {
+		slugs, next, err := s.store.SlugPage(ctx, store.DefaultOwner, after, rerenderPage)
 		if err != nil {
-			if isRenderRefusal(err) {
-				failed[slug] = err.Error()
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("rerender sweep list failed: %s", logsafe.Err(err))
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		for _, slug := range slugs {
+			if ctx.Err() != nil {
+				return
+			}
+			res, err := s.rerenderSlug(r, slug)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				reason := "rerender failed; see the server log"
+				switch {
+				case isRenderRefusal(err):
+					reason = err.Error()
+				case errors.Is(err, store.ErrQuota):
+					reason = quotaMessage
+				default:
+					log.Printf("rerender %s failed: %s", logsafe.Slug(slug), logsafe.Err(err, slug))
+				}
+				failedN++
+				if len(failed) < rerenderListMax {
+					failed[slug] = reason
+				} else {
+					truncated = true
+				}
 				continue
 			}
-			if errors.Is(err, store.ErrQuota) {
-				failed[slug] = quotaMessage
-				continue
+			if res.Rerendered {
+				rerendered++
+			} else {
+				skipped++
 			}
-			log.Printf("rerender %s failed: %s", logsafe.Slug(slug), logsafe.Err(err, slug))
-			failed[slug] = "rerender failed; see the server log"
-			continue
+			if len(results) < rerenderListMax {
+				results = append(results, res)
+			} else {
+				truncated = true
+			}
 		}
-		results = append(results, res)
-		if res.Rerendered {
-			rerendered++
-		} else {
-			skipped++
+		if next == "" {
+			break
 		}
+		after = next
 	}
 
 	if wantsJSON(r) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"rerendered": rerendered,
-			"skipped":    skipped,
-			"failed":     failed,
-			"results":    results,
+			"rerendered":   rerendered,
+			"skipped":      skipped,
+			"failed_count": failedN,
+			"failed":       failed,
+			"results":      results,
+			"truncated":    truncated,
 		})
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "rerendered %d, skipped %d, failed %d\n", rerendered, skipped, len(failed))
+	fmt.Fprintf(w, "rerendered %d, skipped %d, failed %d\n", rerendered, skipped, failedN)
 	for _, res := range results {
 		if res.Rerendered {
 			fmt.Fprintf(w, "  rerendered %s (%d bytes)\n", res.Slug, res.Size)
@@ -214,6 +262,9 @@ func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 	}
 	for slug, reason := range failed {
 		fmt.Fprintf(w, "  failed %s: %s\n", slug, reason)
+	}
+	if truncated {
+		fmt.Fprintf(w, "  (lists cut at %d entries each)\n", rerenderListMax)
 	}
 }
 

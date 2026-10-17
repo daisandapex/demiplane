@@ -332,6 +332,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
 		`DROP INDEX IF EXISTS idx_artifacts_series`,
 		`CREATE INDEX IF NOT EXISTS idx_artifacts_public_order ON artifacts(owner, private, created_at DESC, slug)`,
 		`CREATE INDEX IF NOT EXISTS idx_artifacts_public_series ON artifacts(owner, private, series, slug)`,
+		// SlugPage's walk of everything stored, private included (source.go).
+		`CREATE INDEX IF NOT EXISTS idx_artifacts_owner_slug ON artifacts(owner, slug)`,
 	} {
 		if _, err := s.db.Exec(q); err != nil {
 			return fmt.Errorf("create listing indexes: %w", err)

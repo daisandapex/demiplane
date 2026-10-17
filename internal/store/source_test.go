@@ -5,6 +5,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -233,10 +234,10 @@ func TestReplaceBodyMissingSlug(t *testing.T) {
 	}
 }
 
-// TestSlugsIncludesPrivateAndExcludesExpired: the bulk-rebake candidate list.
+// TestSlugPageIncludesPrivateAndExcludesExpired: the bulk-rebake candidate list.
 // Private pages must be included — excluding them would strand every private
 // page on an old rendering — and expired ones must not be.
-func TestSlugsIncludesPrivateAndExcludesExpired(t *testing.T) {
+func TestSlugPageIncludesPrivateAndExcludesExpired(t *testing.T) {
 	s := newTestStore(t)
 	pub, err := s.Put(PutOptions{Slug: "public-page", Source: []byte(markdownSource)},
 		bytes.NewReader([]byte("<h1>a</h1>")))
@@ -254,22 +255,32 @@ func TestSlugsIncludesPrivateAndExcludesExpired(t *testing.T) {
 	}
 	time.Sleep(2 * time.Millisecond)
 
-	slugs, err := s.Slugs(DefaultOwner)
-	if err != nil {
-		t.Fatalf("Slugs: %v", err)
+	// Pages of one walk the store across page boundaries.
+	var slugs []string
+	after := ""
+	for {
+		page, next, err := s.SlugPage(context.Background(), DefaultOwner, after, 1)
+		if err != nil {
+			t.Fatalf("SlugPage: %v", err)
+		}
+		slugs = append(slugs, page...)
+		if next == "" {
+			break
+		}
+		after = next
 	}
 	seen := map[string]bool{}
 	for _, slug := range slugs {
 		seen[slug] = true
 	}
 	if !seen[pub.Slug] {
-		t.Error("public artifact missing from Slugs")
+		t.Error("public artifact missing from SlugPage")
 	}
 	if !seen[priv.Slug] {
-		t.Error("private artifact missing from Slugs — it would never be rebaked")
+		t.Error("private artifact missing from SlugPage — it would never be rebaked")
 	}
 	if seen[gone.Slug] {
-		t.Error("expired artifact listed in Slugs")
+		t.Error("expired artifact listed in SlugPage")
 	}
 }
 
