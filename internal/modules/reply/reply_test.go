@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/store"
@@ -40,6 +41,17 @@ func (h *fakeHost) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 func (h *fakeHost) RequestBase(*http.Request) string     { return "http://test" }
 func (h *fakeHost) BaseURL() string                      { return "" }
 func (h *fakeHost) ModuleDataDir(string) (string, error) { return h.dataDir, nil }
+
+// CheckView is the plain password check, without core's limits.
+func (h *fakeHost) CheckView(r *http.Request, art store.Artifact) (module.ViewAccess, time.Duration) {
+	if !art.HasPassword() {
+		return module.ViewOK, 0
+	}
+	if _, pass, ok := r.BasicAuth(); ok && store.PasswordMatches(art.PasswordHash, pass) {
+		return module.ViewOK, 0
+	}
+	return module.ViewNeedPassword, 0
+}
 
 // setup mounts the reply module's CONTROL-plane routes on a test server and
 // seeds one artifact slug, returning the server and the module.

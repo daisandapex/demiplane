@@ -65,6 +65,9 @@ type Config struct {
 	// RenderMetaHeader renders a frontmatter-driven meta-header (localized date +
 	// labeled fields) on ?render=md pages; off strips frontmatter without a header.
 	RenderMetaHeader bool
+	// Password bounds view-password verification (viewauth.go). The zero value
+	// uses the defaults.
+	Password PasswordLimits
 }
 
 // Server wires the store and configuration into HTTP handlers.
@@ -83,8 +86,16 @@ type Server struct {
 	renderFooterLink string
 	renderMetaHeader bool
 	tokenMAC         []byte                      // random key for constant-time, length-hiding token comparison
+	views            *viewGate                   // view-password rate and concurrency limits
 	routes           []module.RouteModule        // compiled-in route modules, mounted on the control plane
 	contentRoutes    []module.ContentRouteModule // route modules that also mount on the content origin
+}
+
+// viewKey returns a fresh random key for the verified-password cache.
+func viewKey() []byte {
+	k := make([]byte, 32)
+	_, _ = rand.Read(k)
+	return k
 }
 
 // New returns a Server.
@@ -108,6 +119,7 @@ func New(st *store.Store, cfg Config) *Server {
 		renderFooterLink: cfg.RenderFooterLink,
 		renderMetaHeader: cfg.RenderMetaHeader,
 		tokenMAC:         key,
+		views:            newViewGate(cfg.Password, viewKey()),
 		routes:           module.RouteModules(),
 		contentRoutes:    module.ContentRouteModules(),
 	}
@@ -590,9 +602,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
-	if art.HasPassword() && !passwordOK(r, art.PasswordHash) {
-		w.Header().Set("WWW-Authenticate", `Basic realm="demiplane", charset="UTF-8"`)
-		http.Error(w, "password required", http.StatusUnauthorized)
+	if res, wait := s.CheckView(r, art); writeViewDenied(w, res, wait) {
 		return
 	}
 
@@ -1114,16 +1124,6 @@ func queryFlag(q url.Values, key string) bool {
 	default:
 		return true
 	}
-}
-
-// passwordOK reports whether the request carries HTTP Basic credentials whose
-// password matches the artifact's hash. The username is ignored.
-func passwordOK(r *http.Request, hash string) bool {
-	_, pass, ok := r.BasicAuth()
-	if !ok {
-		return false
-	}
-	return store.PasswordMatches(hash, pass)
 }
 
 // rfc3339OrEmpty formats t as RFC3339, or "" for the zero time.
