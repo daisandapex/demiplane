@@ -161,17 +161,20 @@ func (s *Server) handleRerender(w http.ResponseWriter, r *http.Request) {
 // rerenderPage is how many slugs a sweep reads from the store at a time, and
 // rerenderListMax how many results (and, separately, failures) its report
 // lists; the counts always cover every artifact.
-const (
-	rerenderPage    = 500
-	rerenderListMax = 100
-)
+const rerenderListMax = 100
+
+// A var only so tests can shorten it.
+var rerenderPage = 500
 
 // rerenderKeepAlive is how often a running sweep writes a newline to its
-// client, and rerenderSweepMax how long one sweep may run. Vars only so tests
+// client, rerenderSweepMax how long one sweep may run, and
+// rerenderWriteTimeout how long one of its writes (a keep-alive or the
+// report) may take before the client is taken to be gone. Vars only so tests
 // can shorten them.
 var (
-	rerenderKeepAlive = time.Second
-	rerenderSweepMax  = 30 * time.Minute
+	rerenderKeepAlive    = time.Second
+	rerenderSweepMax     = 30 * time.Minute
+	rerenderWriteTimeout = 10 * time.Second
 )
 
 // handleRerenderAll walks every stored artifact and rebakes the ones that
@@ -212,9 +215,13 @@ func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	r = r.WithContext(ctx)
 	rc := http.NewResponseController(w)
-	// The sweep outlasts the ordinary response timeout; the keep-alives and
-	// rerenderSweepMax bound it instead (and --write-timeout, if set).
-	_ = rc.SetWriteDeadline(time.Now().Add(rerenderSweepMax + time.Minute))
+	// The sweep outlasts the ordinary response timeout; rerenderSweepMax
+	// bounds it instead, with each write bounded by rerenderWriteTimeout (and
+	// all of it by --write-timeout, if set). Between writes the deadline is
+	// the sweep's end, not cleared: HTTP/2 resets a stream whose deadline
+	// passes even with nothing to write.
+	w = &sweepWriter{ResponseWriter: w, rc: rc, end: time.Now().Add(rerenderSweepMax + rerenderWriteTimeout)}
+	_ = rc.SetWriteDeadline(w.(*sweepWriter).end)
 	asJSON := wantsJSON(r)
 	contentType := "text/plain; charset=utf-8"
 	if asJSON {
@@ -227,7 +234,9 @@ func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 		failed                       = map[string]string{}
 		rerendered, skipped, failedN int
 		truncated, listFailed        bool
-		done                         string // the last slug the sweep finished with
+		// done is where a later sweep resumes: the last slug this one
+		// finished with, or past a fully examined page; it starts at after.
+		done = after
 	)
 	stoppedEarly := func() bool { return errors.Is(ctx.Err(), context.DeadlineExceeded) }
 walk:
@@ -295,10 +304,12 @@ walk:
 		if next == "" {
 			break
 		}
-		after = next
+		after, done = next, next // the whole page, expired entries included, is behind us
 	}
 
 	started := ka.stop()
+	// The report gets one write timeout, like each keep-alive.
+	w.(*sweepWriter).bound()
 	if listFailed && !started {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -347,6 +358,29 @@ walk:
 	}
 }
 
+// sweepWriter is a sweep's response: bound gives the next write
+// rerenderWriteTimeout (but no later than end), and relax moves the deadline
+// back to end once it is done, so a client that stops taking the response is
+// noticed within one write timeout rather than at the end of the sweep.
+type sweepWriter struct {
+	http.ResponseWriter
+	rc  *http.ResponseController
+	end time.Time
+}
+
+func (s *sweepWriter) bound() {
+	d := time.Now().Add(rerenderWriteTimeout)
+	if d.After(s.end) {
+		d = s.end
+	}
+	_ = s.rc.SetWriteDeadline(d)
+}
+
+func (s *sweepWriter) relax() { _ = s.rc.SetWriteDeadline(s.end) }
+
+// Unwrap lets http.ResponseController reach the connection.
+func (s *sweepWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
 // sweepKeepAlive writes a newline to a sweep's client every
 // rerenderKeepAlive (sending the 200 status and content type first), so a
 // client that has gone is noticed even when net/http does not cancel the
@@ -377,9 +411,16 @@ func startSweepKeepAlive(w http.ResponseWriter, rc *http.ResponseController, con
 				w.WriteHeader(http.StatusOK)
 				k.started = true
 			}
+			sw, _ := w.(*sweepWriter)
+			if sw != nil {
+				sw.bound()
+			}
 			_, err := io.WriteString(w, "\n")
 			if err == nil {
 				err = rc.Flush()
+			}
+			if err == nil && sw != nil {
+				sw.relax()
 			}
 			k.mu.Unlock()
 			if err != nil {
