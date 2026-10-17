@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
+	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/store"
 )
 
@@ -201,23 +203,23 @@ func liveClientKey(r *http.Request) string {
 	return ip.Mask(net.CIDRMask(64, 128)).String()
 }
 
-// liveGrant is what a stream was authorized with: the password it presented
-// and the password hash that password was last verified against.
+// liveGrant records the password hash a stream's credentials were last
+// verified against. The credentials themselves stay on the stream's request.
 type liveGrant struct {
-	password string
-	hash     string
+	hash string
 }
 
 // authorizeLive checks that slug names a live artifact the request may view:
 // it exists, has not expired, and any password matches the request's HTTP Basic
-// credentials. On failure it writes the response and returns ok=false.
+// credentials, through the same rate and concurrency limits as GET /{slug}
+// (viewauth.go). On failure it writes the response and returns ok=false.
 func (s *Server) authorizeLive(w http.ResponseWriter, r *http.Request, slug string) (liveGrant, bool) {
 	art, f, err := s.store.Get(slug)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.NotFound(w, r)
 		} else {
-			log.Printf("live events %s: %v", redactSlug(slug), err)
+			log.Printf("live events %s: %s", redactSlug(slug), logsafe.Err(err, slug))
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
 		return liveGrant{}, false
@@ -226,24 +228,25 @@ func (s *Server) authorizeLive(w http.ResponseWriter, r *http.Request, slug stri
 	if !art.HasPassword() {
 		return liveGrant{}, true
 	}
-	_, pass, _ := r.BasicAuth()
-	if !passwordOK(r, art.PasswordHash) {
-		// The artifact's own realm: a browser that holds credentials for it
-		// answers from its cache. The ?live wrapper is gated on the same
-		// password, so by the time it opens the stream the viewer has entered it.
-		setProtectedHeaders(w)
-		w.Header().Set("WWW-Authenticate", passwordChallenge(slug))
-		http.Error(w, "password required", http.StatusUnauthorized)
+	// A refusal challenges with the artifact's own realm: a browser that holds
+	// credentials for it answers from its cache. The ?live wrapper is gated on
+	// the same password, so by the time it opens the stream the viewer has
+	// entered it.
+	setProtectedHeaders(w)
+	if res, wait := s.CheckView(r, art); writeViewDenied(w, slug, res, wait) {
 		return liveGrant{}, false
 	}
-	return liveGrant{password: pass, hash: art.PasswordHash}, true
+	return liveGrant{hash: art.PasswordHash}, true
 }
 
 // stillAuthorized re-checks an open stream's grant against the artifact's
 // current state. A republish re-salts the stored hash even when the password is
-// unchanged, so a changed hash is re-verified against the stream's password
-// rather than treated as a revocation.
-func (s *Server) stillAuthorized(slug string, g *liveGrant) bool {
+// unchanged, so a changed hash is re-verified against the credentials of the
+// stream's request r rather than treated as a revocation. That check goes
+// through the view-password gate like every other one, so republishing cannot
+// make open streams run unbounded KDF work; a check the gate refuses for load
+// ends the stream, and the client's reconnect is checked again.
+func (s *Server) stillAuthorized(r *http.Request, slug string, g *liveGrant) bool {
 	art, f, err := s.store.Get(slug)
 	if err != nil {
 		return false
@@ -255,7 +258,8 @@ func (s *Server) stillAuthorized(slug string, g *liveGrant) bool {
 		return true
 	case art.PasswordHash == g.hash:
 		return true
-	case g.password != "" && store.PasswordMatches(art.PasswordHash, g.password):
+	}
+	if res, _ := s.CheckView(r, art); res == module.ViewOK {
 		g.hash = art.PasswordHash
 		return true
 	}
@@ -313,14 +317,14 @@ func (s *Server) handleLiveEvents(hub *liveHub, w http.ResponseWriter, r *http.R
 		case <-ctx.Done():
 			return
 		case <-ch:
-			if !s.stillAuthorized(slug, &grant) {
+			if !s.stillAuthorized(r, slug, &grant) {
 				return
 			}
 			if err := writeFlush(rc, w, "event: reload\ndata: 1\n\n"); err != nil {
 				return
 			}
 		case <-heartbeat.C:
-			if !s.stillAuthorized(slug, &grant) {
+			if !s.stillAuthorized(r, slug, &grant) {
 				return
 			}
 			if err := writeFlush(rc, w, ": ping\n\n"); err != nil {

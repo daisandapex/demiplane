@@ -256,3 +256,32 @@ func TestLiveWrapperTakesArtifactPassword(t *testing.T) {
 		t.Errorf("wrapper with password: status %d, wrapper served=%v", r2.StatusCode, strings.Contains(string(body), "/_events/"))
 	}
 }
+
+// TestSSERecheckGoesThroughPasswordGate: when a republish re-salts the hash,
+// open streams re-verify through the view-password gate (its KDF seam, its
+// verified-credential cache), not a direct hash comparison. Three streams
+// sharing a password cost one KDF run for the republish, not three, and all
+// of them keep receiving events.
+func TestSSERecheckGoesThroughPasswordGate(t *testing.T) {
+	ts := newTestServer(t, "")
+	publishPassword(t, ts, "?slug=gated", "pw-g", "v1")
+	calls, _ := countKDF(t, 0)
+
+	const streams = 3
+	var all []<-chan string
+	for i := 0; i < streams; i++ {
+		all = append(all, openSSEAuth(t, ts.URL, "gated", "pw-g"))
+	}
+	opened := calls.Load()
+	if opened != 1 {
+		t.Fatalf("opening %d streams ran the KDF %d times, want 1 (then remembered)", streams, opened)
+	}
+
+	publishPassword(t, ts, "?slug=gated", "pw-g", "v2")
+	for _, lines := range all {
+		waitReloadEvent(t, lines, 3*time.Second)
+	}
+	if got := calls.Load() - opened; got != 1 {
+		t.Fatalf("re-checking %d streams after a republish ran the gate's KDF %d times, want 1", streams, got)
+	}
+}
