@@ -359,3 +359,67 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+// TestRefusedRequestWithStalledBodyIsClosed: a request refused at admission
+// whose body never arrives must not hold the connection while the server
+// drains it.
+func TestRefusedRequestWithStalledBodyIsClosed(t *testing.T) {
+	s, _ := limitServer(t, Config{Requests: RequestLimits{
+		BodyTimeout: 300 * time.Millisecond,
+		MaxRequests: 1,
+	}})
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	h := s.withRequestLimits(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+	}))
+	ts := httptest.NewServer(h)
+	t.Cleanup(ts.Close)
+	t.Cleanup(func() { close(release) })
+	go http.Get(ts.URL + "/hold")
+	<-entered
+	c := rawPost(t, ts.Listener.Addr().String(), "/x", 100000, func(c net.Conn) {
+		io.WriteString(c, "a little")
+	})
+	el, resp := waitClosedOrAnswered(t, c, 5*time.Second)
+	if !strings.HasPrefix(resp, "HTTP/1.1 503") {
+		t.Fatalf("refused request answered %q, want 503", firstLine(resp))
+	}
+	if el > 3*time.Second {
+		t.Fatalf("refused request with a stalled body held its connection %v", el)
+	}
+}
+
+// TestSlowValidUploadOutlastsResponseTimeout: an upload that keeps above the
+// rate floor but takes longer than the response timeout still gets its 201.
+func TestSlowValidUploadOutlastsResponseTimeout(t *testing.T) {
+	s, st := limitServer(t, Config{Requests: RequestLimits{
+		BodyTimeout:     time.Second,
+		UploadMinRate:   1000,
+		ResponseTimeout: 200 * time.Millisecond,
+	}})
+	ts := httptest.NewServer(s.ControlHandler())
+	t.Cleanup(ts.Close)
+	const total = 3000
+	c := rawPost(t, ts.Listener.Addr().String(), "/publish?slug=steady", total, func(c net.Conn) {
+		// 300 bytes every 100ms: 3000 B/s for one second.
+		for i := 0; i < total/300; i++ {
+			if _, err := c.Write(bytes.Repeat([]byte("s"), 300)); err != nil {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	})
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	line, err := bufio.NewReader(c).ReadString('\n')
+	if err != nil {
+		t.Fatalf("no response to a steady upload: %v", err)
+	}
+	if !strings.HasPrefix(line, "HTTP/1.1 201") {
+		t.Fatalf("steady upload answered %q, want 201", strings.TrimSpace(line))
+	}
+	if _, _, err := st.Get("steady"); err != nil {
+		t.Fatalf("steady upload not stored: %v", err)
+	}
+}

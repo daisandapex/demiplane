@@ -113,42 +113,56 @@ func (s *Server) withRequestLimits(next http.Handler) http.Handler {
 	perClient := newClientGates(l.MaxRequestsPerClient)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rc := http.NewResponseController(w)
-		if isSSE(r) {
-			// Clear any deadline an earlier request on this connection left.
+		now := time.Now()
+		sse := isSSE(r)
+		// The body deadline goes on first, before any refusal, so that even a
+		// refused request cannot hold the connection while the server drains
+		// the body it left unread.
+		bodied := hasBody(r) && l.BodyTimeout > 0
+		upload := bodied && isUpload(r)
+		if bodied {
+			br := &bodyDeadline{r: r.Body, w: w, rc: rc, start: now, grace: l.BodyTimeout}
+			if upload {
+				br.rate = l.UploadMinRate
+				// An upload may legitimately outlast the response timeout,
+				// so the write deadline starts when the body is done.
+				br.respTimeout = l.ResponseTimeout
+			}
+			br.arm()
+			r.Body = br
+		}
+		// Every response sets (or clears) its write deadline: one left by an
+		// earlier request on a kept-alive connection must not carry over.
+		if sse || upload || l.ResponseTimeout <= 0 {
 			_ = rc.SetWriteDeadline(time.Time{})
+		} else {
+			_ = rc.SetWriteDeadline(now.Add(l.ResponseTimeout))
+		}
+		if sse {
 			next.ServeHTTP(w, r)
 			return
 		}
 		if !inflight.TryAcquire() {
-			w.Header().Set("Retry-After", "1")
-			http.Error(w, "server busy; try again shortly", http.StatusServiceUnavailable)
+			refuseBusy(w, "server busy; try again shortly")
 			return
 		}
 		defer inflight.Release()
 		key := limit.ClientKey(r)
 		if !perClient.acquire(key) {
-			w.Header().Set("Retry-After", "1")
-			http.Error(w, "too many requests in progress from this client", http.StatusServiceUnavailable)
+			refuseBusy(w, "too many requests in progress from this client")
 			return
 		}
 		defer perClient.release(key)
-
-		now := time.Now()
-		if l.ResponseTimeout > 0 {
-			_ = rc.SetWriteDeadline(now.Add(l.ResponseTimeout))
-		} else {
-			_ = rc.SetWriteDeadline(time.Time{})
-		}
-		if hasBody(r) && l.BodyTimeout > 0 {
-			br := &bodyDeadline{r: r.Body, w: w, rc: rc, start: now, grace: l.BodyTimeout}
-			if isUpload(r) {
-				br.rate = l.UploadMinRate
-			}
-			br.arm()
-			r.Body = br
-		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// refuseBusy answers an admission refusal and closes the connection rather
+// than reading on through the request's unread body.
+func refuseBusy(w http.ResponseWriter, msg string) {
+	w.Header().Set("Retry-After", "1")
+	w.Header().Set("Connection", "close")
+	http.Error(w, msg, http.StatusServiceUnavailable)
 }
 
 // extendWriteDeadline gives a response of size bytes time to reach a client
@@ -181,6 +195,9 @@ type bodyDeadline struct {
 	rate  int64
 	n     int64
 	done  bool
+	// respTimeout, when set, starts the response write deadline once the
+	// body is finished (uploads).
+	respTimeout time.Duration
 }
 
 func (b *bodyDeadline) arm() {
@@ -198,19 +215,26 @@ func (b *bodyDeadline) arm() {
 }
 
 func (b *bodyDeadline) Read(p []byte) (int, error) {
-	if b.rate > 0 && !b.done {
+	if b.done {
+		return b.r.Read(p)
+	}
+	if b.rate > 0 {
 		b.arm()
 	}
 	n, err := b.r.Read(p)
 	b.n += int64(n)
-	switch {
-	case err == io.EOF && !b.done:
+	if err != nil && !b.done {
 		b.done = true
-		_ = b.rc.SetReadDeadline(time.Time{})
-	case isBodyTimeout(err):
-		// The rest of the body is still in flight; the connection cannot be
-		// reused for another request.
-		b.w.Header().Set("Connection", "close")
+		if err == io.EOF {
+			_ = b.rc.SetReadDeadline(time.Time{})
+		} else {
+			// The rest of the body may still be in flight; the connection
+			// cannot be reused for another request.
+			b.w.Header().Set("Connection", "close")
+		}
+		if b.respTimeout > 0 {
+			_ = b.rc.SetWriteDeadline(time.Now().Add(b.respTimeout))
+		}
 	}
 	return n, err
 }
