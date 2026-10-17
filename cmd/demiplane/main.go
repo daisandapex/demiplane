@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/daisandapex/demiplane/internal/module"
+	"github.com/daisandapex/demiplane/internal/render"
 	"github.com/daisandapex/demiplane/internal/server"
 	"github.com/daisandapex/demiplane/internal/store"
 	"github.com/daisandapex/demiplane/internal/theme"
@@ -157,11 +158,19 @@ func runServe(args []string) error {
 	footerLink := fs.String("footer-link", repoURL, "vanity-footer link target on ?render=md pages")
 	header := fs.Bool("header", true, "render the sticky title header (+ theme toggle) on ?render=md pages")
 	metaHeader := fs.Bool("meta-header", true, "render a frontmatter-driven meta-header (localized date + fields) on ?render=md pages")
+	renderMaxOutput := fs.Int("render-max-output", render.DefaultLimits.MaxOutputBytes, "max bytes of one rendered ?render=md page; a larger render is refused with 413")
+	renderConcurrency := fs.Int("render-concurrency", 0, "max markdown renders at once (0 = GOMAXPROCS, capped at 4); a render that waits 5s for a slot gets 503")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *dir == "" {
 		return fmt.Errorf("--store is required")
+	}
+	if *renderMaxOutput <= 0 {
+		return fmt.Errorf("--render-max-output must be positive")
+	}
+	if *renderConcurrency < 0 {
+		return fmt.Errorf("--render-concurrency must not be negative")
 	}
 	if *themeName != "" && !theme.Valid(*themeName) {
 		return fmt.Errorf("--theme %q: unknown theme (choose one of: %s)", *themeName, strings.Join(theme.Names, ", "))
@@ -232,18 +241,20 @@ func runServe(args []string) error {
 	defer st.Close()
 
 	srv := server.New(st, server.Config{
-		BaseURL:          *baseURL,
-		ContentBaseURL:   *contentBaseURL,
-		ContentPort:      cPort,
-		AuthToken:        token,
-		Browse:           *browse,
-		MaxUpload:        *maxUpload,
-		RenderTheme:      chrome.theme,
-		RenderCSS:        renderCSS,
-		RenderHeader:     chrome.header,
-		RenderFooter:     chrome.footer,
-		RenderFooterLink: chrome.footerLink,
-		RenderMetaHeader: chrome.metaHeader,
+		BaseURL:           *baseURL,
+		ContentBaseURL:    *contentBaseURL,
+		ContentPort:       cPort,
+		AuthToken:         token,
+		Browse:            *browse,
+		MaxUpload:         *maxUpload,
+		RenderTheme:       chrome.theme,
+		RenderCSS:         renderCSS,
+		RenderHeader:      chrome.header,
+		RenderFooter:      chrome.footer,
+		RenderFooterLink:  chrome.footerLink,
+		RenderMetaHeader:  chrome.metaHeader,
+		RenderMaxOutput:   *renderMaxOutput,
+		RenderConcurrency: *renderConcurrency,
 	})
 
 	// Native TLS (optional module, `-tags tls`; ADR 0004). nil moduleTLS =

@@ -4,6 +4,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -127,6 +128,11 @@ func (s *Server) handleRerender(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		if isRenderRefusal(err) {
+			// The stored page is untouched; say why the rebake was refused.
+			writeRenderError(w, err)
+			return
+		}
 		log.Printf("rerender %q failed: %v", slug, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -165,6 +171,10 @@ func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 	for _, slug := range slugs {
 		res, err := s.rerenderSlug(r, slug)
 		if err != nil {
+			if isRenderRefusal(err) {
+				failed[slug] = err.Error()
+				continue
+			}
 			log.Printf("rerender %q failed: %v", slug, err)
 			failed[slug] = "rerender failed; see the server log"
 			continue
@@ -205,8 +215,16 @@ func (s *Server) rerenderSlug(r *http.Request, slug string) (rerenderResult, err
 	// Rebake holds the slug's write lock from the source read to the body write,
 	// so a publish landing meanwhile is never overwritten by a rendering of the
 	// source it replaced.
+	// The slot is taken before the slug's write lock, so waiting for one
+	// never holds up a publish to this slug. A render error aborts the rebake
+	// before anything is written, leaving the stored page as it was.
+	release, err := s.acquireRender(r.Context())
+	if err != nil {
+		return rerenderResult{}, err
+	}
+	defer release()
 	art, err := s.store.Rebake(slug, func(rec store.SourceRecord) ([]byte, error) {
-		return s.renderRetained(r, slug, rec), nil
+		return s.renderRetained(r, slug, rec)
 	})
 	if errors.Is(err, store.ErrNoSource) {
 		return rerenderResult{Slug: slug, Reason: noSourceReason}, nil
@@ -219,7 +237,7 @@ func (s *Server) rerenderSlug(r *http.Request, slug string) (rerenderResult, err
 
 // renderRetained renders a retained source with the current renderer
 // configuration and the render parameters captured at publish.
-func (s *Server) renderRetained(r *http.Request, slug string, rec store.SourceRecord) []byte {
+func (s *Server) renderRetained(r *http.Request, slug string, rec store.SourceRecord) ([]byte, error) {
 	var spec renderSpec
 	if rec.Spec != "" {
 		if uerr := json.Unmarshal([]byte(rec.Spec), &spec); uerr != nil {
@@ -235,7 +253,7 @@ func (s *Server) renderRetained(r *http.Request, slug string, rec store.SourceRe
 		published = rec.CreatedAt
 	}
 
-	return render.Markdown(rec.Body, render.Options{
+	return render.Render(r.Context(), rec.Body, render.Options{
 		Theme:       s.renderTheme,
 		CSS:         s.renderCSS,
 		Title:       spec.NamedSlug,
@@ -251,5 +269,13 @@ func (s *Server) renderRetained(r *http.Request, slug string, rec store.SourceRe
 		Siblings:    s.seriesSiblings(spec.Series, spec.NamedSlug),
 		ContentBase: s.contentBase(r),
 		IndexURL:    s.requestBase(r) + "/gallery",
+		Limits:      s.renderLimits,
 	})
+}
+
+// isRenderRefusal reports whether err is a render limit, a full slot pool or
+// a cancelled request: refusals the caller is told about, not server faults.
+func isRenderRefusal(err error) bool {
+	return errors.Is(err, render.ErrBudget) || errors.Is(err, errRenderBusy) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

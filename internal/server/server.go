@@ -68,6 +68,12 @@ type Config struct {
 	// Password bounds view-password verification (viewauth.go). The zero value
 	// uses the defaults.
 	Password PasswordLimits
+	// RenderMaxOutput caps a rendered ?render=md page in bytes; 0 takes
+	// render.DefaultLimits.
+	RenderMaxOutput int
+	// RenderConcurrency caps markdown renders running at once; 0 takes
+	// GOMAXPROCS, capped at 4.
+	RenderConcurrency int
 }
 
 // Server wires the store and configuration into HTTP handlers.
@@ -85,6 +91,8 @@ type Server struct {
 	renderFooter     bool
 	renderFooterLink string
 	renderMetaHeader bool
+	renderLimits     render.Limits               // work and output bounds for ?render=md
+	renderSem        chan struct{}               // render slots (renderlimit.go)
 	tokenMAC         []byte                      // random key for constant-time, length-hiding token comparison
 	views            *viewGate                   // view-password rate and concurrency limits
 	routes           []module.RouteModule        // compiled-in route modules, mounted on the control plane
@@ -118,6 +126,8 @@ func New(st *store.Store, cfg Config) *Server {
 		renderFooter:     cfg.RenderFooter,
 		renderFooterLink: cfg.RenderFooterLink,
 		renderMetaHeader: cfg.RenderMetaHeader,
+		renderLimits:     render.Limits{MaxOutputBytes: cfg.RenderMaxOutput},
+		renderSem:        newRenderSem(cfg.RenderConcurrency),
 		tokenMAC:         key,
 		views:            newViewGate(cfg.Password, viewKey()),
 		routes:           module.RouteModules(),
@@ -503,7 +513,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		// nav (a generated slug is not a stable link target). A List error is
 		// non-fatal — the colophon just shows the meta row with no series nav.
 		published := time.Now()
-		src = bytes.NewReader(render.Markdown(data, render.Options{
+		page, rerr := s.renderDoc(r.Context(), data, render.Options{
 			Theme:       s.renderTheme,
 			CSS:         s.renderCSS,
 			Title:       named, // slug fallback; the body's first H1 wins when present
@@ -519,7 +529,14 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 			Siblings:    s.seriesSiblings(series, named),
 			ContentBase: s.contentBase(r),
 			IndexURL:    s.requestBase(r) + "/gallery",
-		}))
+		})
+		if rerr != nil {
+			// Nothing has been stored yet: a rejected render leaves the slug
+			// as it was.
+			writeRenderError(w, rerr)
+			return
+		}
+		src = bytes.NewReader(page)
 		filename = renderedName(filename)
 		// Retain the markdown and the request-side render arguments, so this page
 		// can be rebaked by a later renderer without its author still holding a
