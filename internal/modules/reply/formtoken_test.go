@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/daisandapex/demiplane/internal/formtoken"
 	"github.com/daisandapex/demiplane/internal/store"
@@ -217,4 +218,115 @@ func TestSubmissionRacingARepublishIsRefused(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSubmissionQueuedBehindReplyLockIsRefused: a submission that passed its
+// checks and is waiting for the reply store (its mutex, or the database
+// write lock another process holds) is refused if a republish lands while it
+// waits: 409, nothing stored, no hook. Both routes, both waits.
+func TestSubmissionQueuedBehindReplyLockIsRefused(t *testing.T) {
+	for _, wait := range []string{"mutex", "write lock"} {
+		for _, route := range []struct{ name, path, kind string }{
+			{"content", "/answer/queued", ""},
+			{"control", "/reply/queued", "comment"},
+		} {
+			t.Run(wait+"/"+route.name, func(t *testing.T) {
+				st, err := store.Open(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { st.Close() })
+				art, err := st.Put(store.PutOptions{Slug: "queued", Replies: true}, strings.NewReader("<html>v1</html>"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				h := &fakeHost{st: st, dataDir: t.TempDir()}
+				m := &Module{}
+				m.setLimits(openLimits())
+				mux := http.NewServeMux()
+				m.Routes(mux, h)
+				m.ContentRoutes(mux, h)
+				t.Cleanup(func() { m.rs.close() })
+				m.hook = hookConfig{execCmd: "true"}
+				fired := make(chan Reply, 4)
+				m.hookDone = func(rep Reply) { fired <- rep }
+				ts := httptest.NewServer(mux)
+				t.Cleanup(ts.Close)
+
+				var release func()
+				switch wait {
+				case "mutex":
+					m.rs.mu.Lock()
+					release = m.rs.mu.Unlock
+				default:
+					// Another process holding the reply database's write lock.
+					other, err := openReplyStore(h.dataDir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { other.close() })
+					tx, err := other.db.Begin()
+					if err != nil {
+						t.Fatal(err)
+					}
+					release = func() { _ = tx.Rollback() }
+				}
+				waiting := make(chan struct{})
+				var once sync.Once
+				beforeReplyLock = func() { once.Do(func() { close(waiting) }) }
+				t.Cleanup(func() { beforeReplyLock = nil })
+
+				v := url.Values{"body": {"queued answer"}, "token": {h.ReplyFormToken(art)}}
+				if route.kind != "" {
+					v.Set("kind", route.kind)
+				}
+				done := make(chan int, 1)
+				go func() {
+					code, _ := postAnswerNoT(ts, route.path, map[string]string{"Origin": "null", "Sec-Fetch-Site": "cross-site"}, v)
+					done <- code
+				}()
+				select {
+				case <-waiting:
+				case <-time.After(10 * time.Second):
+					release()
+					t.Fatal("the submission never reached the reply store")
+				}
+				// Give it time to block on the wait itself.
+				time.Sleep(100 * time.Millisecond)
+				if _, err := st.Put(store.PutOptions{Slug: "queued", Replies: true, Password: "pw-new"}, strings.NewReader("<html>v2</html>")); err != nil {
+					release()
+					t.Fatal(err)
+				}
+				release()
+				if code := <-done; code != http.StatusConflict {
+					t.Errorf("queued submission after a republish: %d, want 409", code)
+				}
+				if n := storedCount(t, m, "queued"); n != 0 {
+					t.Errorf("stored %d replies, want 0", n)
+				}
+				select {
+				case rep := <-fired:
+					t.Errorf("the hook fired for a refused submission: %+v", rep)
+				case <-time.After(300 * time.Millisecond):
+				}
+			})
+		}
+	}
+}
+
+// postAnswerNoT is postAnswer for use off the test goroutine: it reports a
+// transport failure as status 0 instead of failing the test.
+func postAnswerNoT(ts *httptest.Server, path string, hdr map[string]string, fields url.Values) (int, string) {
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+path, strings.NewReader(fields.Encode()))
+	req.Header.Set("Content-Type", formCT)
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err.Error()
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
 }

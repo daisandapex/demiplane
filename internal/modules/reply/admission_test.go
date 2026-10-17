@@ -413,7 +413,7 @@ func TestReplyTotalsHoldAcrossStores(t *testing.T) {
 			if i%2 == 1 {
 				rs = b
 			}
-			if _, err := rs.addLimited("s"+strconv.Itoa(i), "comment", "x", time.Now(), l); err == nil {
+			if _, err := rs.addLimited("s"+strconv.Itoa(i), "comment", "x", time.Now(), l, nil); err == nil {
 				mu.Lock()
 				stored++
 				mu.Unlock()

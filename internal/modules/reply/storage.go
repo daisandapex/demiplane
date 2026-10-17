@@ -142,13 +142,26 @@ func (rs *replyStore) add(slug, kind, body string, now time.Time) (Reply, error)
 	return Reply{ID: id, Slug: slug, Kind: kind, Body: body, CreatedAt: now.UTC(), Status: "pending"}, nil
 }
 
+// beforeReplyLock, when set by a test, runs in addLimited before it waits for
+// the store's mutex and write lock.
+var beforeReplyLock func()
+
 // addLimited inserts a reply if lim allows it: fewer than lim.PerArtifact
 // replies for slug, and room under lim.Total and lim.TotalBytes. The checks
 // and the insert run in one IMMEDIATE transaction, so concurrent submissions,
 // from this process or another one sharing the database, cannot all pass a
 // check that only one of them fits.
 // It never deletes anything: retention is the sweeper's job (sweep).
-func (rs *replyStore) addLimited(slug, kind, body string, now time.Time, lim Limits) (Reply, error) {
+//
+// verify, when non-nil, runs inside the transaction after every wait (the
+// mutex, and the write lock BEGIN IMMEDIATE takes), immediately before the
+// INSERT; an error from it rolls the transaction back and is returned. Only
+// the INSERT and the COMMIT follow it, and holding the write lock, neither
+// waits for another writer.
+func (rs *replyStore) addLimited(slug, kind, body string, now time.Time, lim Limits, verify func() error) (Reply, error) {
+	if beforeReplyLock != nil {
+		beforeReplyLock()
+	}
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	tx, err := rs.db.Begin()
@@ -172,6 +185,11 @@ func (rs *replyStore) addLimited(slug, kind, body string, now time.Time, lim Lim
 	}
 	if n >= lim.PerArtifact {
 		return Reply{}, errReplyCap
+	}
+	if verify != nil {
+		if err := verify(); err != nil {
+			return Reply{}, err
+		}
 	}
 	res, err := tx.Exec(
 		`INSERT INTO replies (slug, kind, body, created_at, status) VALUES (?, ?, ?, ?, 'pending')`,

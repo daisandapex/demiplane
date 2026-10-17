@@ -91,8 +91,11 @@ sandboxed page) whose Referer is absent or on the content origin. A browser post
 `token`, which is bound to the artifact and its current publish (a random
 identifier every publish replaces and a rebake keeps); without a valid one the
 answer is refused with `403` and not recorded. Non-browser clients need no
-token. An answer whose page is republished while it is being sent is refused
-with `409`. Mounted via the optional `module.ContentRouteModule` seam so it
+token. An answer is recorded only if, when the reply store admits it (inside
+its write transaction, immediately before the insert), the slug still names
+the publish the answer was checked against with replies enabled; otherwise it
+is refused with `409`, nothing is stored and no hook fires. A republish that
+commits after that point is ordered after the answer. Mounted via the optional `module.ContentRouteModule` seam so it
 lives on the same origin that serves the page. `404` for an unknown/private slug.
 
 ## Inline reply box on a rendered page (Q&A / teaching)

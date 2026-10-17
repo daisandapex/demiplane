@@ -172,30 +172,49 @@ func bodyDeadline(w http.ResponseWriter) {
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(replyBodyTimeout))
 }
 
+// errPublishChanged: the slug no longer names the publish a submission was
+// checked against.
+var errPublishChanged = errors.New("the artifact was republished")
+
 // record stores a validated reply to art under the hook and storage limits,
 // firing the hook on success. The refusal covers every way it can decline.
 //
 // art is the row the submission was checked against (password, token) when
-// it arrived; the body has been read since. The reply is recorded only if
-// that is still the slug's current publish, so a republish landing in
-// between (a new password, replies turned off, a new page) is not bypassed
-// by a submission admitted under the previous one.
+// it arrived. The reply is recorded only if art is still the slug's current
+// publish when the reply store has admitted it: the check runs inside the
+// reply transaction after every wait for the reply store, right before the
+// INSERT (addLimited's verify). That check is the reply's linearisation
+// point. A republish (a new password, replies turned off, a new page) that
+// commits before it refuses the reply with 409; one that commits after it is
+// ordered after the reply, which was admitted under a publish still current
+// at that point. The hook fires only after the reply commits.
+//
+// The two databases are not locked together. Holding core's meta.db write
+// lock across the reply transaction (ATTACH plus BEGIN IMMEDIATE) would give
+// the module a handle on core's private database, which module.Host keeps
+// out of reach; stall every publish behind reply writes; and still not commit
+// atomically, since SQLite does not make a commit spanning WAL databases
+// atomic. The check-then-order rule above needs none of that.
 func (m *Module) record(art store.Artifact, kind, body string) (Reply, *refusal, error) {
 	slug := art.Slug
-	switch cur, err := m.host.Store().LookupPublic(slug); {
-	case errors.Is(err, store.ErrNotFound), err == nil && (!cur.Replies || cur.PublishID != art.PublishID):
-		return Reply{}, &refusal{status: http.StatusConflict,
-			msg: "the page was republished while this reply was being sent; reload it and try again"}, nil
-	case err != nil:
-		return Reply{}, nil, err
+	verify := func() error {
+		cur, err := m.host.Store().LookupPublic(slug)
+		if errors.Is(err, store.ErrNotFound) || (err == nil && (!cur.Replies || cur.PublishID != art.PublishID)) {
+			return errPublishChanged
+		}
+		return err
 	}
 	ticket, ok := m.reserveHook()
 	if !ok {
 		return Reply{}, &refusal{status: http.StatusServiceUnavailable, msg: "the server is busy; try again shortly",
 			header: "Retry-After", value: "5"}, nil
 	}
-	rep, err := m.rs.addLimited(slug, kind, body, time.Now(), m.admission().lim)
+	rep, err := m.rs.addLimited(slug, kind, body, time.Now(), m.admission().lim, verify)
 	switch {
+	case errors.Is(err, errPublishChanged):
+		ticket.release()
+		return Reply{}, &refusal{status: http.StatusConflict,
+			msg: "the page was republished while this reply was being sent; reload it and try again"}, nil
 	case errors.Is(err, errReplyCap):
 		ticket.release()
 		return Reply{}, &refusal{status: http.StatusTooManyRequests, msg: "this artifact has reached its reply limit", capReached: true}, nil
