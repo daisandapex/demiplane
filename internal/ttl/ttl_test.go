@@ -4,6 +4,8 @@
 package ttl
 
 import (
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -96,5 +98,33 @@ func TestParseNeverUnexpiring(t *testing.T) {
 		if d < Min {
 			t.Errorf("Parse(%q) = %v: accepted a TTL below Min", in, d)
 		}
+	}
+}
+
+// TestParseBoundsLongDayValues: an enormous day value is refused before any
+// arbitrary-precision parsing, cheaply, and without echoing itself back.
+func TestParseBoundsLongDayValues(t *testing.T) {
+	for _, s := range []string{
+		strings.Repeat("9", 300000) + "d",
+		"0." + strings.Repeat("0", 300000) + "1d",
+		"1." + strings.Repeat("5", 300000) + "d",
+	} {
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		_, err := Parse(s)
+		runtime.ReadMemStats(&after)
+		if err == nil {
+			t.Fatalf("a %d-byte day value was accepted", len(s))
+		}
+		if got := after.TotalAlloc - before.TotalAlloc; got > 64<<10 {
+			t.Errorf("a %d-byte day value: parsing allocated %d KiB, want under 64 KiB", len(s), got>>10)
+		}
+		if len(err.Error()) > 200 {
+			t.Errorf("the error echoes the value back (%d bytes)", len(err.Error()))
+		}
+	}
+	if _, err := Parse("1." + strings.Repeat("0", 40) + "d"); err != nil {
+		t.Errorf("a long but reasonable day value: %v", err)
 	}
 }

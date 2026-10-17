@@ -16,6 +16,12 @@ import (
 	"time"
 )
 
+// MaxLen is the longest TTL string accepted, in bytes, surrounding
+// whitespace included. Every useful value is far shorter; the cap keeps a
+// request from handing the arbitrary-precision day parser (whose cost grows
+// faster than the input) hundreds of kilobytes of digits.
+const MaxLen = 64
+
 // Min is the shortest accepted TTL. Expiry is stored at one-second resolution,
 // so a shorter TTL cannot be represented as a distinct future instant.
 const Min = time.Second
@@ -39,10 +45,14 @@ var maxNS = new(big.Rat).SetInt64(math.MaxInt64)
 // (0, nil); a value of only whitespace is an error, not a silent "no expiry".
 // Every other input either yields a duration in [Min, MaxInt64 ns] or an
 // error, so an accepted non-empty TTL always produces an artifact that
-// expires. Surrounding whitespace on a real value is ignored.
+// expires. Surrounding whitespace on a real value is ignored. A string longer
+// than MaxLen bytes is refused before it is parsed.
 func Parse(s string) (time.Duration, error) {
 	if s == "" {
 		return 0, nil
+	}
+	if len(s) > MaxLen {
+		return 0, fmt.Errorf("invalid ttl: longer than %d bytes", MaxLen)
 	}
 	s = strings.TrimSpace(s)
 	if s == "" {
