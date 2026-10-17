@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/daisandapex/demiplane/internal/limit"
+	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/store"
 )
 
@@ -92,8 +93,10 @@ func TestRepliesRequireOptInAndPassword(t *testing.T) {
 				t.Errorf("reply to a missing artifact = %d, want 404", code)
 			}
 			code, hdr := submit(t, ts, plane, "locked", "")
-			if code != http.StatusUnauthorized || !strings.HasPrefix(hdr.Get("WWW-Authenticate"), "Basic") {
-				t.Errorf("reply to a password page without it = %d (%q), want 401 with a challenge", code, hdr.Get("WWW-Authenticate"))
+			// The artifact's own realm, the one GET /{slug} challenges with, so
+			// a browser answers it with the password the viewer already gave.
+			if want := module.PasswordChallenge("locked"); code != http.StatusUnauthorized || hdr.Get("WWW-Authenticate") != want {
+				t.Errorf("reply to a password page without it = %d (%q), want 401 with %q", code, hdr.Get("WWW-Authenticate"), want)
 			}
 			if code, _ := submit(t, ts, plane, "locked", "wrong"); code != http.StatusUnauthorized {
 				t.Errorf("reply with a wrong password = %d, want 401", code)
