@@ -397,9 +397,12 @@ only in `-tags reply` builds.
 | Admission | requests in progress per listener / per client; excess `503` | 256 / 32 | `--max-requests`, `--max-requests-per-client` |
 | Admission | open connections per listener (further ones wait) / per client (further ones are closed) | 1024 / 64 | `--max-conns`, `--max-conns-per-client` |
 | Rendering | table columns; table body cells per document (rows times header width) | 128; 1,000,000 | (code) |
-| Rendering | rendered page size, page chrome and outline included; over it `413`, nothing stored | 32 MiB | `--render-max-output` |
+| Rendering | rendered page size: every byte, meta-header, outline and chrome included, charged as it is produced; over it `413`, nothing stored | 32 MiB | `--render-max-output` |
+| Rendering | input lines / headings / list nesting depth; over it `413` | 2,097,152 / 50,000 / 64 | (code) |
+| Rendering | frontmatter rendered as the meta-header: fields / block size / key / value; over it `413` | 256 / 64 KiB / 256 B / 8 KiB | (code) |
 | Rendering | renders at once; one that waits 5s gets `503` | GOMAXPROCS, at most 4 | `--render-concurrency` |
-| Storage | bytes of artifacts, retained sources and sites, including in-flight uploads, scratch and extracted archive bytes, plus 4 KiB per artifact for its metadata; over it `507` | unlimited | `--store-quota` |
+| Storage | bytes of artifacts, retained sources and sites, including in-flight uploads, scratch and extracted archive bytes, plus 4 KiB per artifact for its metadata and 4 KiB per site file or directory; over it `507` | unlimited | `--store-quota` |
+| Storage | site files and directories in all, sites being published included; over it `507` | 100,000 | (code) |
 | Metadata | filename hint length; longer is `400` | 255 bytes | (code) |
 | Replies | submissions per client / per artifact / in all; past it `429` | 10 / 60 / 300 a minute | `reply_rate_client`, `reply_rate_target`, `reply_rate_global` |
 | Replies | submit body must arrive within | 10s | (code) |
@@ -421,10 +424,18 @@ Notes on the limits:
   a rate; use a strong password. Behind a proxy, set `--trusted-proxy`, or
   every user shares the proxy's budget. Reply routes, the `?live` wrapper and
   the live-reload stream (including its re-checks) run the same check.
-- **Rendering.** The output budget covers the whole page, including the
-  outline built from its headings, which is checked as it grows. Heading ids
-  are capped at 64 bytes, so a long heading cannot make every reference to it
-  long.
+- **Rendering.** Every byte a render produces goes through one budgeted
+  writer, charged before it is appended: the body, the frontmatter
+  meta-header, the outline and the page chrome share one budget, and the page
+  is assembled once at its exact size. Text that is built before it is
+  written (a paragraph, quote, list item, code block, table row or heading) is
+  held to the remaining budget by an upper bound on its formatted size as it
+  accumulates. What the render keeps per input element that is not output is
+  capped instead: lines are indexed by offset in the one copy of the input,
+  and lines, headings, list depth and frontmatter fields have the limits in
+  the table. Heading ids are capped at 64 bytes, so a long heading cannot make
+  every reference to it long. A render's memory stays within a small multiple
+  of the output budget plus the input (tested at the 8 MiB input cap).
 - **Order of checks.** Body and write deadlines are set first, so they also
   bound a request refused before routing (a service-worker fetch, an unknown
   `Host`, an ambiguous path). Admission counts only requests that pass those
@@ -468,8 +479,9 @@ Notes on the limits:
   background child is killed with the hook's process group.
 - **Storage quota.** Not counted: the metadata database's actual size (each
   artifact instead counts a fixed 4 KiB allowance, and its per-row fields are
-  bounded), module data (replies, TLS material), filesystem block overhead
-  and files left behind by a crash.
+  bounded), the filesystem cost of a site entry beyond its 4 KiB allowance,
+  module data (replies, TLS material), filesystem block overhead and files
+  left behind by a crash.
   An overwrite or rebake needs room for the new copy while the old one still
   exists; a site publish needs room for its archive plus the extracted files.
   `demiplane receive` runs as a separate process and enforces the quota

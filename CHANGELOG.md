@@ -54,11 +54,15 @@ All notable changes to demiplane are documented here. The format follows
   and requests and connections in progress are capped per listener and per
   client. Markdown rendering bounds table width, table cells and output size,
   runs in linear time, stops when the client goes away, and runs at bounded
-  concurrency; the page outline counts against the output budget as it is
-  built, and heading ids are capped at 64 bytes. An optional aggregate storage
-  quota (`--store-quota`) counts uploads in flight, archive scratch, extracted
-  bytes and a fixed 4 KiB per artifact for its metadata; a `filename` hint over
-  255 bytes is a `400`. Limits, defaults and
+  concurrency. Every byte of the page (body, frontmatter meta-header, outline
+  and chrome) is charged to the output budget as it is produced, text is held
+  to the remaining budget before it is formatted, and lines, headings, list
+  nesting and frontmatter are capped before they are kept; heading ids are
+  capped at 64 bytes. An optional aggregate storage quota (`--store-quota`)
+  counts uploads in flight, archive scratch, extracted bytes, a fixed 4 KiB
+  per artifact for its metadata and 4 KiB per site file or directory; a
+  `filename` hint over 255 bytes is a `400`, and the sites hold at most
+  100,000 files and directories in all, with or without a quota. Limits, defaults and
   flags: [SECURITY.md](SECURITY.md#resource-limits). Behind a reverse proxy
   listed in the new `--trusted-proxy`, per-client limits key on the client
   named in `X-Forwarded-For` instead of the proxy.
@@ -172,6 +176,15 @@ All notable changes to demiplane are documented here. The format follows
   browser that had a worker registered on the content origin removes it the
   next time it loads a page there, and those pages reload once. No operator
   action is needed.
+- **Upgrade note: markdown input caps.** A `?render=md` document with more
+  than 2,097,152 lines, more than 50,000 headings or lists nested deeper than
+  64 levels is refused with `413`, as is, with the meta-header on, frontmatter
+  of more than 256 fields or 64 KiB, or with a key over 256 bytes or a value
+  over 8 KiB.
+- **Upgrade note: each site file and directory counts 4 KiB toward
+  `--store-quota`,** and the sites hold at most 100,000 files and directories
+  in all. An existing store over either limit keeps serving, but further site
+  publishes get `507` until sites are deleted.
 - **Upgrade note: each artifact counts 4 KiB toward `--store-quota`,** and
   `?filename=` is capped at 255 bytes. Size the quota with that in mind; a
   store already near its quota may refuse new artifacts with `507`.
