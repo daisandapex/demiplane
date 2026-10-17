@@ -96,15 +96,28 @@ var memPayloads = map[string]func() []byte{
 	"meta-fields-small": func() []byte {
 		return fill("---\n", "abcdefg: v\n", "---\n", 60<<10)
 	},
-	"headings-9":      func() []byte { return fill("", "## abcde\n", "", maxRenderSize) },
-	"list-items-9":    func() []byte { return fill("", "- abcdef\n", "", maxRenderSize) },
-	"loose-list-9":    func() []byte { return fill("- a\n", "\n  bbbbbbb\n", "", maxRenderSize) },
-	"paragraphs-9":    func() []byte { return fill("", "abcdefgh\n", "", maxRenderSize) },
-	"quote-lines-9":   func() []byte { return fill("", "> abcdef\n", "", maxRenderSize) },
-	"table-pad-9":     func() []byte { return fill(tableHead(128), "|abcdefg\n", "", maxRenderSize) },
-	"code-lines-9":    func() []byte { return fill("```go\n", "f(x)//<\n", "```\n", maxRenderSize) },
-	"hrules-9":        func() []byte { return fill("", "--------\n", "", maxRenderSize) },
-	"deep-list-under": func() []byte { return fill("", "- a\n  - b\n    - c\n      - d\n", "", maxRenderSize) },
+	"headings-9":    func() []byte { return fill("", "## abcde\n", "", maxRenderSize) },
+	"list-items-9":  func() []byte { return fill("", "- abcdef\n", "", maxRenderSize) },
+	"loose-list-9":  func() []byte { return fill("- a\n", "\n  bbbbbbb\n", "", maxRenderSize) },
+	"paragraphs-9":  func() []byte { return fill("", "abcdefgh\n", "", maxRenderSize) },
+	"quote-lines-9": func() []byte { return fill("", "> abcdef\n", "", maxRenderSize) },
+	"table-pad-9":   func() []byte { return fill(tableHead(128), "|abcdefg\n", "", maxRenderSize) },
+	"code-lines-9":  func() []byte { return fill("```go\n", "f(x)//<\n", "```\n", maxRenderSize) },
+	"hrules-9":      func() []byte { return fill("", "--------\n", "", maxRenderSize) },
+	// Documents sized to fit a 4 MiB budget, so inline formatting runs on as
+	// much text as the budget admits: the worst case for its per-match work.
+	"code-spans-fit":   func() []byte { return fill("", "`a` ", "\n", 900<<10) },
+	"links-fit":        func() []byte { return fill("", "[a](b) ", "\n", 560<<10) },
+	"emphasis-fit":     func() []byte { return fill("", "**a** *b* _c_ ", "\n", 400<<10) },
+	"code-spans-lines": func() []byte { return fill("", "`a` `b` `c`\n", "", 1000<<10) },
+	"table-cells-fit":  func() []byte { return fill(tableHead(2), "|`a` `a` `a` `a`|[a](b)|\n", "", 600<<10) },
+	// The same, sized to fit the 32 MiB default budget (TestRenderMemoryAtDefaultBudget).
+	"code-spans-fit32":   func() []byte { return fill("", "`a` ", "\n", 7200<<10) },
+	"links-fit32":        func() []byte { return fill("", "[a](b) ", "\n", 4400<<10) },
+	"emphasis-fit32":     func() []byte { return fill("", "**a** *b* _c_ ", "\n", 3200<<10) },
+	"code-spans-lines32": func() []byte { return fill("", "`a` `b` `c`\n", "", maxRenderSize) },
+	"table-cells-fit32":  func() []byte { return fill(tableHead(2), "|`a` `a` `a` `a`|[a](b)|\n", "", 4800<<10) },
+	"deep-list-under":    func() []byte { return fill("", "- a\n  - b\n    - c\n      - d\n", "", maxRenderSize) },
 }
 
 // mixtures is how many seeded mixed documents the property test renders.
@@ -303,6 +316,22 @@ func TestMetaHeaderHonoursRenderBudget(t *testing.T) {
 // live size before it runs, so about 7x is the worst the accounting allows.
 // The constant holds what the budget does not cover: the runtime and test
 // binary, the input (at most 8 MiB) and the render's one string copy of it.
+// TestRenderMemoryAtDefaultBudget renders the documents sized to fill the
+// 32 MiB default budget with inline formatting, one at a time, and holds
+// each to the same bound at that budget.
+func TestRenderMemoryAtDefaultBudget(t *testing.T) {
+	if os.Getenv(memChildEnv) != "" {
+		t.Skip("parent only")
+	}
+	if testing.Short() {
+		t.Skip("renders documents of up to 8 MiB at the default budget")
+	}
+	budget := DefaultLimits.MaxOutputBytes
+	for _, name := range []string{"code-spans-fit32", "links-fit32", "emphasis-fit32", "code-spans-lines32", "table-cells-fit32"} {
+		checkMem(t, renderInChild(t, name, budget), budget)
+	}
+}
+
 func TestRenderMemoryProperty(t *testing.T) {
 	if os.Getenv(memChildEnv) != "" {
 		t.Skip("parent only")
@@ -310,7 +339,9 @@ func TestRenderMemoryProperty(t *testing.T) {
 	const budget = 4 << 20
 	names := make([]string, 0, len(memPayloads))
 	for name := range memPayloads {
-		names = append(names, name)
+		if !strings.HasSuffix(name, "32") {
+			names = append(names, name)
+		}
 	}
 	sort.Strings(names)
 	for _, name := range names {

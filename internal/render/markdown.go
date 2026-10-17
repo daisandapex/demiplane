@@ -1140,6 +1140,10 @@ var workProbe func(n int)
 // then lifted into placeholders BEFORE the emphasis passes run, so `_`/`*`
 // inside inline code (most snake_case identifiers) are never rewritten into
 // <em>/<strong>; the finished spans are restored last.
+//
+// Every pass builds one string no longer than the result (inlineUpper bounds
+// it); per match, the code-span pass records two offsets and the link pass
+// reads its parts by index, so the work kept per construct is a few bytes.
 func inline(s string) string {
 	// NUL is the placeholder frame and html.EscapeString leaves it alone, so a
 	// source NUL becomes U+FFFD (as CommonMark replaces it) before the
@@ -1147,23 +1151,66 @@ func inline(s string) string {
 	if strings.IndexByte(s, 0) >= 0 {
 		s = strings.ReplaceAll(s, "\x00", "\uFFFD")
 	}
-	s = html.EscapeString(s)
-	var spans []string
-	s = reCode.ReplaceAllStringFunc(s, func(m string) string {
-		spans = append(spans, "<code>"+reCode.FindStringSubmatch(m)[1]+"</code>")
-		return codeSentinel + strconv.Itoa(len(spans)-1) + codeSentinel
-	})
+	esc := html.EscapeString(s)
+	s, spans := liftCodeSpans(esc)
 	s = reLink.ReplaceAllStringFunc(s, renderLink)
 	s = reBold.ReplaceAllString(s, "<strong>$1</strong>")
 	s = reItalic.ReplaceAllString(s, "<em>$1</em>")
 	s = reItalicU.ReplaceAllString(s, "<em>$1</em>")
-	return restoreSpans(s, spans)
+	return restoreSpans(s, esc, spans)
+}
+
+// span is a code span's content, as offsets into the escaped text.
+type span struct{ start, end int32 }
+
+// liftCodeSpans replaces each code span of esc (the reCode shape: a backtick,
+// one or more non-backticks, a backtick; leftmost first, not overlapping)
+// with a framed placeholder index, and returns the text and the spans. It
+// matches exactly where reCode.ReplaceAllString would.
+func liftCodeSpans(esc string) (string, []span) {
+	i := strings.IndexByte(esc, '`')
+	if i < 0 {
+		return esc, nil
+	}
+	var b strings.Builder
+	b.Grow(len(esc))
+	var spans []span
+	last := 0
+	for i >= 0 && i < len(esc) {
+		j := strings.IndexByte(esc[i+1:], '`')
+		if j < 0 {
+			break
+		}
+		if j == 0 {
+			// "``": no span starts at i; the next backtick may open one.
+			i++
+			continue
+		}
+		end := i + 1 + j
+		b.WriteString(esc[last:i])
+		b.WriteString(codeSentinel)
+		b.WriteString(strconv.Itoa(len(spans)))
+		b.WriteString(codeSentinel)
+		spans = append(spans, span{start: int32(i + 1), end: int32(end)})
+		last = end + 1
+		k := strings.IndexByte(esc[last:], '`')
+		if k < 0 {
+			break
+		}
+		i = last + k
+	}
+	if spans == nil {
+		return esc, nil
+	}
+	b.WriteString(esc[last:])
+	return b.String(), spans
 }
 
 // restoreSpans puts each code span back in place of its placeholder in one
-// pass over s. Each placeholder occurs once and is restored once; anything
-// else between NULs is copied through unchanged.
-func restoreSpans(s string, spans []string) string {
+// pass over s, writing <code>…</code> around its content in esc. Each
+// placeholder occurs once and is restored once; anything else between NULs is
+// copied through unchanged.
+func restoreSpans(s, esc string, spans []span) string {
 	if len(spans) == 0 {
 		return s
 	}
@@ -1171,7 +1218,7 @@ func restoreSpans(s string, spans []string) string {
 		workProbe(len(s))
 	}
 	var b strings.Builder
-	b.Grow(len(s))
+	b.Grow(len(s) + 13*len(spans))
 	restored := make([]bool, len(spans))
 	for {
 		j := strings.IndexByte(s, codeSentinel[0])
@@ -1188,7 +1235,10 @@ func restoreSpans(s string, spans []string) string {
 		}
 		if idx, err := strconv.Atoi(rest[:k]); err == nil && idx >= 0 && idx < len(spans) && !restored[idx] {
 			restored[idx] = true
-			b.WriteString(spans[idx])
+			sp := spans[idx]
+			b.WriteString("<code>")
+			b.WriteString(esc[sp.start:sp.end])
+			b.WriteString("</code>")
 			s = rest[k+1:]
 			continue
 		}
@@ -1210,8 +1260,10 @@ func restoreSpans(s string, spans []string) string {
 //     become a live href. Rendered markdown is served same-origin, so this
 //     matters.
 func renderLink(match string) string {
-	m := reLink.FindStringSubmatch(match)
-	text, u := m[1], m[2]
+	// match is reLink's "[text](url)": text holds no ']', so the first "](" ends
+	// it, and the url runs to the closing ')'.
+	k := strings.IndexByte(match, ']')
+	text, u := match[1:k], match[k+2:len(match)-1]
 	if !safeURL(u) {
 		return text
 	}

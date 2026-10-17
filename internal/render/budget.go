@@ -277,9 +277,10 @@ func escapedLen(s string) int {
 // inlineUpper is an upper bound on len(inline(s)), counted without
 // allocating: the escaped text plus the most markup each construct can add.
 // A code span turns two backticks into <code></code> (+11), a link turns
-// "[](" and ")" into an anchor tag (+36 per "]"), strong and emphasis add at
-// most 7 per "*" and 4 per "_", and a NUL becomes U+FFFD (+2). Every
-// intermediate string inline builds is no longer than its result.
+// "[", "](" and ")" into an anchor tag (+37; 40 is counted per "]"), strong
+// and emphasis add at most 7 per "*" and 4 per "_", and a NUL becomes U+FFFD
+// (+2). Every intermediate string inline builds is no longer than its result.
+// TestInlineMatchesRegexOracle checks the bound against random text.
 func inlineUpper(s string) int {
 	n := escapedLen(s)
 	for i := 0; i < len(s); i++ {
@@ -287,7 +288,7 @@ func inlineUpper(s string) int {
 		case '`':
 			n += 6
 		case ']':
-			n += 36
+			n += 40
 		case '*':
 			n += 7
 		case '_':
