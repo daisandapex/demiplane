@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/module"
@@ -125,7 +126,11 @@ func (m *Module) ensureStore(host module.Host) {
 	}
 	if err != nil {
 		log.Printf("reply module: storage unavailable, serving 503: %s", logsafe.Err(err))
+		return
 	}
+	// Retention (reply_retention, off by default) runs here, never on the
+	// submit path.
+	m.rs.startSweeper(func() time.Duration { return m.admission().lim.Retention }, retentionEvery)
 }
 
 // ready reports whether storage opened; handlers 503 when it did not.

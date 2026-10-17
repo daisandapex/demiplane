@@ -209,7 +209,8 @@ here: the control plane refuses cross-origin browser writes. Use
   `reply_rate_target`, `reply_rate_global`; default 10, 60 and 300 a minute),
   `reply_max_per_artifact` (1000) checked and inserted atomically,
   `reply_max_total` (100,000) and `reply_max_bytes` (64 MiB) in all, and
-  `reply_retention` (90 days; `0` keeps replies) deleting old replies. The
+  `reply_retention` (unset or `0` keeps replies; set, an hourly sweep deletes
+  replies older than it, never the submit path). The
   content listener refuses cross-origin browser posts except from an opaque
   origin (a sandboxed page) with no Referer or one on the content origin; it
   cannot tell apart two pages served from the same content origin, and a

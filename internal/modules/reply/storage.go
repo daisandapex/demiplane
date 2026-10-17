@@ -33,13 +33,18 @@ type Reply struct {
 type replyStore struct {
 	db *sql.DB
 
-	// mu serializes limited inserts in this process and guards lastSweep;
-	// the IMMEDIATE transaction serializes them across connections.
-	mu        sync.Mutex
-	lastSweep time.Time // last retention pass
+	// mu serializes limited inserts in this process; the IMMEDIATE
+	// transaction serializes them across connections.
+	mu sync.Mutex
+
+	// The retention sweeper (startSweeper): stop ends it, done closes when it
+	// has returned.
+	sweepMu sync.Mutex
+	stop    chan struct{}
+	done    chan struct{}
 }
 
-// retentionEvery is how often the retention pass runs, at most.
+// retentionEvery is how often the retention sweeper runs.
 const retentionEvery = time.Hour
 
 var (
@@ -116,7 +121,10 @@ END;`
 	return nil
 }
 
-func (rs *replyStore) close() error { return rs.db.Close() }
+func (rs *replyStore) close() error {
+	rs.stopSweeper()
+	return rs.db.Close()
+}
 
 // add inserts a reply and returns it with its assigned id.
 func (rs *replyStore) add(slug, kind, body string, now time.Time) (Reply, error) {
@@ -139,17 +147,10 @@ func (rs *replyStore) add(slug, kind, body string, now time.Time) (Reply, error)
 // and the insert run in one IMMEDIATE transaction, so concurrent submissions,
 // from this process or another one sharing the database, cannot all pass a
 // check that only one of them fits.
-// Replies older than lim.Retention are deleted first, at most once per
-// retentionEvery.
+// It never deletes anything: retention is the sweeper's job (sweep).
 func (rs *replyStore) addLimited(slug, kind, body string, now time.Time, lim Limits) (Reply, error) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	if lim.Retention > 0 && now.Sub(rs.lastSweep) >= retentionEvery {
-		if err := rs.sweepLocked(now, lim.Retention); err != nil {
-			// Not fatal: the limits below still hold with the old rows counted.
-			log.Printf("reply: retention pass failed: %s", logsafe.Err(err))
-		}
-	}
 	tx, err := rs.db.Begin()
 	if err != nil {
 		return Reply{}, fmt.Errorf("insert reply: %w", err)
@@ -189,14 +190,74 @@ func (rs *replyStore) addLimited(slug, kind, body string, now time.Time, lim Lim
 	return Reply{ID: id, Slug: slug, Kind: kind, Body: body, CreatedAt: now.UTC(), Status: "pending"}, nil
 }
 
-// sweepLocked deletes replies created before now-retention (the triggers
-// update the totals). Caller holds rs.mu.
-func (rs *replyStore) sweepLocked(now time.Time, retention time.Duration) error {
-	rs.lastSweep = now
-	if _, err := rs.db.Exec(`DELETE FROM replies WHERE created_at < ?`, now.Add(-retention).Unix()); err != nil {
-		return fmt.Errorf("delete old replies: %w", err)
+// sweep deletes replies created before now-retention in one transaction (the
+// triggers update the totals in the same transaction), and returns how many it
+// deleted. retention <= 0 deletes nothing.
+func (rs *replyStore) sweep(now time.Time, retention time.Duration) (int64, error) {
+	if retention <= 0 {
+		return 0, nil
 	}
-	return nil
+	tx, err := rs.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("delete old replies: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`DELETE FROM replies WHERE created_at < ?`, now.Add(-retention).Unix())
+	if err != nil {
+		return 0, fmt.Errorf("delete old replies: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("delete old replies: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("delete old replies: %w", err)
+	}
+	return n, nil
+}
+
+// startSweeper runs the retention sweep now and then every interval, with the
+// retention retention() returns at each pass (0 = keep replies, skip the
+// pass), until stopSweeper or close. It returns a channel closed when the
+// sweeper has exited. A second call while one runs returns the running one's.
+func (rs *replyStore) startSweeper(retention func() time.Duration, every time.Duration) <-chan struct{} {
+	rs.sweepMu.Lock()
+	defer rs.sweepMu.Unlock()
+	if rs.stop != nil {
+		return rs.done
+	}
+	rs.stop, rs.done = make(chan struct{}), make(chan struct{})
+	stop, done := rs.stop, rs.done
+	go func() {
+		defer close(done)
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			if n, err := rs.sweep(time.Now(), retention()); err != nil {
+				log.Printf("reply: retention pass failed: %s", logsafe.Err(err))
+			} else if n > 0 {
+				log.Printf("reply: retention removed %d old replies", n)
+			}
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+			}
+		}
+	}()
+	return done
+}
+
+// stopSweeper stops the retention sweeper, if one runs, and waits for it.
+func (rs *replyStore) stopSweeper() {
+	rs.sweepMu.Lock()
+	stop, done := rs.stop, rs.done
+	rs.stop, rs.done = nil, nil
+	rs.sweepMu.Unlock()
+	if stop != nil {
+		close(stop)
+		<-done
+	}
 }
 
 // count returns how many replies exist for slug (for the per-artifact cap).

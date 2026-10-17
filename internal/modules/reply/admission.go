@@ -43,7 +43,7 @@ type Limits struct {
 	PerArtifact int           // reply_max_per_artifact: replies stored against one artifact
 	Total       int           // reply_max_total: replies stored in all
 	TotalBytes  int64         // reply_max_bytes: reply text stored in all
-	Retention   time.Duration // reply_retention: replies older than this are deleted; 0 keeps them
+	Retention   time.Duration // reply_retention: replies older than this are deleted by the sweeper; 0 (the default) keeps them
 	RateClient  limit.Rate    // reply_rate_client: submissions per client
 	RateTarget  limit.Rate    // reply_rate_target: submissions per artifact
 	RateGlobal  limit.Rate    // reply_rate_global: submissions in all
@@ -55,7 +55,6 @@ func DefaultLimits() Limits {
 		PerArtifact: 1000,
 		Total:       100_000,
 		TotalBytes:  64 << 20,
-		Retention:   90 * 24 * time.Hour,
 		RateClient:  limit.PerMinute(10, 10),
 		RateTarget:  limit.PerMinute(60, 60),
 		RateGlobal:  limit.PerMinute(300, 300),

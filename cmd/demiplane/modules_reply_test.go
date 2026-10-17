@@ -82,6 +82,9 @@ func TestReplyLimitConfigKeys(t *testing.T) {
 	if l, _ := replyLimits(map[string]string{"reply_retention": "0"}); l.Retention != 0 {
 		t.Fatal("reply_retention = 0 should keep replies forever")
 	}
+	if l, _ := replyLimits(map[string]string{}); l.Retention != 0 {
+		t.Fatalf("unset reply_retention = %v, want 0 (keep replies)", l.Retention)
+	}
 	for _, bad := range []map[string]string{
 		{"reply_max_per_artifact": "0"},
 		{"reply_max_total": "lots"},

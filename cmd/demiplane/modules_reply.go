@@ -50,7 +50,7 @@ func init() {
 //	reply_max_per_artifact = <n>        replies stored per artifact (1000)
 //	reply_max_total        = <n>        replies stored in all (100000)
 //	reply_max_bytes        = <bytes>    reply text stored in all (64 MiB)
-//	reply_retention        = <ttl>|0    delete replies older than this (90d; 0 keeps them)
+//	reply_retention        = <ttl>|0    delete replies older than this, hourly (unset or 0 keeps them)
 //	reply_rate_client      = <n/min>|0  submissions per client a minute (10; 0 = unlimited)
 //	reply_rate_target      = <n/min>|0  submissions per artifact a minute (60)
 //	reply_rate_global      = <n/min>|0  submissions in all a minute (300)

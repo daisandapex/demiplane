@@ -252,29 +252,113 @@ func TestReplyAggregateLimits(t *testing.T) {
 	}
 }
 
-func TestReplyRetentionFreesRoom(t *testing.T) {
-	l := openLimits()
-	l.Total = 2
-	l.Retention = 24 * time.Hour
-	ts, m := admissionSetup(t, l)
-	old := time.Now().Add(-48 * time.Hour)
-	for i := 0; i < 2; i++ {
-		if _, err := m.rs.add("on", "comment", "old", old); err != nil {
+// seedOldReplies stores n replies on "on" dated age ago, the first one
+// acknowledged, as a store written before this release would hold them.
+func seedOldReplies(t *testing.T, m *Module, n int, age time.Duration) {
+	t.Helper()
+	// The module's own sweeper is stopped so the test decides when to sweep.
+	m.rs.stopSweeper()
+	old := time.Now().Add(-age)
+	for i := 0; i < n; i++ {
+		rep, err := m.rs.add("on", "comment", "old", old)
+		if err != nil {
 			t.Fatal(err)
 		}
+		if i == 0 {
+			if err := m.rs.ack(rep.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
-	m.rs.mu.Lock()
-	m.rs.lastSweep = time.Time{} // due for a retention pass
-	m.rs.mu.Unlock()
-	if code, _ := submit(t, ts, "content", "on", ""); code != http.StatusCreated {
-		t.Fatalf("submission after expired replies = %d, want 201 (retention should free room)", code)
-	}
-	reps, err := m.rs.list("on", "all")
+}
+
+func countBody(t *testing.T, m *Module, body string) int {
+	t.Helper()
+	reps, err := m.rs.list("", "all")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reps) != 1 || reps[0].Body != "an answer" {
-		t.Fatalf("after retention: %+v, want only the new reply", reps)
+	n := 0
+	for _, r := range reps {
+		if r.Body == body {
+			n++
+		}
+	}
+	return n
+}
+
+// TestUpgradeKeepsOldRepliesByDefault: with no reply_retention configured, a
+// store's existing replies, pending and read, survive new submissions,
+// admitted or refused for storage.
+func TestUpgradeKeepsOldRepliesByDefault(t *testing.T) {
+	l := openLimits()
+	l.Total = 4
+	ts, m := admissionSetup(t, l)
+	seedOldReplies(t, m, 3, 400*24*time.Hour)
+	if code, _ := submit(t, ts, "content", "on", ""); code != http.StatusCreated {
+		t.Fatalf("submission = %d, want 201", code)
+	}
+	if code, _ := submit(t, ts, "content", "on", ""); code != http.StatusInsufficientStorage {
+		t.Fatalf("submission past reply_max_total = %d, want 507", code)
+	}
+	if got := countBody(t, m, "old"); got != 3 {
+		t.Fatalf("%d of 3 pre-upgrade replies survive, want all", got)
+	}
+}
+
+// TestRetentionRunsInTheSweepNotOnSubmit: with reply_retention set, the
+// submit path never deletes; the sweep removes old replies in one
+// transaction and frees their room.
+func TestRetentionRunsInTheSweepNotOnSubmit(t *testing.T) {
+	l := openLimits()
+	l.Total = 3
+	l.Retention = 24 * time.Hour
+	ts, m := admissionSetup(t, l)
+	seedOldReplies(t, m, 2, 48*time.Hour)
+	if code, _ := submit(t, ts, "content", "on", ""); code != http.StatusCreated {
+		t.Fatalf("submission = %d, want 201", code)
+	}
+	if code, _ := submit(t, ts, "content", "on", ""); code != http.StatusInsufficientStorage {
+		t.Fatalf("submission at the limit = %d, want 507 (the submit path must not delete)", code)
+	}
+	if got := countBody(t, m, "old"); got != 2 {
+		t.Fatalf("a submission deleted old replies: %d of 2 left", got)
+	}
+	n, err := m.rs.sweep(time.Now(), l.Retention)
+	if err != nil || n != 2 {
+		t.Fatalf("sweep = %d, %v; want 2 deleted", n, err)
+	}
+	if got := countBody(t, m, "old"); got != 0 {
+		t.Fatalf("%d old replies left after the sweep", got)
+	}
+	if got := countBody(t, m, "an answer"); got != 1 {
+		t.Fatalf("the sweep removed a recent reply: %d left", got)
+	}
+	if code, _ := submit(t, ts, "content", "on", ""); code != http.StatusCreated {
+		t.Fatalf("submission after the sweep = %d, want 201 (room freed)", code)
+	}
+}
+
+// TestRetentionSweeperRunsAndStops: the background sweeper deletes on its
+// own schedule and exits when the store closes.
+func TestRetentionSweeperRunsAndStops(t *testing.T) {
+	l := openLimits()
+	l.Retention = time.Hour
+	_, m := admissionSetup(t, l)
+	seedOldReplies(t, m, 2, 2*time.Hour)
+	done := m.rs.startSweeper(func() time.Duration { return m.admission().lim.Retention }, 20*time.Millisecond)
+	deadline := time.Now().Add(5 * time.Second)
+	for countBody(t, m, "old") != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("sweeper did not delete old replies")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	m.rs.stopSweeper()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sweeper did not stop")
 	}
 }
 
