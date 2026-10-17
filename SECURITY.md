@@ -414,7 +414,7 @@ only in `-tags reply` builds.
 | Site archives | entries of every kind / zip central directory / tar headers in front of one entry / archives parsed at once (others wait 5s, then `503`) | 4,096 / 2 MiB / 64 KiB / 2 | (code) |
 | TTL | `ttl` value length; longer is `400` before parsing | 64 bytes | (code) |
 | Publish | bytes before a multipart publish's file part body (preamble, earlier form fields, the part's headers); over it `431` | 16 KiB | (code) |
-| Bulk rerender | sweeps at once (another gets `409`) / slugs read per page / results and failures listed | 1 / 500 / 100 each | (code) |
+| Bulk rerender | sweeps at once (another gets `409`) / slugs read per page / results and failures listed / run time | 1 / 500 / 100 each / 30 min (resume with `?after=`) | (code) |
 | Downloads | byte ranges honoured per request (more, or a `Range` header over 128 bytes, gets the whole body) | 1 | (code) |
 | Admission | requests in progress per listener / per client; excess `503` | 256 / 32 | `--max-requests`, `--max-requests-per-client` |
 | Admission | open connections per listener (further ones wait) / per client (further ones are closed) | 1024 / 64 | `--max-conns`, `--max-conns-per-client` |

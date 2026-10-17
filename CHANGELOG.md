@@ -179,7 +179,10 @@ All notable changes to demiplane are documented here. The format follows
 - **Bulk rerender is bounded.** `POST /rerender` reads the store a page at a
   time, lists at most 100 results and 100 failures, stops when its request
   ends, and runs one sweep at a time (another gets `409`). It refuses a
-  request body (`400`), so a caller that disconnects is noticed.
+  request body (`400`), writes a newline every second once it runs past a
+  second and stops when a write fails, so a client that has gone is noticed
+  even when the server does not cancel the request; and it stops after 30
+  minutes.
 - **Live-reload streams over HTTP/2 (native TLS) no longer reset between
   heartbeats:** the per-frame write deadline is cleared once the frame is
   sent. With `--write-timeout` set, downloads keep the sendfile path.
@@ -320,6 +323,10 @@ All notable changes to demiplane are documented here. The format follows
 - **The browse index shows a large series as `(100+)`,** or `(N+)` when its
   size was not fully counted, and the landing no longer states the total
   number of artifacts; the browse footer reads "More in the gallery".
+- **Upgrade note: a long bulk rerender streams.** A `POST /rerender` that
+  runs over a second answers `200` at once and sends blank lines until its
+  report; the JSON report adds `complete`, plus `next` when the sweep stopped
+  early, and `?after=<slug>` resumes a sweep.
 - **Upgrade note: bulk rerender reports are capped.** `POST /rerender` lists
   at most 100 results and 100 failures (new `failed_count` and `truncated`
   fields carry the rest); read the counts for totals. A second sweep while one
