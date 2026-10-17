@@ -22,7 +22,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/store"
@@ -34,8 +33,6 @@ const (
 	maxReplyBody = 8 << 10 // 8 KiB
 	// maxRequestBody caps the whole submit request (form fields + overhead).
 	maxRequestBody = 16 << 10 // 16 KiB
-	// maxRepliesPerSlug caps replies accrued against one artifact. Over → 429.
-	maxRepliesPerSlug = 1000
 )
 
 // validKinds is the allowed set of reply kinds.
@@ -60,6 +57,8 @@ type Module struct {
 	// pool runs hook events; created on first use from hook (hook.go).
 	poolOnce sync.Once
 	pool     *hookPool
+	// adm holds the admission and storage limits (admission.go).
+	adm *admission
 }
 
 // Name identifies the module (and its data-dir key).
@@ -150,32 +149,60 @@ func (m *Module) artifactExists(slug string) bool {
 	return ok
 }
 
-// handleForm renders the JS-free reply form for an existing artifact.
+// handleForm renders the JS-free reply form for an artifact that accepts
+// replies.
 func (m *Module) handleForm(w http.ResponseWriter, r *http.Request) {
 	if !m.ready(w) {
 		return
 	}
 	slug := r.PathValue("slug")
-	if !m.artifactExists(slug) {
+	_, ref, err := m.target(r, slug)
+	switch {
+	case errors.Is(err, errNoReplies):
 		http.NotFound(w, r)
+		return
+	case err != nil:
+		log.Printf("reply: target lookup failed: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	case ref != nil:
+		ref.write(w)
+		http.Error(w, ref.msg, ref.status)
 		return
 	}
 	writeHTML(w, http.StatusOK, formPage(slug, ""))
 }
 
-// handleSubmit stores a reply. Mesh-only (open at transport, like GET /{slug}).
-// Accepts a browser form post or a JSON body; the response form follows Accept.
+// handleSubmit stores a reply. Open to any viewer of a reply-enabled artifact
+// (with its password, if it has one), under the admission limits in
+// admission.go. Accepts a browser form post or a JSON body; the response form
+// follows Accept.
 func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	if !m.ready(w) {
 		return
 	}
 	slug := r.PathValue("slug")
-	if !m.artifactExists(slug) {
+	_, ref, err := m.target(r, slug)
+	switch {
+	case errors.Is(err, errNoReplies):
 		http.NotFound(w, r)
+		return
+	case err != nil:
+		log.Printf("reply: target lookup failed: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if ref == nil {
+		ref = m.rate(r, slug)
+	}
+	if ref != nil {
+		ref.write(w)
+		http.Error(w, ref.msg, ref.status)
 		return
 	}
 
-	// Cap the whole request body before parsing (anti-abuse on an open endpoint).
+	// Cap the whole request body, in bytes and in time, before parsing.
+	bodyDeadline(w)
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 
 	kind, body, isJSON, err := parseSubmission(r)
@@ -201,31 +228,17 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	n, err := m.rs.count(slug)
+	rep, ref, err := m.record(slug, kind, body)
 	if err != nil {
-		log.Printf("reply: count failed: %v", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if n >= maxRepliesPerSlug {
-		http.Error(w, "this artifact has reached its reply limit", http.StatusTooManyRequests)
-		return
-	}
-
-	ticket, ok := m.reserveHook()
-	if !ok {
-		w.Header().Set("Retry-After", "5")
-		http.Error(w, "the server is busy; your reply was not recorded, try again shortly", http.StatusServiceUnavailable)
-		return
-	}
-	rep, err := m.rs.add(slug, kind, body, time.Now())
-	if err != nil {
-		ticket.release()
 		log.Printf("reply: add failed: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	ticket.fire(rep)
+	if ref != nil {
+		ref.write(w)
+		http.Error(w, ref.msg, ref.status)
+		return
+	}
 
 	if isJSON || wantsJSON(r) {
 		writeJSON(w, http.StatusCreated, rep)
@@ -241,11 +254,12 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 //
 // Honesty is structural: this handler renders a "recorded" confirmation ONLY on
 // the success branch, AFTER the row is durably inserted. Every failure path —
-// unknown/private slug, empty answer, storage down, cap reached — renders an
-// explicit "not recorded" page with the matching status. Because the browser
-// simply navigates to whatever this returns (no JS), the viewer cannot be shown
-// success on a failure. Kind is fixed to "comment": a question answer is a
-// comment-kind reply (Approve/Defer sign-off chrome does not fit a classroom).
+// unknown/private/disabled slug, missing password, rate limit, empty answer,
+// storage down, a limit reached — renders an explicit "not recorded" page with
+// the matching status. Because the browser simply navigates to whatever this
+// returns (no JS), the viewer cannot be shown success on a failure. Kind is
+// fixed to "comment": a question answer is a comment-kind reply (Approve/Defer
+// sign-off chrome does not fit a classroom).
 func (m *Module) handleContentSubmit(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	if m.rs == nil {
@@ -253,12 +267,28 @@ func (m *Module) handleContentSubmit(w http.ResponseWriter, r *http.Request) {
 			"The server could not reach reply storage, so your answer was not recorded. Please try again shortly.", "")
 		return
 	}
-	if !m.artifactExists(slug) {
-		// Unknown or private/expired slug: no page here to answer.
+	_, ref, err := m.target(r, slug)
+	switch {
+	case errors.Is(err, errNoReplies):
+		// Unknown, private, expired, or not taking answers: no page here to answer.
 		http.NotFound(w, r)
+		return
+	case err != nil:
+		log.Printf("reply: target lookup failed: %v", err)
+		m.writeAnswer(w, slug, http.StatusInternalServerError, false,
+			"The server hit an error and your answer was not recorded. Please try again.", "")
+		return
+	}
+	if ref == nil {
+		ref = m.rate(r, slug)
+	}
+	if ref != nil {
+		ref.write(w)
+		m.writeAnswer(w, slug, ref.status, false, answerRefusal(ref), "")
 		return
 	}
 
+	bodyDeadline(w)
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	if err := r.ParseForm(); err != nil {
 		var maxErr *http.MaxBytesError
@@ -284,35 +314,18 @@ func (m *Module) handleContentSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	n, err := m.rs.count(slug)
+	_, ref, err = m.record(slug, "comment", body)
 	if err != nil {
-		log.Printf("reply: count failed: %v", err)
-		m.writeAnswer(w, slug, http.StatusInternalServerError, false,
-			"The server hit an error and your answer was not recorded. Please try again.", "")
-		return
-	}
-	if n >= maxRepliesPerSlug {
-		m.writeAnswer(w, slug, http.StatusTooManyRequests, false,
-			"This page has reached its answer limit, so your answer was not recorded.", "")
-		return
-	}
-
-	ticket, ok := m.reserveHook()
-	if !ok {
-		w.Header().Set("Retry-After", "5")
-		m.writeAnswer(w, slug, http.StatusServiceUnavailable, false,
-			"The server is busy, so your answer was not recorded. Please try again shortly.", "")
-		return
-	}
-	rep, err := m.rs.add(slug, "comment", body, time.Now())
-	if err != nil {
-		ticket.release()
 		log.Printf("reply: add failed: %v", err)
 		m.writeAnswer(w, slug, http.StatusInternalServerError, false,
 			"The server could not save your answer, so it was not recorded. Please try again.", "")
 		return
 	}
-	ticket.fire(rep)
+	if ref != nil {
+		ref.write(w)
+		m.writeAnswer(w, slug, ref.status, false, answerRefusal(ref), "")
+		return
+	}
 
 	// Forward flow (?next= publish param): the baked form carries the follow-up
 	// slug as a hidden field. Re-validated here (a hidden field is
@@ -322,6 +335,23 @@ func (m *Module) handleContentSubmit(w http.ResponseWriter, r *http.Request) {
 	// Reached only after a durable insert — this is the one place success is told.
 	writeHTML(w, http.StatusCreated,
 		answerPage(slug, true, "Your answer was recorded.", body, next))
+}
+
+// answerRefusal is the reader-facing "not recorded" text for a refusal.
+func answerRefusal(ref *refusal) string {
+	switch ref.status {
+	case http.StatusUnauthorized:
+		return "This page needs its password, so your answer was not recorded. Open the page with its password and try again."
+	case http.StatusTooManyRequests:
+		if ref.capReached {
+			return "This page has reached its answer limit, so your answer was not recorded."
+		}
+		return "Too many answers are arriving right now, so yours was not recorded. Please wait a minute and try again."
+	case http.StatusInsufficientStorage:
+		return "The server has no room for more answers, so yours was not recorded."
+	default:
+		return "The server is busy, so your answer was not recorded. Please try again shortly."
+	}
 }
 
 // handleNextWait is the forward-flow wait endpoint the success confirmation

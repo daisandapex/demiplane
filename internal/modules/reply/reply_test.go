@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/limit"
 	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/store"
 )
@@ -62,12 +63,13 @@ func setup(t *testing.T) (*httptest.Server, *Module) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	if _, err := st.Put(store.PutOptions{Slug: "report"}, strings.NewReader("<html>r</html>")); err != nil {
+	if _, err := st.Put(store.PutOptions{Slug: "report", Replies: true}, strings.NewReader("<html>r</html>")); err != nil {
 		t.Fatalf("seed artifact: %v", err)
 	}
 
 	h := &fakeHost{st: st, dataDir: t.TempDir()}
 	m := &Module{}
+	m.setLimits(openLimits())
 	mux := http.NewServeMux()
 	m.Routes(mux, h)
 	if m.rs == nil {
@@ -77,6 +79,14 @@ func setup(t *testing.T) (*httptest.Server, *Module) {
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts, m
+}
+
+// openLimits is DefaultLimits without the rate limits, so a test can submit
+// more than a client's per-minute allowance. Admission tests set their own.
+func openLimits() Limits {
+	l := DefaultLimits()
+	l.RateClient, l.RateTarget, l.RateGlobal = limit.Rate{}, limit.Rate{}, limit.Rate{}
+	return l
 }
 
 // controlSetup is setup under the name that mirrors contentSetup.
@@ -250,11 +260,12 @@ func contentSetup(t *testing.T) (*httptest.Server, *Module) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	if _, err := st.Put(store.PutOptions{Slug: "report"}, strings.NewReader("<html>r</html>")); err != nil {
+	if _, err := st.Put(store.PutOptions{Slug: "report", Replies: true}, strings.NewReader("<html>r</html>")); err != nil {
 		t.Fatalf("seed artifact: %v", err)
 	}
 	h := &fakeHost{st: st, dataDir: t.TempDir()}
 	m := &Module{}
+	m.setLimits(openLimits())
 	mux := http.NewServeMux()
 	m.ContentRoutes(mux, h)
 	if m.rs == nil {

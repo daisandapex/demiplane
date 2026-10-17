@@ -206,7 +206,11 @@ func (s *Server) ContentHandler() http.Handler {
 	// The bare content root has no landing on this plane (the landing lives on the
 	// control origin); serve the themed 404 rather than ServeMux's plaintext one.
 	mux.HandleFunc("GET /{$}", s.serveContentNotFound)
-	return withSecurityHeaders(mux)
+	// The content plane's only writes are module submit routes (the reply
+	// module's POST /answer/{slug}). The same cross-origin write guard as the
+	// control plane keeps another site from posting to them through a
+	// visitor's browser. It cannot tell apart two pages on this origin.
+	return withSecurityHeaders(s.guardCrossOriginWrites(mux))
 }
 
 // Handler returns a single combined handler that serves BOTH the control plane
@@ -223,7 +227,7 @@ func (s *Server) Handler() http.Handler {
 	s.mountCoreContentRoutes(mux)
 	s.mountContentRouteModules(mux)
 	mux.HandleFunc("GET /{slug}", s.handleGet)
-	return withSecurityHeaders(mux)
+	return withSecurityHeaders(s.guardCrossOriginWrites(mux))
 }
 
 // registerControlRoutes mounts every route except the artifact catch-all
@@ -432,13 +436,23 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	}
 	defer body.Close()
 
+	// Replies are accepted only for artifacts whose publish enabled them; the
+	// choice is stored with the artifact and replaced by the next publish.
+	// ?reply=form enables the reply module's Approve/Defer/Comment form at
+	// /reply/<slug> without changing the page. Neither mode works on a private
+	// artifact, whose slug is never offered to a replier.
+	mode := replyMode(q)
+	if mode != "" && private {
+		http.Error(w, "?reply cannot be combined with ?private — a private capability page cannot collect replies", http.StatusBadRequest)
+		return
+	}
 	// An inline reply box (?reply=question) only makes sense baked into a
 	// server-rendered page that answers at a stable, publicly-addressable URL: the
 	// box posts to /answer/<slug> on the content plane, and the submit handler
 	// answers only for public (non-private) slugs. Require ?render=md and a named
 	// ?slug=, and reject ?private — the combinations that would otherwise produce a
 	// box that can never record an answer.
-	replyBox := replyRequested(q)
+	replyBox := mode == replyModeQuestion
 	if replyBox {
 		if !renderRequested(q) {
 			http.Error(w, "?reply requires ?render=md — the reply box is baked into the rendered page", http.StatusBadRequest)
@@ -556,6 +570,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		// this slug by an earlier rendered publish (store.Put).
 		Source:     sourceBody,
 		RenderSpec: renderSpec,
+		Replies:    mode != "",
 	}
 	art, err := s.store.Put(opts, src)
 	if err != nil {
@@ -588,6 +603,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 			"password":     art.HasPassword(),
 			"expires_at":   rfc3339OrEmpty(art.ExpiresAt),
 			"series":       art.Series,
+			"replies":      art.Replies,
 		})
 		return
 	}
@@ -799,18 +815,30 @@ func renderRequested(q url.Values) bool {
 	return false
 }
 
-// replyRequested reports whether the publish asked for an inline reply box via
-// ?reply=question (the Q&A/teaching mode) or a plain truthy ?reply. The box is a
-// server-rendered, JS-free form that posts same-origin to the page's own URL.
-func replyRequested(q url.Values) bool {
+// Reply modes a publish can ask for (replyMode).
+const (
+	// replyModeQuestion bakes the inline answer box into a rendered page.
+	replyModeQuestion = "question"
+	// replyModeForm enables replies through the reply module's own form,
+	// leaving the page as published.
+	replyModeForm = "form"
+)
+
+// replyMode reports which reply mode the publish asked for: "" (replies off),
+// replyModeForm for ?reply=form, and replyModeQuestion for ?reply=question or
+// any other truthy ?reply (the inline box: a server-rendered, JS-free form that
+// posts same-origin to the page's own URL).
+func replyMode(q url.Values) string {
 	if !q.Has("reply") {
-		return false
+		return ""
 	}
 	switch strings.ToLower(strings.TrimSpace(q.Get("reply"))) {
 	case "0", "false", "no", "off":
-		return false
+		return ""
+	case replyModeForm:
+		return replyModeForm
 	default: // "question", "comment", "1", "true", "on", bare ?reply
-		return true
+		return replyModeQuestion
 	}
 }
 

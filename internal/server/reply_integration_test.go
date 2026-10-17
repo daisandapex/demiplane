@@ -9,9 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/daisandapex/demiplane/internal/limit"
 	"github.com/daisandapex/demiplane/internal/store"
 
 	// Compile the reply module into this test binary so Handler() mounts its
@@ -19,8 +21,20 @@ import (
 	// mux-conflict class of bug: a wildcard-first module pattern (/{slug}/reply)
 	// is ambiguous with core's literal-first routes (GET /docs/{page}) and panics
 	// at registration. Run with: go test -tags reply ./internal/server/
-	_ "github.com/daisandapex/demiplane/internal/modules/reply"
+	"github.com/daisandapex/demiplane/internal/modules/reply"
 )
+
+// The registered module is one instance for the whole test binary, so its
+// per-client submission buckets would carry over between tests that all
+// submit from 127.0.0.1. Lift the rate limits here; the reply package tests
+// cover them.
+func init() {
+	l := reply.DefaultLimits()
+	l.RateClient, l.RateTarget, l.RateGlobal = limit.Rate{}, limit.Rate{}, limit.Rate{}
+	if err := reply.ConfigureLimits(l); err != nil {
+		panic(err)
+	}
+}
 
 // TestHandlerMountsReplyModule verifies the full handler (core + reply module)
 // builds without a ServeMux pattern conflict, and that the asymmetric auth wiring
@@ -31,7 +45,7 @@ func TestHandlerMountsReplyModule(t *testing.T) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	if _, err := st.Put(store.PutOptions{Slug: "doc"}, strings.NewReader("<html>x</html>")); err != nil {
+	if _, err := st.Put(store.PutOptions{Slug: "doc", Replies: true}, strings.NewReader("<html>x</html>")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -75,7 +89,7 @@ func TestContentPlaneSameOriginReplySubmit(t *testing.T) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
-	if _, err := st.Put(store.PutOptions{Slug: "lesson"}, strings.NewReader("<html>x</html>")); err != nil {
+	if _, err := st.Put(store.PutOptions{Slug: "lesson", Replies: true}, strings.NewReader("<html>x</html>")); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -176,5 +190,136 @@ func TestForwardFlowEndToEnd(t *testing.T) {
 	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/fw-b" {
 		t.Fatalf("wait after publish = %d loc=%q, want 302 /fw-b",
 			resp.StatusCode, resp.Header.Get("Location"))
+	}
+}
+
+// TestContentPlaneRejectsCrossOriginAnswers: the content listener's write
+// guard refuses browser posts from another origin (including the control
+// origin, which is same-site) and records nothing; a same-origin post and a
+// non-browser client still record.
+func TestContentPlaneRejectsCrossOriginAnswers(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if _, err := st.Put(store.PutOptions{Slug: "lesson", Replies: true}, strings.NewReader("<html>x</html>")); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(New(st, Config{}).ContentHandler())
+	t.Cleanup(ts.Close)
+	post := func(hdr map[string]string) int {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/answer/lesson",
+			strings.NewReader(url.Values{"body": {"answer"}}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for name, hdr := range map[string]map[string]string{
+		"cross-site":     {"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"},
+		"same-site":      {"Sec-Fetch-Site": "same-site"},
+		"foreign origin": {"Origin": "https://evil.example"},
+	} {
+		if code := post(hdr); code != http.StatusForbidden {
+			t.Errorf("%s answer = %d, want 403", name, code)
+		}
+	}
+	if code := post(map[string]string{"Sec-Fetch-Site": "same-origin"}); code != http.StatusCreated {
+		t.Errorf("same-origin answer = %d, want 201", code)
+	}
+	if code := post(nil); code != http.StatusCreated {
+		t.Errorf("non-browser answer = %d, want 201", code)
+	}
+	resp, err := http.Get(ts.URL + "/lesson")
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET still serves: %v %v", err, resp)
+	}
+	resp.Body.Close()
+}
+
+// TestReplyEnablementFollowsThePublish: replies are accepted only after a
+// publish that asked for them, and the next publish without ?reply turns
+// them off again.
+func TestReplyEnablementFollowsThePublish(t *testing.T) {
+	ts := newTestServer(t, "")
+	reply := func(slug string) int {
+		resp, err := http.Post(ts.URL+"/reply/"+slug, "application/json",
+			strings.NewReader(`{"kind":"approve","body":"ok"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	publish(t, ts, "?slug=plain", "<html>a</html>")
+	if code := reply("plain"); code != http.StatusNotFound {
+		t.Fatalf("reply to a page published without ?reply = %d, want 404", code)
+	}
+	publish(t, ts, "?slug=plain&reply=form", "<html>a</html>")
+	if code := reply("plain"); code != http.StatusCreated {
+		t.Fatalf("reply after ?reply=form = %d, want 201", code)
+	}
+	publish(t, ts, "?slug=plain", "<html>b</html>")
+	if code := reply("plain"); code != http.StatusNotFound {
+		t.Fatalf("reply after republishing without ?reply = %d, want 404", code)
+	}
+	publish(t, ts, "?render=md&slug=lesson-x&reply=question", "# Q")
+	if code := reply("lesson-x"); code != http.StatusCreated {
+		t.Fatalf("reply to a ?reply=question page = %d, want 201", code)
+	}
+	resp, err := http.Post(ts.URL+"/publish?reply=form&private=true", "text/html", strings.NewReader("<html>p</html>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("?reply=form with ?private = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestAnswerNeedsThePagePassword runs the real view-password gate: an answer
+// to a password-protected lesson needs the password, as viewing it does.
+func TestAnswerNeedsThePagePassword(t *testing.T) {
+	ts := newTestServer(t, "")
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/publish?render=md&slug=secret-lesson&reply=question",
+		strings.NewReader("# Q"))
+	req.Header.Set(PasswordHeader, "letmein")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("publish = %d", resp.StatusCode)
+	}
+	answer := func(pass string) int {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/answer/secret-lesson",
+			strings.NewReader("body=mine"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if pass != "" {
+			req.SetBasicAuth("", pass)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := answer(""); code != http.StatusUnauthorized {
+		t.Fatalf("answer without the password = %d, want 401", code)
+	}
+	if code := answer("nope"); code != http.StatusUnauthorized {
+		t.Fatalf("answer with a wrong password = %d, want 401", code)
+	}
+	if code := answer("letmein"); code != http.StatusCreated {
+		t.Fatalf("answer with the password = %d, want 201", code)
 	}
 }
