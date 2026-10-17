@@ -414,7 +414,7 @@ only in `-tags reply` builds.
 | Site archives | entries of every kind / zip central directory / tar headers in front of one entry / archives parsed at once (others wait 5s, then `503`) | 4,096 / 2 MiB / 64 KiB / 2 | (code) |
 | TTL | `ttl` value length; longer is `400` before parsing | 64 bytes | (code) |
 | Publish | bytes before a multipart publish's file part body (preamble, earlier form fields, the part's headers); over it `431` | 16 KiB | (code) |
-| Bulk rerender | sweeps at once (another gets `409`) / slugs read per page / results and failures listed / run time | 1 / 500 / 100 each / 30 min (resume with `?after=`) | (code) |
+| Bulk rerender | sweeps at once (another gets `409`) / slugs read per page / results and failures listed / run time / one write | 1 / 500 / 100 each / 30 min (resume with `?after=`) / 10s | (code) |
 | Downloads | byte ranges honoured per request (more, or a `Range` header over 128 bytes, gets the whole body) | 1 | (code) |
 | Admission | requests in progress per listener / per client; excess `503` | 256 / 32 | `--max-requests`, `--max-requests-per-client` |
 | Admission | open connections per listener (further ones wait) / per client (further ones are closed) | 1024 / 64 | `--max-conns`, `--max-conns-per-client` |
@@ -472,6 +472,11 @@ Notes on the limits:
   publish may send at most 16 KiB before its file part's body (`431`
   otherwise), so part headers are never held beyond that, and only the
   filename is kept while the body streams.
+- **Bulk rerender.** `POST /rerender` is the one response that outlives
+  `--response-timeout`: it may run for up to 30 minutes, writing a newline
+  every second. Each of its writes (keep-alive or report) must complete
+  within 10 seconds, or the sweep stops and frees its lock and admission
+  slot. `--write-timeout`, when set, still bounds the whole response.
 - **Order of checks.** Body and write deadlines are set first, so they also
   bound a request refused before routing (a service-worker fetch, an unknown
   `Host`, an ambiguous path). Admission counts only requests that pass those

@@ -183,9 +183,14 @@ All notable changes to demiplane are documented here. The format follows
   time, lists at most 100 results and 100 failures, stops when its request
   ends, and runs one sweep at a time (another gets `409`). It refuses a
   request body (`400`), writes a newline every second once it runs past a
-  second and stops when a write fails, so a client that has gone is noticed
-  even when the server does not cancel the request; and it stops after 30
-  minutes.
+  second and stops when a write fails or takes over 10 seconds, so a client
+  that has gone or stopped reading is noticed even when the server does not
+  cancel the request; and it stops after 30 minutes. A resumed
+  `?after=` sweep that stops early reports a resume point at or after its
+  `after`, never the start of the store.
+- **Refused publishes are answered without reading the rest of the body**
+  (for example a multipart upload over the 16 KiB header limit), and the
+  connection is closed.
 - **Live-reload streams over HTTP/2 (native TLS) no longer reset between
   heartbeats:** the per-frame write deadline is cleared once the frame is
   sent. With `--write-timeout` set, downloads keep the sendfile path.
