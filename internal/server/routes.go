@@ -24,13 +24,14 @@ import (
 // A feature file registers with registerCoreControlRoute / registerCoreContentRoute
 // from its init(); registerControlRoutes, ContentHandler, and Handler mount the
 // collected routes. Reserved top-level segments are registered as reserved slugs
-// so an artifact can never shadow a core route (same invariant core holds for its
-// own literal paths and for module routes).
+// at that same init-time registration, not when a handler is mounted, so every
+// process that links this package refuses them, including `demiplane receive`,
+// which stores artifacts without ever building an HTTP handler.
 
 // coreRoute is one feature-contributed route group.
 type coreRoute struct {
 	// reserved lists top-level path segments this route owns (e.g. "connect").
-	// They are registered as reserved slugs at mount time. Pass nil for routes
+	// They are registered as reserved slugs at registration. Pass nil for routes
 	// on dynamic path shapes that cannot shadow a flat slug (e.g. the SSE
 	// GET /{slug}/_events sub-path or GET /{site}/{path...} multi-segment paths).
 	reserved []string
@@ -51,30 +52,31 @@ var (
 // init() (e.g. connect.go, gallery.go). reserved names it owns are reserved as
 // slugs at mount time.
 func registerCoreControlRoute(reserved []string, register func(mux *http.ServeMux, s *Server)) {
+	store.AddReservedSlugs(reserved...)
 	coreControlRoutes = append(coreControlRoutes, coreRoute{reserved: reserved, register: register})
 }
 
 // registerCoreContentRoute is the seam a CONTENT-ORIGIN feature calls from its
 // init() (e.g. live.go, site.go).
 func registerCoreContentRoute(reserved []string, register func(mux *http.ServeMux, s *Server)) {
+	store.AddReservedSlugs(reserved...)
 	coreContentRoutes = append(coreContentRoutes, coreRoute{reserved: reserved, register: register})
 }
 
-// mountCoreControlRoutes mounts every registered control route onto mux and
-// reserves the slugs they own. Called by registerControlRoutes (shared by the
-// split ControlHandler and the combined Handler).
+// mountCoreControlRoutes mounts every registered control route onto mux (their
+// names were reserved at registration). Called by registerControlRoutes (shared
+// by the split ControlHandler and the combined Handler).
 func (s *Server) mountCoreControlRoutes(mux *http.ServeMux) {
 	for _, rt := range coreControlRoutes {
-		store.AddReservedSlugs(rt.reserved...)
 		rt.register(mux, s)
 	}
 }
 
-// mountCoreContentRoutes mounts every registered content route onto mux and
-// reserves the slugs they own. Called by ContentHandler and the combined Handler.
+// mountCoreContentRoutes mounts every registered content route onto mux (their
+// names were reserved at registration). Called by ContentHandler and the
+// combined Handler.
 func (s *Server) mountCoreContentRoutes(mux *http.ServeMux) {
 	for _, rt := range coreContentRoutes {
-		store.AddReservedSlugs(rt.reserved...)
 		rt.register(mux, s)
 	}
 }

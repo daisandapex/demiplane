@@ -114,12 +114,11 @@ func New(st *store.Store, cfg Config) *Server {
 }
 
 // mountContentRouteModules mounts every compiled-in module's content-origin
-// routes and reserves the slugs they own, before the artifact catch-all. Shared
-// by ContentHandler and the combined same-origin Handler so a module's
+// routes before the artifact catch-all (module.Register reserved their names).
+// Shared by ContentHandler and the combined same-origin Handler so a module's
 // same-origin submit path exists wherever artifact bodies are served.
 func (s *Server) mountContentRouteModules(mux *http.ServeMux) {
 	for _, rm := range s.contentRoutes {
-		store.AddReservedSlugs(rm.ContentReserved()...)
 		rm.ContentRoutes(mux, s)
 	}
 }
@@ -229,10 +228,10 @@ func (s *Server) registerControlRoutes(mux *http.ServeMux) {
 	s.mountCoreControlRoutes(mux)
 
 	// Compiled-in route modules mount before the catch-all GET /{slug}. Their
-	// reserved top-level segments are registered so an artifact slug can never
-	// shadow a module route — the same invariant core holds for its own paths.
+	// top-level segments were reserved when the module registered, so an
+	// artifact slug can never shadow a module route, in this process or in
+	// `demiplane receive`.
 	for _, rm := range s.routes {
-		store.AddReservedSlugs(rm.Reserved()...)
 		rm.Routes(mux, s)
 	}
 }

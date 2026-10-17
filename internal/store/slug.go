@@ -28,9 +28,10 @@ var reservedSlugs = map[string]bool{
 }
 
 // AddReservedSlugs registers additional names that must not be claimed as
-// artifact slugs. Modules that mount top-level routes call it (via core, at
-// startup) so an artifact can never shadow a module route. NOT safe for
-// concurrent use: invoke once during startup, before serving.
+// artifact slugs. Route registration calls it from package init (core features
+// via internal/server's route seam, modules via module.Register), so every
+// process that links a route refuses its name, whether or not it serves HTTP.
+// NOT safe for concurrent use: call it only during package initialisation.
 func AddReservedSlugs(names ...string) {
 	for _, n := range names {
 		if n != "" {

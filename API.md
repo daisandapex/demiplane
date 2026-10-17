@@ -659,7 +659,7 @@ These names collide with built-in routes and are rejected (`400`) as a `?slug=`,
 so an artifact can never shadow a route: `publish`, `list`, `docs`, `help`,
 `help.json`, `llms.txt`. Feature routes reserve their own top segments too
 (for example `connect`, `gallery`, `rerender`, `reply`, `replies`, `answer`,
-`_events`).
+`_events`). `demiplane receive` refuses the same names.
 
 ## See also
 

@@ -8,6 +8,10 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **`demiplane receive` refuses route names.** Route names are reserved when a
+  route registers, not when the HTTP handlers are built, so SSH ingest can no
+  longer create an artifact a route shadows (`gallery`, `connect`, `answer`
+  and the rest).
 - **MCP `publish` paths are confined to a publish root.** The tool's `path`
   argument must resolve inside `--publish-root` / `DEMIPLANE_PUBLISH_ROOT`
   (default: the working directory of `demiplane mcp`) and is opened through that
