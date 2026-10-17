@@ -153,6 +153,7 @@ func runServe(args []string) error {
 	unsafeSameOrigin := fs.Bool("unsafe-same-origin", false, "serve artifacts and the control plane on ONE origin (legacy; re-enables the stored-XSS footgun ADR 0003 closes)")
 	dir := fs.String("store", "", "directory for content + metadata (required)")
 	baseURL := fs.String("base-url", "", "advertised control-plane base URL; if empty, derived from request Host")
+	allowedHosts := fs.String("allowed-hosts", "", "comma-separated Host values to serve (host or host:port); others get 421. The --base-url and --content-base-url hosts are always included. Empty = any Host")
 	tokenFile := fs.String("token-file", "", "file holding the bearer token for publish/delete/list; overrides DEMIPLANE_TOKEN")
 	sweep := fs.Duration("sweep-interval", time.Minute, "how often to reap past-TTL artifacts")
 	browse := fs.Bool("browse", false, "serve an HTML index of non-private artifacts at GET /")
@@ -170,6 +171,10 @@ func runServe(args []string) error {
 	}
 	if *dir == "" {
 		return fmt.Errorf("--store is required")
+	}
+	hosts, err := server.ParseHostList(*allowedHosts)
+	if err != nil {
+		return err
 	}
 	if *themeName != "" && !theme.Valid(*themeName) {
 		return fmt.Errorf("--theme %q: unknown theme (choose one of: %s)", *themeName, strings.Join(theme.Names, ", "))
@@ -243,6 +248,7 @@ func runServe(args []string) error {
 		BaseURL:          *baseURL,
 		ContentBaseURL:   *contentBaseURL,
 		ContentPort:      cPort,
+		AllowedHosts:     hosts,
 		AuthToken:        token,
 		Browse:           *browse,
 		MaxUpload:        *maxUpload,

@@ -218,7 +218,12 @@ inherits the posture above and was reviewed adversarially before release.
   `--base-url` is unset — `llms.txt`, publish responses, minted links) pass
   through a character allowlist first, so a crafted Host header cannot inject
   content into those surfaces. Setting `--base-url` removes the reflection
-  entirely.
+  entirely: the control URL is the base URL, and the content URL is
+  `--content-base-url` or, when that is unset, the base URL's scheme and host
+  with the content port. For a public deployment, set both base URLs and an
+  accepted-host policy, `--allowed-hosts <host[:port],...>`: a request whose
+  `Host` is not listed (the base URL hosts are always included) gets
+  `421 Misdirected Request` on both planes before routing.
 - **Deletion is durable.** Delete, expiry and overwrite record the files they
   stop referencing in the same transaction that drops the reference. A file
   that cannot be unlinked (a read-only or failing disk) is logged and retried

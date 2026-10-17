@@ -8,6 +8,11 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **New `--allowed-hosts` accepted-host policy.** When set, requests for any
+  other `Host` (beyond the `--base-url` and `--content-base-url` hosts) get
+  `421` on both planes. With `--base-url` set and no `--content-base-url`,
+  content URLs are now derived from the base URL rather than the request
+  `Host`.
 - **The control-plane write guard compares full origins.** Its `Origin`
   fallback now matches scheme, host and port (default ports normalized)
   against the `--base-url` origin when set, else the listener's own origin,

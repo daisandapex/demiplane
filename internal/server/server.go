@@ -45,8 +45,12 @@ type Config struct {
 	// derive the advertised content URL from a request that arrived on the
 	// control listener. Empty = same-origin mode (content == control origin).
 	ContentPort string
-	Browse      bool  // serve an HTML index of non-private artifacts at GET /
-	MaxUpload   int64 // max publish body bytes; 0 = unlimited (the CLI defaults it to 100 MiB)
+	// AllowedHosts, when non-empty, is the accepted-host policy: requests
+	// whose Host is not listed (nor the host of BaseURL/ContentBaseURL) get
+	// 421 on both planes. See hostpolicy.go.
+	AllowedHosts []string
+	Browse       bool  // serve an HTML index of non-private artifacts at GET /
+	MaxUpload    int64 // max publish body bytes; 0 = unlimited (the CLI defaults it to 100 MiB)
 	// RenderTheme names the built-in theme for ?render=md pages (see
 	// internal/theme: "light"/"dark"); empty = the default house style.
 	RenderTheme string
@@ -72,6 +76,7 @@ type Server struct {
 	baseURL          string
 	contentBaseURL   string
 	contentPort      string
+	hostRules        []hostRule // accepted-host policy; nil = any Host
 	authToken        string
 	browse           bool
 	maxUpload        int64
@@ -97,6 +102,7 @@ func New(st *store.Store, cfg Config) *Server {
 		baseURL:          strings.TrimRight(cfg.BaseURL, "/"),
 		contentBaseURL:   strings.TrimRight(cfg.ContentBaseURL, "/"),
 		contentPort:      cfg.ContentPort,
+		hostRules:        buildHostRules(cfg.AllowedHosts, cfg.BaseURL, cfg.ContentBaseURL),
 		authToken:        cfg.AuthToken,
 		browse:           cfg.Browse,
 		maxUpload:        cfg.MaxUpload,
@@ -161,7 +167,7 @@ func (s *Server) ModuleDataDir(name string) (string, error) {
 func (s *Server) ControlHandler() http.Handler {
 	mux := http.NewServeMux()
 	s.registerControlRoutes(mux)
-	return withSecurityHeaders(canonicalPaths(s.guardCrossOriginWrites(mux)))
+	return withSecurityHeaders(s.hostPolicy(canonicalPaths(s.guardCrossOriginWrites(mux))))
 }
 
 // ContentHandler returns the artifact-serving handler: GET /{slug} only. It is
@@ -183,7 +189,7 @@ func (s *Server) ContentHandler() http.Handler {
 	// The bare content root has no landing on this plane (the landing lives on the
 	// control origin); serve the themed 404 rather than ServeMux's plaintext one.
 	mux.HandleFunc("GET /{$}", s.serveContentNotFound)
-	return withSecurityHeaders(canonicalPaths(mux))
+	return withSecurityHeaders(s.hostPolicy(canonicalPaths(mux)))
 }
 
 // Handler returns a single combined handler that serves BOTH the control plane
@@ -200,7 +206,7 @@ func (s *Server) Handler() http.Handler {
 	s.mountCoreContentRoutes(mux)
 	s.mountContentRouteModules(mux)
 	mux.HandleFunc("GET /{slug}", s.handleGet)
-	return withSecurityHeaders(canonicalPaths(mux))
+	return withSecurityHeaders(s.hostPolicy(canonicalPaths(mux)))
 }
 
 // registerControlRoutes mounts every route except the artifact catch-all
@@ -1109,15 +1115,24 @@ func sanitizeHost(host string) string {
 // URL minted while handling a control-listener request (/publish, /list) must
 // point at the content origin, not the request's own host. Resolution order:
 //  1. an explicit --content-base-url (proxy/TLS deployments);
-//  2. derive from the request host, swapping in the content port (the zero-config
-//     two-port default — handles loopback and wildcard binds alike);
-//  3. same-origin mode (no content port): the request origin itself.
+//  2. same-origin mode (no content port): the request base itself;
+//  3. with --base-url set, its scheme and host with the content port swapped
+//     in, so an authoritative base URL keeps the Host header out of every
+//     advertised URL;
+//  4. otherwise derive from the request host, swapping in the content port
+//     (the zero-config two-port default — handles loopback and wildcard binds
+//     alike).
 func (s *Server) contentBase(r *http.Request) string {
 	if s.contentBaseURL != "" {
 		return s.contentBaseURL
 	}
 	if s.contentPort == "" {
 		return s.requestBase(r)
+	}
+	if s.baseURL != "" {
+		if u, err := url.Parse(s.baseURL); err == nil && u.Hostname() != "" {
+			return u.Scheme + "://" + net.JoinHostPort(u.Hostname(), s.contentPort)
+		}
 	}
 	scheme := "http"
 	if r.TLS != nil {
