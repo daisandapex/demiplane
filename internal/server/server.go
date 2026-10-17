@@ -212,10 +212,13 @@ func (s *Server) ContentHandler() http.Handler {
 	// control origin); serve the themed 404 rather than ServeMux's plaintext one.
 	mux.HandleFunc("GET /{$}", s.serveContentNotFound)
 	// The content plane's only writes are module submit routes (the reply
-	// module's POST /answer/{slug}). The same cross-origin write guard as the
-	// control plane keeps another site from posting to them through a
-	// visitor's browser. It cannot tell apart two pages on this origin.
-	return withSecurityHeaders(s.withRequestLimits(s.guardCrossOriginWrites(mux)))
+	// module's POST /answer/{slug}). A cross-origin write guard keeps another
+	// site from posting to them through a visitor's browser. It admits an
+	// opaque origin (a sandboxed page, as demiplane serves artifacts) unless
+	// the Referer names another origin, and it cannot tell apart two pages on
+	// this origin, so it is defence in depth: reply admission rests on the
+	// per-artifact opt-in, the view password and the reply limits.
+	return withSecurityHeaders(s.withRequestLimits(s.guardContentWrites(mux)))
 }
 
 // Handler returns a single combined handler that serves BOTH the control plane
@@ -232,7 +235,9 @@ func (s *Server) Handler() http.Handler {
 	s.mountCoreContentRoutes(mux)
 	s.mountContentRouteModules(mux)
 	mux.HandleFunc("GET /{slug}", s.handleGet)
-	return withSecurityHeaders(s.withRequestLimits(s.guardCrossOriginWrites(mux)))
+	// One origin serves both planes here, so the content plane's sandboxed
+	// pages post from an opaque origin too; see ContentHandler.
+	return withSecurityHeaders(s.withRequestLimits(s.guardContentWrites(mux)))
 }
 
 // registerControlRoutes mounts every route except the artifact catch-all
@@ -283,6 +288,36 @@ func (s *Server) guardCrossOriginWrites(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// guardContentWrites is guardCrossOriginWrites for a listener that serves
+// artifacts: a write from an opaque origin ("Origin: null", as a sandboxed
+// artifact page sends) is admitted unless its Referer names a different
+// origin. Browsers do not let a page forge Referer, though a page can omit
+// it; see ContentHandler for why this is defence in depth only.
+func (s *Server) guardContentWrites(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isCrossOriginWrite(r) && !opaqueOriginWriteOK(r) {
+			http.Error(w, "cross-origin write rejected", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// opaqueOriginWriteOK reports whether a write that isCrossOriginWrite flags
+// came from an opaque origin with no Referer, or a Referer on this request's
+// own host.
+func opaqueOriginWriteOK(r *http.Request) bool {
+	if r.Header.Get("Origin") != "null" {
+		return false
+	}
+	ref := r.Header.Get("Referer")
+	if ref == "" {
+		return true
+	}
+	u, err := url.Parse(ref)
+	return err == nil && u.Host != "" && strings.EqualFold(u.Host, r.Host)
 }
 
 // isCrossOriginWrite reports whether a state-changing request came from a

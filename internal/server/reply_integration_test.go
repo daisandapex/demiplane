@@ -234,6 +234,20 @@ func TestContentPlaneRejectsCrossOriginAnswers(t *testing.T) {
 	if code := post(map[string]string{"Sec-Fetch-Site": "same-origin"}); code != http.StatusCreated {
 		t.Errorf("same-origin answer = %d, want 201", code)
 	}
+	// A sandboxed page (opaque origin) on this content origin still posts.
+	self := strings.TrimPrefix(ts.URL, "http://")
+	for name, hdr := range map[string]map[string]string{
+		"sandboxed, own referer": {"Sec-Fetch-Site": "cross-site", "Origin": "null", "Referer": "http://" + self + "/lesson"},
+		"sandboxed, no referer":  {"Sec-Fetch-Site": "cross-site", "Origin": "null"},
+	} {
+		if code := post(hdr); code != http.StatusCreated {
+			t.Errorf("%s answer = %d, want 201", name, code)
+		}
+	}
+	if code := post(map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "null",
+		"Referer": "https://evil.example/page"}); code != http.StatusForbidden {
+		t.Errorf("opaque origin with a foreign referer = %d, want 403", code)
+	}
 	if code := post(nil); code != http.StatusCreated {
 		t.Errorf("non-browser answer = %d, want 201", code)
 	}
