@@ -8,7 +8,9 @@
 package store
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -62,6 +64,10 @@ type Artifact struct {
 	// Replies is whether the publisher enabled replies (the reply module) for
 	// this artifact. Off unless the publish asked for it.
 	Replies bool
+	// PublishID is a random identifier of the publish that wrote this row. It
+	// is replaced by every publish and kept by a rebake, so it names one
+	// publish (password, privacy, replies and source together) exactly.
+	PublishID string
 }
 
 // LastModified is when the stored bytes last changed, falling back to the
@@ -242,11 +248,21 @@ CREATE TABLE IF NOT EXISTS artifacts (
 		{"source_gen", "ALTER TABLE artifacts ADD COLUMN source_gen TEXT NOT NULL DEFAULT ''"},
 		// When the bytes last changed (publish or rebake); 0 = not recorded.
 		{"modified_at", "ALTER TABLE artifacts ADD COLUMN modified_at INTEGER NOT NULL DEFAULT 0"},
+		// The publish that wrote the row (Artifact.PublishID).
+		{"publish_id", "ALTER TABLE artifacts ADD COLUMN publish_id TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, col := range added {
 		if err := s.addColumnIfMissing(col.name, col.ddl); err != nil {
 			return err
 		}
+	}
+	// Rows written before publish identifiers get one each. Pages baked
+	// before then carry no token bound to it and need a rebake to take
+	// browser replies.
+	if _, err := s.db.Exec(
+		`UPDATE artifacts SET publish_id = lower(hex(randomblob(16))) WHERE publish_id = ''`,
+	); err != nil {
+		return fmt.Errorf("backfill publish ids: %w", err)
 	}
 	// Files whose row is gone (or no longer names them) but which may still be
 	// on disk: recorded in the transaction that drops the reference, removed
@@ -347,6 +363,29 @@ type PutOptions struct {
 	// Replies enables replies for the artifact. Like the password and expiry,
 	// it is replaced by every publish to the slug.
 	Replies bool
+	// PublishID is the new publish's identifier (Artifact.PublishID), for a
+	// caller that needs it before the write, as a render baking it into the
+	// page does. "" = Put generates one. Each publish needs a fresh one
+	// (NewPublishID).
+	PublishID string
+}
+
+// NewPublishID returns a fresh random publish identifier.
+func NewPublishID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate publish id: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// validPublishID reports whether id has NewPublishID's shape.
+func validPublishID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(id)
+	return err == nil && strings.ToLower(id) == id
 }
 
 // Put stores r under a slug and records its metadata, returning the artifact.
@@ -366,6 +405,16 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 	}
 	if err := validateMeta(opts); err != nil {
 		return Artifact{}, err
+	}
+	publishID := opts.PublishID
+	if publishID == "" {
+		id, err := NewPublishID()
+		if err != nil {
+			return Artifact{}, err
+		}
+		publishID = id
+	} else if !validPublishID(publishID) {
+		return Artifact{}, &InputError{Msg: "malformed publish id"}
 	}
 	slug, _, err := s.resolveSlug(opts.Slug, opts.Private)
 	if err != nil {
@@ -438,6 +487,7 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 		ModifiedAt:   now,
 		Version:      gen,
 		Replies:      opts.Replies,
+		PublishID:    publishID,
 	}
 
 	if beforeMetaCommit != nil {
@@ -642,8 +692,8 @@ type priorGen struct {
 // exactly the files this write replaced.
 func (s *Store) swapMeta(a *Artifact, sourceGen string) (priorGen, error) {
 	const q = `
-INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, source_gen, modified_at, replies)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, source_gen, modified_at, replies, publish_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(slug) DO UPDATE SET
     filename      = excluded.filename,
     content_type  = excluded.content_type,
@@ -664,7 +714,8 @@ ON CONFLICT(slug) DO UPDATE SET
     blob_gen      = excluded.blob_gen,
     source_gen    = excluded.source_gen,
     modified_at   = excluded.modified_at,
-    replies       = excluded.replies
+    replies       = excluded.replies,
+    publish_id    = excluded.publish_id
 RETURNING modified_at;`
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -713,7 +764,7 @@ RETURNING modified_at;`
 	if err := tx.QueryRow(q,
 		a.Slug, a.Filename, a.ContentType, a.Size, a.CreatedAt.Unix(), a.Owner,
 		boolToInt(a.Private), a.PasswordHash, unixOrZero(a.ExpiresAt), a.Series, a.RenderSpec,
-		a.Version, sourceGen, unixOrZero(a.ModifiedAt), boolToInt(a.Replies),
+		a.Version, sourceGen, unixOrZero(a.ModifiedAt), boolToInt(a.Replies), a.PublishID,
 	).Scan(&modified); err != nil {
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 	}
@@ -798,10 +849,10 @@ func (s *Store) lookup(slug string) (Artifact, error) {
 		replies  int
 	)
 	err := s.db.QueryRow(
-		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, modified_at, replies
+		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, modified_at, replies, publish_id
 		   FROM artifacts WHERE slug = ?`,
 		slug,
-	).Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec, &a.Version, &modified, &replies)
+	).Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec, &a.Version, &modified, &replies, &a.PublishID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Artifact{}, ErrNotFound
 	}

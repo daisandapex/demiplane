@@ -11,7 +11,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/daisandapex/demiplane/internal/limit"
 	"github.com/daisandapex/demiplane/internal/store"
@@ -203,13 +205,14 @@ func TestContentPlaneRejectsCrossOriginAnswers(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	if _, err := st.Put(store.PutOptions{Slug: "lesson", Replies: true}, strings.NewReader("<html>x</html>")); err != nil {
+	art, err := st.Put(store.PutOptions{Slug: "lesson", Replies: true}, strings.NewReader("<html>x</html>"))
+	if err != nil {
 		t.Fatal(err)
 	}
 	srv := New(st, Config{})
 	ts := httptest.NewServer(srv.ContentHandler())
 	t.Cleanup(ts.Close)
-	token := srv.ReplyFormToken("lesson")
+	token := srv.ReplyFormToken(art)
 	post := func(hdr map[string]string) int {
 		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/answer/lesson",
 			strings.NewReader(url.Values{"body": {"answer"}, "token": {token}}.Encode()))
@@ -427,6 +430,9 @@ func TestBakedReplyTokenLifecycle(t *testing.T) {
 	if again := replyTokenOf(t, page("")); again != first {
 		t.Errorf("a rebake changed the token: %q -> %q", first, again)
 	}
+	if code := answer(first, "", sandboxed); code != http.StatusCreated {
+		t.Errorf("the token after a rebake: %d, want 201", code)
+	}
 
 	publish("pw-2")
 	second := replyTokenOf(t, page("pw-2"))
@@ -438,5 +444,131 @@ func TestBakedReplyTokenLifecycle(t *testing.T) {
 	}
 	if code := answer(second, "pw-2", sandboxed); code != http.StatusCreated {
 		t.Errorf("the current token: %d, want 201", code)
+	}
+}
+
+// formTokenOf fetches the reply module's form for slug and returns its token.
+func formTokenOf(t *testing.T, base, slug string) string {
+	t.Helper()
+	resp, err := http.Get(base + "/reply/" + slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /reply/%s: %d %s", slug, resp.StatusCode, b)
+	}
+	return replyTokenOf(t, string(b))
+}
+
+// postAnswerAs posts an answer to /answer/{slug} from a sandboxed page,
+// with the viewer's password when set, and returns the status.
+func postAnswerAs(t *testing.T, base, slug, token, password string) int {
+	t.Helper()
+	v := url.Values{"body": {"an answer"}, "token": {token}}
+	req, _ := http.NewRequest(http.MethodPost, base+"/answer/"+slug, strings.NewReader(v.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "null")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	if password != "" {
+		req.SetBasicAuth("u", password)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+// TestTokenMintedDuringRepublishRenderIsRefused: while a protected republish
+// renders, the previous public page is still served, and its reply form can
+// be fetched. A token taken from it then must not work once the protected
+// publish commits.
+func TestTokenMintedDuringRepublishRenderIsRefused(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ts := httptest.NewServer(New(st, Config{}).Handler())
+	t.Cleanup(ts.Close)
+	publish := func(password string) {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/publish?slug=quiz&render=md&reply=question",
+			strings.NewReader("# Q\n\nWhy?\n"))
+		if password != "" {
+			req.Header.Set(PasswordHeader, password)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || resp.StatusCode != http.StatusCreated {
+			t.Fatalf("publish: %v %v", err, resp)
+		}
+		resp.Body.Close()
+	}
+	publish("")
+
+	var (
+		once   sync.Once
+		minted string
+	)
+	renderHeld = func() {
+		once.Do(func() { minted = formTokenOf(t, ts.URL, "quiz") })
+	}
+	t.Cleanup(func() { renderHeld = nil })
+	publish("pw-locked")
+	renderHeld = nil
+	if minted == "" {
+		t.Fatal("the render hook did not run")
+	}
+	if code := postAnswerAs(t, ts.URL, "quiz", minted, "pw-locked"); code != http.StatusForbidden {
+		t.Errorf("a token minted from the public page during the protected republish's render: %d, want 403", code)
+	}
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/quiz", nil)
+	req.SetBasicAuth("u", "pw-locked")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if code := postAnswerAs(t, ts.URL, "quiz", replyTokenOf(t, string(page)), "pw-locked"); code != http.StatusCreated {
+		t.Errorf("the protected page's baked token: %d, want 201", code)
+	}
+}
+
+// TestSameSecondRepublishInvalidatesToken: a republish without rendering, in
+// the same second a token was issued, still invalidates it.
+func TestSameSecondRepublishInvalidatesToken(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ts := httptest.NewServer(New(st, Config{}).Handler())
+	t.Cleanup(ts.Close)
+	publish := func(password string) {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/publish?slug=plain&reply=form",
+			strings.NewReader("<html>p</html>"))
+		if password != "" {
+			req.Header.Set(PasswordHeader, password)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || resp.StatusCode != http.StatusCreated {
+			t.Fatalf("publish: %v %v", err, resp)
+		}
+		resp.Body.Close()
+	}
+	// Start just after a second boundary so the whole sequence shares a second.
+	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second + 20*time.Millisecond)))
+	start := time.Now()
+	publish("")
+	tok := formTokenOf(t, ts.URL, "plain")
+	publish("pw-same")
+	if time.Now().Truncate(time.Second) != start.Truncate(time.Second) {
+		t.Skip("the sequence crossed a second boundary; the same-second case was not exercised")
+	}
+	if code := postAnswerAs(t, ts.URL, "plain", tok, "pw-same"); code != http.StatusForbidden {
+		t.Errorf("a token from the previous publish in the same second: %d, want 403", code)
 	}
 }

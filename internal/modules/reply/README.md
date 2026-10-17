@@ -84,13 +84,15 @@ The **content-origin** submit path for the inline reply box (below). It records 
 single free-text answer as a **`comment`**-kind reply and returns a
 **server-rendered** result page: `201` "✓ Recorded" only after the answer is
 durably stored, or an explicit "Not recorded" page
-(`400`/`401`/`404`/`413`/`429`/`503`/`507`) on any failure. The content listener
+(`400`/`401`/`403`/`404`/`409`/`413`/`429`/`503`/`507`) on any failure. The content listener
 refuses cross-origin browser posts (`403`), except from an opaque origin (a
 sandboxed page) whose Referer is absent or on the content origin. A browser post
 (one carrying `Origin` or `Sec-Fetch-Site`) must also carry the box's hidden
-`token`, which is bound to the artifact and its current publish; without a
-valid one the answer is refused with `403` and not recorded. Non-browser
-clients need no token. Mounted via the optional `module.ContentRouteModule` seam so it
+`token`, which is bound to the artifact and its current publish (a random
+identifier every publish replaces and a rebake keeps); without a valid one the
+answer is refused with `403` and not recorded. Non-browser clients need no
+token. An answer whose page is republished while it is being sent is refused
+with `409`. Mounted via the optional `module.ContentRouteModule` seam so it
 lives on the same origin that serves the page. `404` for an unknown/private slug.
 
 ## Inline reply box on a rendered page (Q&A / teaching)

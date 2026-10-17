@@ -70,11 +70,11 @@ type Host interface {
 	// credentials, with core's rate and concurrency limits. The duration is a
 	// Retry-After hint for ViewThrottled and ViewBusy.
 	CheckView(r *http.Request, art store.Artifact) (ViewAccess, time.Duration)
-	// ReplyFormToken mints the submission token a reply form for slug carries
-	// (internal/formtoken), issued now.
-	ReplyFormToken(slug string) string
-	// CheckReplyFormToken reports whether tok is a submission token for art's
-	// slug issued by a form of art's current publish.
+	// ReplyFormToken mints the submission token a reply form for art carries
+	// (internal/formtoken), bound to art's publish.
+	ReplyFormToken(art store.Artifact) string
+	// CheckReplyFormToken reports whether tok is the submission token for
+	// art's slug and publish.
 	CheckReplyFormToken(art store.Artifact, tok string) bool
 }
 

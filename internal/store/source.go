@@ -59,6 +59,9 @@ type SourceRecord struct {
 	Body      []byte    // the original document bytes (markdown)
 	Spec      string    // opaque render parameters captured at publish
 	CreatedAt time.Time // the artifact's publish time, for a stable colophon
+	// PublishID is the publish the source belongs to (Artifact.PublishID); a
+	// rebake keeps it.
+	PublishID string
 	// Version is the artifact's bytes version when the source was read, so a
 	// rebake can refuse to overwrite bytes that changed meanwhile.
 	Version string
@@ -107,10 +110,11 @@ func (s *Store) Source(slug string) (SourceRecord, error) {
 		spec      string
 		blobGen   string
 		sourceGen string
+		publishID string
 	)
 	err := s.db.QueryRow(
-		`SELECT created_at, render_spec, blob_gen, source_gen FROM artifacts WHERE slug = ?`, slug,
-	).Scan(&created, &spec, &blobGen, &sourceGen)
+		`SELECT created_at, render_spec, blob_gen, source_gen, publish_id FROM artifacts WHERE slug = ?`, slug,
+	).Scan(&created, &spec, &blobGen, &sourceGen, &publishID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SourceRecord{}, ErrNotFound
 	}
@@ -137,8 +141,8 @@ func (s *Store) Source(slug string) (SourceRecord, error) {
 		// generation that row named. Only a changed row means the latter.
 		prev := sourceGen
 		err = s.db.QueryRow(
-			`SELECT created_at, render_spec, blob_gen, source_gen FROM artifacts WHERE slug = ?`, slug,
-		).Scan(&created, &spec, &blobGen, &sourceGen)
+			`SELECT created_at, render_spec, blob_gen, source_gen, publish_id FROM artifacts WHERE slug = ?`, slug,
+		).Scan(&created, &spec, &blobGen, &sourceGen, &publishID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return SourceRecord{}, ErrNotFound
 		}
@@ -155,6 +159,7 @@ func (s *Store) Source(slug string) (SourceRecord, error) {
 		Spec:      spec,
 		CreatedAt: time.Unix(created, 0).UTC(),
 		Version:   blobGen,
+		PublishID: publishID,
 	}, nil
 }
 

@@ -6,70 +6,55 @@
 // A token proves that a reply submission came from a form demiplane itself
 // issued for that artifact: the inline reply box baked into a ?reply=question
 // page, or the reply module's /reply/{slug} form. It is bound to the target
-// slug and to the moment it was issued, and signed with a key kept in the
-// store (so baked pages keep working across restarts):
+// slug and to the artifact's publish identifier, a random value the store
+// assigns to every publish and keeps across rebakes, and signed with a key
+// kept in the store (so baked pages keep working across restarts):
 //
-//	<issued-at unix nanoseconds>.<base64url(HMAC-SHA256(key, label|slug|issued-at))[:16 bytes]>
+//	base64url(HMAC-SHA256(key, label|slug|publish id)[:16 bytes])
 //
 // A page on the content origin cannot read another artifact's page (the
 // content sandbox), so it cannot learn a protected artifact's token, and a
-// token for one slug does not verify for another. The issue time lets the
-// checker refuse tokens minted before the artifact's current publish, so a
-// token taken from a page while it was public does not carry over to a
-// republish that added a password.
+// token for one slug does not verify for another. A republish gets a new
+// publish identifier, so tokens issued for an earlier publish, including one
+// taken from a page while it was public, stop working when it lands.
 package formtoken
 
 import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
-	"strconv"
-	"strings"
-	"time"
 )
 
-const label = "demiplane reply-form v1"
+const label = "demiplane reply-form v2"
 
 // tagLen is the signature length kept in a token (128 bits).
 const tagLen = 16
 
-func tag(key []byte, slug string, issued int64) []byte {
+func tag(key []byte, slug, publishID string) []byte {
 	m := hmac.New(sha256.New, key)
 	m.Write([]byte(label))
 	m.Write([]byte{0})
 	m.Write([]byte(slug))
 	m.Write([]byte{0})
-	m.Write([]byte(strconv.FormatInt(issued, 10)))
+	m.Write([]byte(publishID))
 	return m.Sum(nil)[:tagLen]
 }
 
-// Mint returns a token for slug issued at the given time.
-func Mint(key []byte, slug string, issued time.Time) string {
-	n := issued.UnixNano()
-	return strconv.FormatInt(n, 10) + "." + base64.RawURLEncoding.EncodeToString(tag(key, slug, n))
+// Mint returns the token for slug's publish publishID.
+func Mint(key []byte, slug, publishID string) string {
+	return base64.RawURLEncoding.EncodeToString(tag(key, slug, publishID))
 }
 
-// Check reports whether tok is a token for slug, signed with key and issued
-// no earlier than notBefore (a zero notBefore accepts any issue time). The
-// signature is compared in constant time.
-func Check(key []byte, slug, tok string, notBefore time.Time) bool {
-	if len(key) == 0 || len(tok) > 64 {
+// Check reports whether tok is the token for slug's publish publishID under
+// key. The signature is compared in constant time. An empty key or publish
+// identifier never verifies.
+func Check(key []byte, slug, publishID, tok string) bool {
+	if len(key) == 0 || publishID == "" || len(tok) > 64 {
 		return false
 	}
-	ts, sig, ok := strings.Cut(tok, ".")
-	if !ok {
-		return false
-	}
-	n, err := strconv.ParseInt(ts, 10, 64)
-	if err != nil || n <= 0 || strconv.FormatInt(n, 10) != ts {
-		return false
-	}
-	got, err := base64.RawURLEncoding.DecodeString(sig)
+	got, err := base64.RawURLEncoding.DecodeString(tok)
 	if err != nil || len(got) != tagLen {
 		return false
 	}
-	if !hmac.Equal(got, tag(key, slug, n)) {
-		return false
-	}
-	return notBefore.IsZero() || n >= notBefore.UnixNano()
+	return hmac.Equal(got, tag(key, slug, publishID))
 }

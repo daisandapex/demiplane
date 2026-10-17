@@ -40,8 +40,8 @@ Core hands every module a `module.Host` — the entire surface a module may touc
 | `BaseURL() string` | the configured `--base-url` (`""` if unset) |
 | `ModuleDataDir(name) (string, error)` | an isolated `<store>/modules/<name>` dir for your own persistence |
 | `CheckView(r, art) (ViewAccess, time.Duration)` | core's rate-limited view-password check for an artifact |
-| `ReplyFormToken(slug) string` | a submission token for a reply form for `slug` |
-| `CheckReplyFormToken(art, tok) bool` | whether `tok` is a valid token for `art`'s current publish |
+| `ReplyFormToken(art) string` | the submission token for a reply form for `art`'s publish |
+| `CheckReplyFormToken(art, tok) bool` | whether `tok` is the token for `art`'s slug and publish |
 
 A module never imports `internal/server`; the interface is the whole contract.
 

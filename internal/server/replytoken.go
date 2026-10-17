@@ -4,52 +4,34 @@
 package server
 
 import (
-	"encoding/json"
-	"time"
-
 	"github.com/daisandapex/demiplane/internal/formtoken"
 	"github.com/daisandapex/demiplane/internal/store"
 )
 
-// Reply-form submission tokens (internal/formtoken). A ?reply=question page's
-// baked reply box carries a token issued at the page's render time, which the
-// render spec records as Published and a rebake replays, so a rebake bakes the
-// same token. The reply module's own form is issued a fresh token when it is
-// served. A token is accepted for the artifact's current publish only: one
-// issued before that publish's render time is refused.
+// Reply-form submission tokens (internal/formtoken). A token is bound to its
+// artifact's publish identifier (store.Artifact.PublishID), which every
+// publish replaces and a rebake keeps. A ?reply=question page's baked reply
+// box carries the token for the publish being written: the publish handler
+// picks the identifier before rendering and hands the same one to the store.
+// The reply module's own form carries the token for the publish it was
+// served from. Either way a republish, including one that only adds a
+// password, invalidates every earlier token.
 
-// mintReplyToken returns the token for slug issued at the given time.
-func (s *Server) mintReplyToken(slug string, issued time.Time) string {
-	return formtoken.Mint(s.store.FormKey(), slug, issued)
-}
-
-// ReplyFormToken is the module.Host token minter, issuing a token now.
-func (s *Server) ReplyFormToken(slug string) string {
-	return s.mintReplyToken(slug, time.Now())
+// ReplyFormToken is the module.Host token minter.
+func (s *Server) ReplyFormToken(art store.Artifact) string {
+	return formtoken.Mint(s.store.FormKey(), art.Slug, art.PublishID)
 }
 
 // CheckReplyFormToken is the module.Host token check.
 func (s *Server) CheckReplyFormToken(art store.Artifact, tok string) bool {
-	return formtoken.Check(s.store.FormKey(), art.Slug, tok, replyTokenNotBefore(art))
+	return formtoken.Check(s.store.FormKey(), art.Slug, art.PublishID, tok)
 }
 
-// replyTokenNotBefore is the earliest issue time accepted for art: its current
-// publish's render time when a render spec records one, else its publish time.
-func replyTokenNotBefore(art store.Artifact) time.Time {
-	if art.RenderSpec != "" {
-		var spec renderSpec
-		if json.Unmarshal([]byte(art.RenderSpec), &spec) == nil && !spec.Published.IsZero() {
-			return spec.Published
-		}
-	}
-	return art.CreatedAt
-}
-
-// replyTokenFor is the token a page baked at published carries for its reply
-// box posting to replySlug ("" when the page has no reply box).
-func (s *Server) replyTokenFor(replySlug string, published time.Time) string {
+// replyTokenFor is the token a page of publish publishID carries for its
+// reply box posting to replySlug ("" when the page has no reply box).
+func (s *Server) replyTokenFor(replySlug, publishID string) string {
 	if replySlug == "" {
 		return ""
 	}
-	return s.mintReplyToken(replySlug, published)
+	return formtoken.Mint(s.store.FormKey(), replySlug, publishID)
 }

@@ -162,7 +162,7 @@ func (m *Module) handleForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := r.PathValue("slug")
-	_, ref, err := m.target(r, slug)
+	art, ref, err := m.target(r, slug)
 	switch {
 	case errors.Is(err, errNoReplies):
 		http.NotFound(w, r)
@@ -176,7 +176,7 @@ func (m *Module) handleForm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, ref.msg, ref.status)
 		return
 	}
-	writeHTML(w, http.StatusOK, formPage(slug, "", m.host.ReplyFormToken(slug)))
+	writeHTML(w, http.StatusOK, formPage(slug, "", m.host.ReplyFormToken(art)))
 }
 
 // handleSubmit stores a reply. Open to any viewer of a reply-enabled artifact
@@ -238,7 +238,7 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rep, ref, err := m.record(slug, kind, body)
+	rep, ref, err := m.record(art, kind, body)
 	if err != nil {
 		log.Printf("reply: add failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -255,7 +255,7 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Browser form post → re-render the form with a confirmation.
-	writeHTML(w, http.StatusCreated, formPage(slug, kind, m.host.ReplyFormToken(slug)))
+	writeHTML(w, http.StatusCreated, formPage(slug, kind, m.host.ReplyFormToken(art)))
 }
 
 // handleContentSubmit records a single free-text answer submitted from a page's
@@ -329,7 +329,7 @@ func (m *Module) handleContentSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, ref, err = m.record(slug, "comment", body)
+	_, ref, err = m.record(art, "comment", body)
 	if err != nil {
 		log.Printf("reply: add failed: %s", logsafe.Err(err))
 		m.writeAnswer(w, slug, http.StatusInternalServerError, false,
@@ -364,6 +364,8 @@ func answerRefusal(ref *refusal) string {
 		return "Too many answers are arriving right now, so yours was not recorded. Please wait a minute and try again."
 	case http.StatusInsufficientStorage:
 		return "The server has no room for more answers, so yours was not recorded."
+	case http.StatusConflict:
+		return "This page was updated while your answer was being sent, so it was not recorded. Reload the page and try again."
 	default:
 		return "The server is busy, so your answer was not recorded. Please try again shortly."
 	}

@@ -654,6 +654,14 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		sourceBody []byte
 		renderSpec string
 	)
+	// The publish identifier is chosen before rendering, so the reply box
+	// baked into the page carries a token for exactly this publish.
+	publishID, err := store.NewPublishID()
+	if err != nil {
+		log.Printf("publish id: %s", logsafe.Err(err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	if renderRequested(q) {
 		data, rerr := io.ReadAll(io.LimitReader(body, maxRenderBytes+1))
 		if rerr != nil {
@@ -694,7 +702,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 			FooterLink:  s.renderFooterLink,
 			MetaHeader:  s.renderMetaHeader,
 			ReplySlug:   replySlugFor(replyBox, named),
-			ReplyToken:  s.replyTokenFor(replySlugFor(replyBox, named), published),
+			ReplyToken:  s.replyTokenFor(replySlugFor(replyBox, named), publishID),
 			ReplyNext:   next, // validated above; "" unless a reply box is baked
 			Colophon:    true,
 			Slug:        named,
@@ -730,6 +738,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		Source:     sourceBody,
 		RenderSpec: renderSpec,
 		Replies:    mode != "",
+		PublishID:  publishID,
 	}
 	art, err := s.store.Put(opts, src)
 	if err != nil {

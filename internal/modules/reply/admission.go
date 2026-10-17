@@ -172,9 +172,23 @@ func bodyDeadline(w http.ResponseWriter) {
 	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(replyBodyTimeout))
 }
 
-// record stores a validated reply under the hook and storage limits, firing
-// the hook on success. The refusal covers every way it can decline.
-func (m *Module) record(slug, kind, body string) (Reply, *refusal, error) {
+// record stores a validated reply to art under the hook and storage limits,
+// firing the hook on success. The refusal covers every way it can decline.
+//
+// art is the row the submission was checked against (password, token) when
+// it arrived; the body has been read since. The reply is recorded only if
+// that is still the slug's current publish, so a republish landing in
+// between (a new password, replies turned off, a new page) is not bypassed
+// by a submission admitted under the previous one.
+func (m *Module) record(art store.Artifact, kind, body string) (Reply, *refusal, error) {
+	slug := art.Slug
+	switch cur, err := m.host.Store().LookupPublic(slug); {
+	case errors.Is(err, store.ErrNotFound), err == nil && (!cur.Replies || cur.PublishID != art.PublishID):
+		return Reply{}, &refusal{status: http.StatusConflict,
+			msg: "the page was republished while this reply was being sent; reload it and try again"}, nil
+	case err != nil:
+		return Reply{}, nil, err
+	}
 	ticket, ok := m.reserveHook()
 	if !ok {
 		return Reply{}, &refusal{status: http.StatusServiceUnavailable, msg: "the server is busy; try again shortly",

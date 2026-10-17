@@ -26,6 +26,9 @@ import (
 type fakeHost struct {
 	st      *store.Store
 	dataDir string
+	// onCheckView, when set, runs at each view check (a submission's target
+	// lookup), before the request body is read.
+	onCheckView func()
 }
 
 const testToken = "secret"
@@ -44,17 +47,20 @@ func (h *fakeHost) RequestBase(*http.Request) string     { return "http://test" 
 func (h *fakeHost) BaseURL() string                      { return "" }
 func (h *fakeHost) ModuleDataDir(string) (string, error) { return h.dataDir, nil }
 
-// ReplyFormToken and CheckReplyFormToken use the store's key, accepting any
-// token issued since the artifact was published.
-func (h *fakeHost) ReplyFormToken(slug string) string {
-	return formtoken.Mint(h.st.FormKey(), slug, time.Now())
+// ReplyFormToken and CheckReplyFormToken bind tokens to the artifact's
+// publish under the store's key, as core does.
+func (h *fakeHost) ReplyFormToken(art store.Artifact) string {
+	return formtoken.Mint(h.st.FormKey(), art.Slug, art.PublishID)
 }
 func (h *fakeHost) CheckReplyFormToken(art store.Artifact, tok string) bool {
-	return formtoken.Check(h.st.FormKey(), art.Slug, tok, art.CreatedAt)
+	return formtoken.Check(h.st.FormKey(), art.Slug, art.PublishID, tok)
 }
 
 // CheckView is the plain password check, without core's limits.
 func (h *fakeHost) CheckView(r *http.Request, art store.Artifact) (module.ViewAccess, time.Duration) {
+	if h.onCheckView != nil {
+		h.onCheckView()
+	}
 	if !art.HasPassword() {
 		return module.ViewOK, 0
 	}
