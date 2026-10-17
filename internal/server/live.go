@@ -69,11 +69,13 @@ import (
 // var only so tests can shorten it.
 var liveHeartbeat = 25 * time.Second
 
+// liveWriteTimeout bounds a single SSE write/flush. A consumer that cannot
+// absorb the bytes within it is dropped (its goroutine + FD reclaimed) rather
+// than allowed to wedge the handler — the "drop slow consumers" guard. A var
+// only so tests can shorten it.
+var liveWriteTimeout = 10 * time.Second
+
 const (
-	// liveWriteTimeout bounds a single SSE write/flush. A consumer that cannot
-	// absorb the bytes within it is dropped (its goroutine + FD reclaimed) rather
-	// than allowed to wedge the handler — the "drop slow consumers" guard.
-	liveWriteTimeout = 10 * time.Second
 	// Default live-reload caps (LiveLimits). liveMaxPerSlug: streams watching
 	// one slug. liveMaxPerClient: streams from one client (an IPv4 address or
 	// IPv6 /64, or the forwarded client behind a --trusted-proxy) on all slugs.
@@ -549,12 +551,21 @@ func (s *Server) handleLiveEvents(hub *liveHub, w http.ResponseWriter, r *http.R
 // stalled consumer is dropped rather than allowed to block the handler. A
 // deadline the transport does not support is a no-op (best-effort guard); a
 // write/flush error is returned so the caller drops the subscriber.
+//
+// The deadline is cleared once the frame is flushed: HTTP/2 resets a stream
+// whose write deadline passes even with nothing to write, so one left armed
+// would end a quiet stream between heartbeats. (Under --write-timeout,
+// clearing restores that cap; cappedWriteDeadline.)
 func writeFlush(rc *http.ResponseController, w http.ResponseWriter, frame string) error {
 	_ = rc.SetWriteDeadline(time.Now().Add(liveWriteTimeout))
 	if _, err := io.WriteString(w, frame); err != nil {
 		return err
 	}
-	return rc.Flush()
+	if err := rc.Flush(); err != nil {
+		return err
+	}
+	_ = rc.SetWriteDeadline(time.Time{})
+	return nil
 }
 
 // serveLiveView is the liveView hook: for a ?live GET /{slug} it serves a
