@@ -356,7 +356,7 @@ func (w *SiteWriter) Abort() error {
 	s.beginTransition()
 	// Nothing in a staging tree is served, so nothing removed is retired.
 	r, err := s.removeTreeCounted(w.tmpDir)
-	released := r.bytes + r.retired + r.entries*metaAllowance
+	released := r.bytes + r.entries*metaAllowance
 	s.release(released)
 	s.releaseSiteEntries(r.entries)
 	s.unregisterStaging(filepath.Base(w.tmpDir))

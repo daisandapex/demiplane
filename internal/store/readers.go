@@ -89,22 +89,28 @@ func (s *Store) openTracked(open func() (*os.File, os.FileInfo, error)) (*File, 
 	return tf, fi, nil
 }
 
+// readerClosed drops a reader of k and, for the last reader of a retired
+// file, releases its bytes. The release happens under o.mu, like the retiring
+// in unlinkFile, so the two can never cross (lock order: o.mu, then q.mu).
 func (s *Store) readerClosed(k fileKey) {
 	o := &s.open
 	o.mu.Lock()
-	var released int64
-	if o.refs[k]--; o.refs[k] <= 0 {
-		delete(o.refs, k)
-		released = o.retired[k]
-		delete(o.retired, k)
+	defer o.mu.Unlock()
+	if o.refs[k]--; o.refs[k] > 0 {
+		return
 	}
-	o.mu.Unlock()
-	s.releaseRetired(released)
+	delete(o.refs, k)
+	if n := o.retired[k]; n > 0 {
+		delete(o.retired, k)
+		s.moveRetired(-n)
+	}
 }
 
 // unlinkFile removes path. For a regular file it returns its size, and
-// whether a reader still holds it open (its bytes are then retired, not
-// freed). A file already gone is not an error and reports removed false.
+// whether a reader still holds it open. A held file is retired here: under
+// o.mu, recorded for its last reader and its bytes moved from the live count
+// to the retired one in one step, so the caller must not release them. A
+// file already gone is not an error and reports removed false.
 func (s *Store) unlinkFile(path string) (size int64, removed, retired bool, err error) {
 	o := &s.open
 	o.gate.Lock()
@@ -132,9 +138,17 @@ func (s *Store) unlinkFile(path string) (size int64, removed, retired bool, err 
 				o.retired = make(map[fileKey]int64)
 			}
 			o.retired[k] += fi.Size()
+			s.moveRetired(fi.Size())
 			retired = true
 		}
 		o.mu.Unlock()
 	}
+	if retired && afterRetire != nil {
+		afterRetire()
+	}
 	return fi.Size(), true, retired, nil
 }
+
+// afterRetire is a test hook run after unlinkFile retires a file, before its
+// caller ends the transition.
+var afterRetire func()

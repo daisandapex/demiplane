@@ -180,11 +180,11 @@ func (s *Store) endSiteTransition(settled, removed, settledEntries, removedEntri
 	s.endChange(change{settled: settled, removed: removed, settledEntries: settledEntries, removedEntries: removedEntries})
 }
 
-// change is the accounting a transition applies when it ends. Retired bytes
-// leave the live count for the retired one (readers.go). Entries are kept
-// with or without a quota; bytes only with one.
+// change is the accounting a transition applies when it ends. Entries are
+// kept with or without a quota; bytes only with one. Retired files are not
+// part of it: unlinkFile moves their bytes itself (readers.go).
 type change struct {
-	settled, removed, retired      int64
+	settled, removed               int64
 	settledEntries, removedEntries int64
 }
 
@@ -212,25 +212,22 @@ func (s *Store) endChange(c change) {
 	if removed > 0 {
 		q.committed = max(q.committed-removed, 0)
 	}
-	if c.retired > 0 {
-		q.committed = max(q.committed-c.retired, 0)
-		q.retired += c.retired
-	}
 }
 
-// releaseRetired releases the bytes of a removed file whose last reader
-// closed it.
-func (s *Store) releaseRetired(n int64) {
-	if n <= 0 {
-		return
-	}
+// moveRetired moves n bytes from the live count to the retired one (a held
+// file was removed), or for negative n releases -n retired bytes (its last
+// reader closed it). The caller holds s.open.mu (readers.go).
+func (s *Store) moveRetired(n int64) {
 	q := &s.quota
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.limit <= 0 {
 		return
 	}
-	q.retired = max(q.retired-n, 0)
+	if n > 0 {
+		q.committed = max(q.committed-n, 0)
+	}
+	q.retired = max(q.retired+n, 0)
 }
 
 // commitRename renames a fully written temp file or directory into place and
@@ -374,9 +371,9 @@ func (s *Store) removeLive(path string) error {
 func (s *Store) removeLiveFile(path string) (bool, error) {
 	s.beginTransition()
 	size, removed, retired, err := s.unlinkFile(path)
-	c := change{removed: size}
-	if retired {
-		c = change{retired: size}
+	var c change
+	if !retired {
+		c.removed = size // a retired file's bytes moved already
 	}
 	s.endChange(c)
 	return removed, err
@@ -393,13 +390,14 @@ func (s *Store) removeLiveTree(dir string) error {
 }
 
 // treeRemoval is what removeTreeCounted removed: the bytes freed, the bytes
-// of removed files a reader still holds (retired), and the entries.
+// of removed files a reader still holds (retired, moved by unlinkFile), and
+// the entries.
 type treeRemoval struct{ bytes, retired, entries int64 }
 
 // change is the accounting for a removal of live entries: their allowances
-// and freed bytes leave the live count, held bytes move to the retired one.
+// and freed bytes leave the live count.
 func (r treeRemoval) change() change {
-	return change{removed: r.bytes + r.entries*metaAllowance, retired: r.retired, removedEntries: r.entries}
+	return change{removed: r.bytes + r.entries*metaAllowance, removedEntries: r.entries}
 }
 
 // removeTreeCounted removes dir and everything under it, deepest first, one
