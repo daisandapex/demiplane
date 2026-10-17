@@ -886,9 +886,8 @@ func renderLink(match string) string {
 
 // safeURL is an allowlist: it permits http/https/mailto absolute URLs and
 // relative references (path, fragment, query), and rejects everything else —
-// notably any other scheme. The input is already HTML-escaped; scheme tokens
-// (http, https, mailto) contain no escapable characters, so prefix checks are
-// reliable.
+// notably any other scheme. The input is already HTML-escaped and is decoded
+// once, as the browser will, before any check.
 //
 // Two classes of character are refused before any classification, because a
 // browser's URL parser reads them differently from the prefix checks below:
@@ -898,6 +897,11 @@ func renderLink(match string) string {
 // place in a link either. A web URL with userinfo ("https://trusted@evil") is
 // refused too: it names one host and navigates to another.
 func safeURL(u string) bool {
+	// Judge the URL the browser will see: u is HTML-escaped, and the browser
+	// decodes the attribute exactly once. Checking the escaped form would let
+	// an entity hide a character ("&#34;" ends the authority scan at '#'
+	// before a following '@').
+	u = html.UnescapeString(u)
 	if strings.ContainsRune(u, '\\') || hasControl(u) {
 		return false
 	}
@@ -907,11 +911,14 @@ func safeURL(u string) bool {
 	}
 	for _, scheme := range []string{"http://", "https://"} {
 		if rest, ok := strings.CutPrefix(lu, scheme); ok {
+			// The authority must follow the "//" directly: browsers skip
+			// any extra slashes ("https:////a@b" is "https://a@b"), so an
+			// empty authority would hide the userinfo check below.
 			authority := rest
 			if i := strings.IndexAny(rest, "/?#"); i >= 0 {
 				authority = rest[:i]
 			}
-			return !strings.Contains(authority, "@")
+			return authority != "" && !strings.Contains(authority, "@")
 		}
 	}
 	if strings.HasPrefix(lu, "mailto:") {

@@ -43,6 +43,10 @@ func TestSafeURLRejectsProtocolRelative(t *testing.T) {
 		// Userinfo in a web URL disguises the real host.
 		{"https://trusted.example@attacker.com/", false},
 		{"http://user:pw@attacker.com", false},
+		{"https:////trusted.example@attacker.com/", false}, // browsers skip extra slashes
+		{"https:///attacker.com", false},
+		{"http://", false},
+		{"https://?q", false},
 		{"https://attacker.com/path@x", true}, // "@" in the path is not userinfo
 		{"https://attacker.com/?q=a@b", true},
 		{"mailto:a@b.com?subject=x", true},
@@ -82,10 +86,29 @@ var anchorToEvil = regexp.MustCompile(`<a href="[^"]*evil\.example`)
 // TestMarkdownBackslashHostNotLinked: the end-to-end effect for the
 // backslash and userinfo forms. None may become an anchor.
 func TestMarkdownBackslashHostNotLinked(t *testing.T) {
-	for _, dest := range []string{`/\evil.example`, `\\evil.example`, `https://ok.example@evil.example`} {
+	for _, dest := range []string{`/\evil.example`, `\\evil.example`, `https://ok.example@evil.example`, `https:////ok.example@evil.example`,
+		`https://trusted.example"@evil.example/`, `https://trusted.example'@evil.example/`} {
 		out := string(Markdown([]byte("[go]("+dest+")"), Options{}))
 		if anchorToEvil.MatchString(out) {
 			t.Errorf("[go](%s) rendered as a link:\n%s", dest, out)
 		}
+	}
+}
+
+// TestSafeURLJudgesDecodedForm: safeURL receives HTML-escaped text, and the
+// browser decodes the href once; an entity must not hide a delimiter.
+func TestSafeURLJudgesDecodedForm(t *testing.T) {
+	for _, u := range []string{
+		"https://trusted.example&#34;@evil.example/",
+		"https://trusted.example&#39;@evil.example/",
+		"https://trusted.example&amp;@evil.example/",
+	} {
+		if safeURL(u) {
+			t.Errorf("safeURL(%q) = true: the decoded URL carries userinfo", u)
+		}
+	}
+	// A query with an escaped ampersand stays a plain, allowed link.
+	if !safeURL("https://ok.example/?a=1&amp;b=2") {
+		t.Error("escaped query ampersand rejected")
 	}
 }
