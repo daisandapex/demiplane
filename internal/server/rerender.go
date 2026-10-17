@@ -276,7 +276,7 @@ func (s *Server) renderRetained(r *http.Request, slug string, rec store.SourceRe
 		Colophon:    true,
 		Slug:        spec.NamedSlug,
 		Published:   published,
-		Siblings:    s.seriesSiblings(spec.Series, spec.NamedSlug),
+		Siblings:    s.seriesSiblings(r.Context(), spec.Series, spec.NamedSlug),
 		ContentBase: s.contentBase(r),
 		IndexURL:    s.requestBase(r) + "/gallery",
 		Limits:      s.renderLimits,

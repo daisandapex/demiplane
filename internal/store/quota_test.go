@@ -5,6 +5,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -794,14 +795,14 @@ func TestSeriesSlugs(t *testing.T) {
 	if _, err := s.Put(PutOptions{Private: true, Series: "b"}, strings.NewReader("x")); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.SeriesSlugs(DefaultOwner, "b", "b-2", 10)
+	got, err := s.SeriesSlugs(context.Background(), DefaultOwner, "b", "b-2", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(got, ",") != "b-1,b-3" {
 		t.Errorf("SeriesSlugs = %v, want [b-1 b-3] (sorted, without the named slug, others or private)", got)
 	}
-	if got, _ := s.SeriesSlugs(DefaultOwner, "b", "", 2); len(got) != 2 {
+	if got, _ := s.SeriesSlugs(context.Background(), DefaultOwner, "b", "", 2); len(got) != 2 {
 		t.Errorf("limit 2 returned %d", len(got))
 	}
 }

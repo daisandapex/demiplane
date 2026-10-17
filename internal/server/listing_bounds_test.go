@@ -235,3 +235,23 @@ func TestBrowseIndexMemoryDoesNotGrowWithArtifacts(t *testing.T) {
 		t.Errorf("GET / allocated %d bytes with 3000 artifacts, %d with 300: it grows with the instance", large, small)
 	}
 }
+
+// TestBrowseIndexCapsSeriesCounts: a series larger than the count cap reads
+// "(100+)" on the browse index rather than its exact size.
+func TestBrowseIndexCapsSeriesCounts(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	for i := 0; i < store.SeriesCountCap+2; i++ {
+		if _, err := st.Put(store.PutOptions{Slug: fmt.Sprintf("big-%03d", i), Series: "big"}, strings.NewReader("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := httptest.NewRecorder()
+	New(st, Config{Browse: true}).Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	if !strings.Contains(w.Body.String(), `(100+)`) {
+		t.Errorf("browse index does not cap the series count:\n%s", w.Body.String())
+	}
+}

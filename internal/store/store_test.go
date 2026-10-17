@@ -5,6 +5,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -503,9 +504,11 @@ func TestMigrationAddsColumnsToLegacyDB(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustPut(t, s, PutOptions{Slug: "legacy"}, "old data")
-	// The partial index references expires_at; drop it before the columns.
-	if _, err := s.db.Exec(`DROP INDEX IF EXISTS idx_artifacts_expires_at`); err != nil {
-		t.Fatalf("drop index: %v", err)
+	// These indexes reference the M3 columns; drop them before the columns.
+	for _, idx := range []string{"idx_artifacts_expires_at", "idx_artifacts_public_order", "idx_artifacts_public_series"} {
+		if _, err := s.db.Exec(`DROP INDEX IF EXISTS ` + idx); err != nil {
+			t.Fatalf("drop index: %v", err)
+		}
 	}
 	for _, col := range []string{"private", "password_hash", "expires_at"} {
 		if _, err := s.db.Exec(`ALTER TABLE artifacts DROP COLUMN ` + col); err != nil {
@@ -700,7 +703,7 @@ func TestListPageWalksEveryArtifactOnce(t *testing.T) {
 	var walked []string
 	var after *ListCursor
 	for {
-		page, next, err := st.ListPage(DefaultOwner, after, 3)
+		page, next, err := st.ListPage(context.Background(), DefaultOwner, after, 3)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -727,8 +730,7 @@ func TestListPageWalksEveryArtifactOnce(t *testing.T) {
 
 // TestNewestPerFamily: one artifact per family in List order (a series'
 // newest member, every artifact without a series), stopping at limit, with
-// whole-series member counts and the public total; private artifacts never
-// appear or count.
+// whole-series member counts; private artifacts never appear or count.
 func TestNewestPerFamily(t *testing.T) {
 	st, err := Open(t.TempDir())
 	if err != nil {
@@ -757,7 +759,7 @@ func TestNewestPerFamily(t *testing.T) {
 	put("solo-1", "solo", 40, false)
 	put("hidden", "", 5, true)
 
-	newest, members, public, err := st.NewestPerFamily(DefaultOwner, 10)
+	newest, members, truncated, err := st.NewestPerFamily(context.Background(), DefaultOwner, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -771,11 +773,11 @@ func TestNewestPerFamily(t *testing.T) {
 	if members["dispatch"] != 3 || members["solo"] != 1 || len(members) != 2 {
 		t.Errorf("members = %v, want dispatch 3, solo 1", members)
 	}
-	if public != 6 {
-		t.Errorf("public = %d, want 6", public)
+	if truncated {
+		t.Error("truncated with every row read under the scan budget")
 	}
 
-	newest, members, _, err = st.NewestPerFamily(DefaultOwner, 2)
+	newest, members, _, err = st.NewestPerFamily(context.Background(), DefaultOwner, 2)
 	if err != nil {
 		t.Fatal(err)
 	}

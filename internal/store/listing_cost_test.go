@@ -1,0 +1,109 @@
+// SPDX-FileCopyrightText: 2026 Dais & Apex
+// SPDX-License-Identifier: AGPL-3.0-only
+
+package store
+
+import (
+	"strings"
+	"testing"
+)
+
+// bigStore holds 20,000 private artifacts (the newest), 20,000 public members
+// of one series, and five older public singletons. analyze gives the planner
+// statistics, which a deployed database usually lacks.
+func bigStore(t *testing.T, analyze bool) *Store {
+	t.Helper()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	for _, q := range []string{
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 20000)
+		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private)
+		 SELECT printf('priv-%05d', i), '', 'text/plain', 1, 1700100000 + i, 'local', 1 FROM n`,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 20000)
+		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, series)
+		 SELECT printf('big-%05d', i), '', 'text/plain', 1, 1700050000 + i, 'local', 'big' FROM n`,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 5)
+		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner)
+		 SELECT printf('solo-%d', i), '', 'text/plain', 1, 1700000000 + i, 'local' FROM n`,
+	} {
+		if _, err := st.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if analyze {
+		if _, err := st.db.Exec(`ANALYZE`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return st
+}
+
+// plan returns SQLite's query plan for q, one detail per line.
+func plan(t *testing.T, st *Store, q string, args ...any) string {
+	t.Helper()
+	rows, err := st.db.Query("EXPLAIN QUERY PLAN "+q, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, detail)
+	}
+	return strings.Join(out, "\n")
+}
+
+// TestBrowseFamiliesReadBoundedRows: the browse index's family scan reads a
+// bounded number of rows, however many members one series has, and series
+// sizes are counted only up to a cap.
+func TestBrowseFamiliesReadBoundedRows(t *testing.T) {
+	st := bigStore(t, false)
+	newest, members, truncated := familiesForTest(t, st, 9)
+	if !truncated {
+		t.Error("the scan budget ran out among one series' members, but truncated is false")
+	}
+	if n := st.familyRowsRead.Load(); n > 1000 {
+		t.Errorf("NewestPerFamily read %d rows for 9 families", n)
+	}
+	if len(newest) == 0 || newest[0].Slug != "big-20000" {
+		t.Errorf("first family = %v, want big-20000", newest)
+	}
+	if n := members["big"]; n > 101 {
+		t.Errorf("series size counted to %d; counts stop past the cap", n)
+	}
+}
+
+// TestListingQueriesAreIndexWalks: every listing query seeks on the owner and
+// public flag and reads in index order: no sort of the whole table, no walk
+// over private rows.
+func TestListingQueriesAreIndexWalks(t *testing.T) {
+	for _, analyze := range []bool{false, true} {
+		st := bigStore(t, analyze)
+		for name, q := range listingQueriesForTest() {
+			p := plan(t, st, q.sql, q.args...)
+			t.Logf("%s (analyze=%v):\n%s", name, analyze, p)
+			if strings.Contains(p, "TEMP B-TREE") {
+				t.Errorf("%s (analyze=%v) sorts in a temporary b-tree:\n%s", name, analyze, p)
+			}
+			for _, want := range q.wantConstraints {
+				if !strings.Contains(p, want) {
+					t.Errorf("%s (analyze=%v) plan lacks %q:\n%s", name, analyze, want, p)
+				}
+			}
+		}
+	}
+}
+
+type listingQuery struct {
+	sql             string
+	args            []any
+	wantConstraints []string
+}

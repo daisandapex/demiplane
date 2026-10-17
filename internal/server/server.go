@@ -8,6 +8,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -698,7 +699,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 			Colophon:    true,
 			Slug:        named,
 			Published:   published,
-			Siblings:    s.seriesSiblings(series, named),
+			Siblings:    s.seriesSiblings(r.Context(), series, named),
 			ContentBase: s.contentBase(r),
 			IndexURL:    s.requestBase(r) + "/gallery",
 		})
@@ -977,7 +978,7 @@ func (s *Server) listPage(w http.ResponseWriter, r *http.Request) (arts []store.
 		}
 		after = &c
 	}
-	arts, next, err = s.store.ListPage(store.DefaultOwner, after, listPageSize)
+	arts, next, err = s.store.ListPage(r.Context(), store.DefaultOwner, after, listPageSize)
 	return arts, next, true, err
 }
 
@@ -1070,13 +1071,13 @@ func replyMode(q url.Values) string {
 // The named-slug requirement keeps auto-generated capability slugs out of the nav
 // — a generated slug is not a stable link target. A lookup error is non-fatal; the
 // colophon simply shows the meta row with no series nav.
-func (s *Server) seriesSiblings(series, named string) []string {
+func (s *Server) seriesSiblings(ctx context.Context, series, named string) []string {
 	if series == "" || named == "" {
 		return nil
 	}
 	// The store returns at most as many siblings as the renderer navigates; a
 	// series at that size renders no navigation (render.Limits.MaxSeriesMembers).
-	siblings, err := s.store.SeriesSlugs(store.DefaultOwner, series, named, render.DefaultLimits.MaxSeriesMembers)
+	siblings, err := s.store.SeriesSlugs(ctx, store.DefaultOwner, series, named, render.DefaultLimits.MaxSeriesMembers)
 	if err != nil {
 		return nil
 	}
@@ -1215,9 +1216,10 @@ func familyRows(newest []store.Artifact, members map[string]int) []landingRow {
 // and the published date only — type/size clutter lives in the API, not here
 // (demiplane-0pw).
 func (s *Server) artifactTable(r *http.Request) string {
-	// One family more than the table shows tells whether more exist; nothing
-	// here grows with the number of artifacts.
-	newest, members, public, err := s.store.NewestPerFamily(store.DefaultOwner, landingTableCap+1)
+	// One family more than the table shows tells whether more exist. The
+	// store reads a bounded number of rows and counts series only up to a
+	// cap, so nothing here grows with the number of artifacts.
+	newest, members, truncated, err := s.store.NewestPerFamily(r.Context(), store.DefaultOwner, landingTableCap+1)
 	if err != nil {
 		log.Printf("browse list failed: %s", logsafe.Err(err))
 		return ""
@@ -1243,8 +1245,13 @@ func (s *Server) artifactTable(r *http.Request) string {
 	for _, row := range shown {
 		label := html.EscapeString(row.label)
 		if row.count > 1 {
-			// A series reads as "dispatch (8) →", linking to the newest member.
-			label = fmt.Sprintf(`%s <span class="scount">(%d)</span> →`, label, row.count)
+			// A series reads as "dispatch (8) →", linking to the newest member;
+			// past the count cap, "dispatch (100+) →".
+			n := strconv.Itoa(row.count)
+			if row.count > store.SeriesCountCap {
+				n = strconv.Itoa(store.SeriesCountCap) + "+"
+			}
+			label = fmt.Sprintf(`%s <span class="scount">(%s)</span> →`, label, n)
 		} else if row.locked {
 			label += " 🔒"
 		}
@@ -1254,8 +1261,8 @@ func (s *Server) artifactTable(r *http.Request) string {
 			row.created.Format("2006-01-02 15:04"))
 	}
 	b.WriteString(`</tbody></table>`)
-	if len(rows) > landingTableCap {
-		fmt.Fprintf(&b, `<p><a href="/gallery">All %s → /gallery</a></p>`, plural(public, "artifact"))
+	if len(rows) > landingTableCap || truncated {
+		b.WriteString(`<p><a href="/gallery">More in the gallery →</a></p>`)
 	} else {
 		b.WriteString(`<p><a href="/gallery">Browse the gallery →</a></p>`)
 	}
