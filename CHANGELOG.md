@@ -8,6 +8,10 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **Site files are opened through `os.Root` with no symlinks followed.** A
+  symlink anywhere on a served site path (the site directory, an
+  intermediate directory or the file) is a 404, and the check cannot race
+  the open.
 - **Markdown links cannot disguise their destination.** A link destination
   containing a backslash or a control character, or an `http(s)` URL with
   userinfo, renders as plain text; the scheme allowlist is unchanged.

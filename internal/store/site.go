@@ -20,6 +20,7 @@ package store
 // leaves the previously published site intact.
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +28,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -248,8 +250,15 @@ func (s *Store) DeleteSite(site string) error {
 // OpenSiteFile opens a single file within a published site for serving. It
 // returns the open file (caller closes), the resolved content-type, and the
 // file's modtime. relpath is traversal-checked; a missing file, a directory, or
-// a symlink yields ErrNotFound (the last two never occur via AddFile, but the
-// serve path is defensive against a store mutated out of band).
+// a symlink anywhere on the path (the site directory itself, an intermediate
+// directory, or the file) yields ErrNotFound. AddFile never creates a symlink,
+// so one in the tree was planted out of band and is never followed.
+//
+// Resolution is race-free: every component is opened through an os.Root
+// (which refuses to leave its directory even via a symlink planted after a
+// check), and each component's Lstat is compared with the identity of what
+// was actually opened, so a swap between the check and the open is detected
+// rather than served.
 func (s *Store) OpenSiteFile(site, relpath string) (*os.File, string, time.Time, error) {
 	if err := ValidateNamedSlug(site); err != nil {
 		return nil, "", time.Time{}, err
@@ -258,26 +267,9 @@ func (s *Store) OpenSiteFile(site, relpath string) (*os.File, string, time.Time,
 	if err != nil {
 		return nil, "", time.Time{}, err
 	}
-	base := filepath.Join(s.siteRoot(), site)
-	dest := filepath.Join(base, filepath.FromSlash(clean))
-	if !withinDir(base, dest) {
-		return nil, "", time.Time{}, ErrNotFound
-	}
-	// Lstat (not Stat): a symlink must be rejected as-is, never followed, so a
-	// site file can never be a link out of the tree even if one were planted.
-	fi, err := os.Lstat(dest)
+	f, fi, err := s.openSitePath(site, strings.Split(clean, "/"))
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, "", time.Time{}, ErrNotFound
-		}
-		return nil, "", time.Time{}, fmt.Errorf("stat site file: %w", err)
-	}
-	if !fi.Mode().IsRegular() {
-		return nil, "", time.Time{}, ErrNotFound
-	}
-	f, err := os.Open(dest)
-	if err != nil {
-		return nil, "", time.Time{}, fmt.Errorf("open site file: %w", err)
+		return nil, "", time.Time{}, err
 	}
 	head := make([]byte, sniffLen)
 	n, rerr := io.ReadFull(f, head)
@@ -293,4 +285,95 @@ func (s *Store) OpenSiteFile(site, relpath string) (*os.File, string, time.Time,
 	// guard: a .html extension only wins when the bytes actually sniff as HTML.
 	ct := inferContentType(path.Base(clean), http.DetectContentType(head[:n]))
 	return f, ct, fi.ModTime(), nil
+}
+
+// openSitePath opens sites/<site>/<segs...> refusing any symlink on the way.
+func (s *Store) openSitePath(site string, segs []string) (*os.File, os.FileInfo, error) {
+	root, err := os.OpenRoot(s.siteRoot())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, ErrNotFound
+		}
+		return nil, nil, fmt.Errorf("open sites dir: %w", err)
+	}
+	// root always names the innermost directory opened so far; each step
+	// closes its parent (a file opened through a root outlives the root).
+	defer func() { root.Close() }()
+	dirs := append([]string{site}, segs[:len(segs)-1]...)
+	for _, d := range dirs {
+		sub, err := openRootNoFollow(root, d)
+		if err != nil {
+			return nil, nil, err
+		}
+		root.Close()
+		root = sub
+	}
+	name := segs[len(segs)-1]
+	want, err := root.Lstat(name)
+	if err != nil {
+		return nil, nil, siteNotFoundOr(err, "stat site file")
+	}
+	if !want.Mode().IsRegular() {
+		return nil, nil, ErrNotFound
+	}
+	// O_NONBLOCK: a FIFO swapped in after the Lstat must not stall the open;
+	// the identity check below then rejects it.
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil, siteNotFoundOr(err, "open site file")
+	}
+	got, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, nil, fmt.Errorf("stat site file: %w", err)
+	}
+	if !got.Mode().IsRegular() || !os.SameFile(want, got) {
+		f.Close()
+		return nil, nil, ErrNotFound
+	}
+	return f, got, nil
+}
+
+// openRootNoFollow opens the directory name inside root as a new root,
+// refusing a symlink or anything that is not a directory, and confirming the
+// opened directory is the one that was checked.
+func openRootNoFollow(root *os.Root, name string) (*os.Root, error) {
+	want, err := root.Lstat(name)
+	if err != nil {
+		return nil, siteNotFoundOr(err, "stat site dir")
+	}
+	if !want.IsDir() {
+		return nil, ErrNotFound
+	}
+	sub, err := root.OpenRoot(name)
+	if err != nil {
+		return nil, siteNotFoundOr(err, "open site dir")
+	}
+	got, err := sub.Stat(".")
+	if err != nil {
+		sub.Close()
+		return nil, fmt.Errorf("stat site dir: %w", err)
+	}
+	if !os.SameFile(want, got) {
+		sub.Close()
+		return nil, ErrNotFound
+	}
+	return sub, nil
+}
+
+// siteNotFoundOr maps a missing path, or a path os.Root refused because it
+// escapes, to ErrNotFound, and wraps anything else.
+func siteNotFoundOr(err error, op string) error {
+	if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP) || isEscape(err) {
+		return ErrNotFound
+	}
+	return fmt.Errorf("%s: %w", op, err)
+}
+
+// isEscape reports whether err is os.Root refusing a path outside the root.
+// The standard library does not export that error, so it is matched by text;
+// it can only surface when a component is swapped for a symlink between its
+// Lstat and its open, and a miss would turn a 404 into a 500, nothing more.
+func isEscape(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "path escapes from parent")
 }

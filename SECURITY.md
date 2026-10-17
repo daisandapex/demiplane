@@ -152,7 +152,11 @@ inherits the posture above and was reviewed adversarially before release.
   traversal-checked (`..`, absolute paths, and backslashes rejected; each segment
   re-validated as a named slug) and confined under the site prefix on both write
   and serve; symlink and other non-regular entries are skipped, never
-  materialized. The archive is bounded on **both** the compressed upload
+  materialized. The serve path opens every component through an `os.Root` and
+  refuses a symlink anywhere on the path (site directory, intermediate
+  directory or file), checking that what it opened is what it inspected, so a
+  link planted or swapped in out of band is never followed. The archive is
+  bounded on **both** the compressed upload
   (`--max-upload`, buffered to a scratch file) and the **total decompressed
   bytes** across all entries — enforced identically for zip **and** tar, so a
   compression- or sparse-tar bomb is rejected with `413` — plus a file-count cap.
