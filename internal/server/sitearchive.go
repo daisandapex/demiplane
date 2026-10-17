@@ -30,9 +30,10 @@ const (
 	// entries with paths of a few hundred bytes. archive/zip holds about five
 	// times the directory's size in memory while it reads it.
 	maxZipDirBytes = 2 << 20
-	// maxTarHeaderBytes caps what archive/tar reads to reach one entry: its
-	// header and any PAX, global PAX and GNU long-name/long-link headers in
-	// front of it, with their data (archive/tar's own cap is 1 MiB for each).
+	// maxTarHeaderBytes caps the 512-byte blocks archive/tar reads to reach
+	// one entry, from its first header block: its header and any PAX, global
+	// PAX and GNU long-name/long-link headers in front of it, with their data
+	// and padding (archive/tar's own cap is 1 MiB for each).
 	maxTarHeaderBytes = 64 << 10
 	// siteParseSlots is how many site archives are parsed and extracted at
 	// once; more wait up to sitePublishWait and are then refused with 503.
@@ -177,45 +178,66 @@ const zipOpenReadLimit = maxZipDirBytes + 66*1024 + 1024 + 128 + 2*4096
 // extraction. archive/tar alone decides what is a header and what is data,
 // so nothing here re-implements its format rules (header-only types, legacy
 // directories, PAX overrides, sparse maps). Instead, while armed, around
-// each tar.Reader.Next, it allows at most maxTarHeaderBytes to be read:
-// everything archive/tar reads to reach the next entry, which is the
-// previous entry's padding, any PAX, global PAX and GNU long-name/long-link
-// headers with their data, a sparse map, and the entry's own header. The
+// each tar.Reader.Next, it allows at most maxTarHeaderBytes to be read from
+// the first header block on: any PAX, global PAX and GNU long-name/long-link
+// headers with their data and padding, a sparse map, and the entry's own
+// header. Headers start on a 512-byte boundary, so what Next reads before the
+// first boundary at or after its first read, the previous entry's padding and
+// archive/tar's check of the last byte of skipped data, is not charged. The
 // previous entry's unread data is not read but skipped, because archive/tar
-// seeks past it when its reader can seek, so it does not count. Disarmed,
-// the entry data AddFile reads passes through unlimited (the decompressed
-// budget bounds it).
+// seeks past it when its reader can seek, so it does not count either.
+// Disarmed, the entry data AddFile reads passes through unlimited (the
+// decompressed budget bounds it). f must be at offset 0 when reading starts.
 type tarHeaderReader struct {
 	f       io.ReadSeeker
+	pos     int64 // offset of the next byte f returns
 	armed   bool
+	started bool  // a read has happened since arming
+	free    int64 // offset up to which reads are not charged
 	left    int64
 	tripped bool
 }
 
 func (t *tarHeaderReader) Read(p []byte) (int, error) {
 	if !t.armed {
-		return t.f.Read(p)
+		n, err := t.f.Read(p)
+		t.pos += int64(n)
+		return n, err
 	}
-	if t.left <= 0 {
+	if !t.started {
+		t.started = true
+		t.free = (t.pos + 511) &^ 511
+	}
+	free := t.free - t.pos
+	if free < 0 {
+		free = 0
+	}
+	if allowed := free + t.left; allowed <= 0 {
 		t.tripped = true
 		return 0, errTarHeaderTooLarge
-	}
-	if int64(len(p)) > t.left {
-		p = p[:t.left]
+	} else if int64(len(p)) > allowed {
+		p = p[:allowed]
 	}
 	n, err := t.f.Read(p)
-	t.left -= int64(n)
+	t.pos += int64(n)
+	if charged := int64(n) - free; charged > 0 {
+		t.left -= charged
+	}
 	return n, err
 }
 
 func (t *tarHeaderReader) Seek(off int64, whence int) (int64, error) {
-	return t.f.Seek(off, whence)
+	pos, err := t.f.Seek(off, whence)
+	if err == nil {
+		t.pos = pos
+	}
+	return pos, err
 }
 
 // next is tr.Next with the header budget applied. A budget overrun is
 // errTarHeaderTooLarge whatever archive/tar made of the failed read.
 func (t *tarHeaderReader) next(tr *tar.Reader) (*tar.Header, error) {
-	t.armed, t.left = true, maxTarHeaderBytes
+	t.armed, t.started, t.left = true, false, maxTarHeaderBytes
 	hdr, err := tr.Next()
 	t.armed = false
 	if t.tripped {

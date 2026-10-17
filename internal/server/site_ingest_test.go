@@ -434,3 +434,58 @@ func TestTarHeaderBudgetMatchesArchiveTar(t *testing.T) {
 		}
 	}
 }
+
+// paxRecordOfLen is a PAX comment record exactly n bytes long.
+func paxRecordOfLen(n int) string {
+	for v := n - 12; v > 0; v-- {
+		if r := paxRecord("comment", strings.Repeat("c", v)); len(r) == n {
+			return r
+		}
+	}
+	panic("no record of that length")
+}
+
+// TestSiteTarHeaderBudgetBoundary: an entry whose headers (a PAX header and
+// its own) occupy exactly 64 KiB is accepted whatever precedes it, including
+// a file whose data does not end on a block boundary, read or skipped; one
+// more byte of PAX data (one more block) is refused.
+func TestSiteTarHeaderBudgetBoundary(t *testing.T) {
+	ts := newTestServer(t, "")
+	const fits = maxTarHeaderBytes - 2*512 // PAX data filling the budget exactly
+	for _, prev := range []struct {
+		name string
+		typ  byte
+		size int
+	}{
+		{"none", 0, 0},
+		{"aligned file", '0', 512},
+		{"unaligned file", '0', 100},
+		{"unaligned skipped entry", '7', 100},
+		{"aligned skipped entry", '7', 1024},
+	} {
+		for _, extra := range []int{0, 1} {
+			var b bytes.Buffer
+			if prev.typ != 0 {
+				b.Write(rawTarHeader("prev.txt", prev.typ, int64(prev.size)))
+				b.Write(bytes.Repeat([]byte("p"), prev.size))
+				tarPad(&b)
+			}
+			rec := paxRecordOfLen(fits + extra)
+			b.Write(rawTarHeader("PaxHeaders/index.html", 'x', int64(len(rec))))
+			b.WriteString(rec)
+			tarPad(&b)
+			b.Write(rawTarHeader("index.html", '0', 9))
+			b.WriteString("<p>hi</p>")
+			tarPad(&b)
+			b.Write(make([]byte, 1024))
+			want := http.StatusCreated
+			if extra > 0 {
+				want = http.StatusRequestEntityTooLarge
+			}
+			site := fmt.Sprintf("edge-%d-%d", len(prev.name), extra)
+			if resp, rb := postSite(t, ts.URL, site, "fmt=tar", "application/x-tar", b.Bytes()); resp.StatusCode != want {
+				t.Errorf("after %s, headers of 64 KiB + %d: status %d (%s), want %d", prev.name, extra, resp.StatusCode, rb, want)
+			}
+		}
+	}
+}

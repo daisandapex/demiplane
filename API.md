@@ -663,7 +663,8 @@ publish (the archive is buffered for extraction). An archive may hold at most
 4,096 entries, counting directories, links and other skipped entries as well
 as files; a zip's central directory may be at most 2 MiB, and the headers in
 front of any one tar entry (its PAX, global PAX and GNU long-name or long-link
-headers with their data, and its own header) at most 64 KiB (`413`
+headers with their data, and its own header, counted in whole 512-byte
+blocks; the previous entry's padding does not count) at most 64 KiB (`413`
 otherwise). Entry paths use `/`
 only: a name containing a backslash, `..`, a dotfile segment or an absolute
 path is refused with `400`, and symlinks and other non-regular entries are
