@@ -937,12 +937,13 @@ const multipartReadAhead = 4096
 var errMultipartHeaders = fmt.Errorf("multipart publish has more than %d bytes in front of the file", maxMultipartHeaderBytes)
 
 // headerLimitReader is a request body that, while armed, allows a fixed
-// number of bytes to be read and then fails.
+// number of bytes to be read, keeping a copy of them, and then fails.
 type headerLimitReader struct {
 	r       io.Reader
 	armed   bool
 	left    int64
 	tripped bool
+	seen    []byte // the bytes read while armed
 }
 
 func (h *headerLimitReader) Read(p []byte) (int, error) {
@@ -958,42 +959,70 @@ func (h *headerLimitReader) Read(p []byte) (int, error) {
 	}
 	n, err := h.r.Read(p)
 	h.left -= int64(n)
+	h.seen = append(h.seen, p[:n]...)
 	return n, err
+}
+
+// nextFilePart returns the first part of mr with a filename, closing the
+// parts before it, or an error.
+func nextFilePart(mr *multipart.Reader) (*multipart.Part, error) {
+	for {
+		part, err := mr.NextPart()
+		if err != nil {
+			return nil, err
+		}
+		if part.FileName() != "" {
+			return part, nil
+		}
+		part.Close()
+	}
+}
+
+// filePartWithin reports whether the first file part's body starts within
+// the first n bytes of prefix: whether mime/multipart, given only those
+// bytes, gets as far as that part's complete headers. mime/multipart reads
+// ahead of what it has consumed, so the bytes read from the body do not say
+// where the part's body starts; parsing the cut prefix again does, exactly.
+func filePartWithin(prefix []byte, n int, boundary string) bool {
+	if len(prefix) > n {
+		prefix = prefix[:n]
+	}
+	_, err := nextFilePart(multipart.NewReader(bytes.NewReader(prefix), boundary))
+	return err == nil
 }
 
 // openMultipart streams the first file part of a multipart request without
 // buffering it. It returns a reader tied to the part plus its filename.
 // Everything read before the file part is returned is limited to
-// maxMultipartHeaderBytes (plus mime/multipart's read-ahead), so headers are
-// never held beyond that; the part's body then streams unlimited by it.
+// maxMultipartHeaderBytes plus mime/multipart's read-ahead, so headers are
+// never held beyond that, and the part is accepted only if its body starts
+// within maxMultipartHeaderBytes (filePartWithin); the part's body then
+// streams unlimited by it.
 func openMultipart(r *http.Request) (io.ReadCloser, string, error) {
 	_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || params["boundary"] == "" {
 		return nil, "", errors.New("parse multipart: no boundary in Content-Type")
 	}
 	hl := &headerLimitReader{r: r.Body, armed: true, left: maxMultipartHeaderBytes + multipartReadAhead}
-	mr := multipart.NewReader(hl, params["boundary"])
-	for {
-		part, err := mr.NextPart()
-		if hl.tripped {
-			return nil, "", errMultipartHeaders
-		}
-		if err == io.EOF {
-			return nil, "", errors.New("multipart body has no file part")
-		}
-		if err != nil {
-			return nil, "", fmt.Errorf("read multipart: %w", err)
-		}
-		name := part.FileName()
-		if name == "" {
-			part.Close()
-			continue
-		}
-		hl.armed = false
-		// Keep only the filename; the part reads its body without its headers.
-		part.Header = nil
-		return &partReadCloser{part: part}, name, nil
+	part, err := nextFilePart(multipart.NewReader(hl, params["boundary"]))
+	switch {
+	case hl.tripped:
+		return nil, "", errMultipartHeaders
+	case err == io.EOF:
+		return nil, "", errors.New("multipart body has no file part")
+	case err != nil:
+		return nil, "", fmt.Errorf("read multipart: %w", err)
 	}
+	hl.armed = false
+	if !filePartWithin(hl.seen, maxMultipartHeaderBytes, params["boundary"]) {
+		part.Close()
+		return nil, "", errMultipartHeaders
+	}
+	hl.seen = nil
+	name := part.FileName()
+	// Keep only the filename; the part reads its body without its headers.
+	part.Header = nil
+	return &partReadCloser{part: part}, name, nil
 }
 
 // partReadCloser adapts a multipart.Part to io.ReadCloser semantics that close
