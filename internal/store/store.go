@@ -941,6 +941,32 @@ func (s *Store) deleteRow(slug, query string, args ...any) (blobGen, sourceGen s
 	return blobGen, sourceGen, nil
 }
 
+// SeriesSlugs returns, in slug order, the slugs of owner's public, unexpired
+// artifacts in series other than except, at most limit of them. Callers pass
+// one more than the most they will use, to tell a longer series apart.
+func (s *Store) SeriesSlugs(owner, series, except string, limit int) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT slug FROM artifacts
+		  WHERE owner = ? AND private = 0 AND (expires_at = 0 OR expires_at > ?)
+		    AND series = ? AND slug != ?
+		  ORDER BY slug ASC LIMIT ?`,
+		owner, time.Now().Unix(), series, except, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list series: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			return nil, fmt.Errorf("scan series: %w", err)
+		}
+		out = append(out, slug)
+	}
+	return out, rows.Err()
+}
+
 // List returns owner's artifacts, newest first, excluding any already past TTL
 // (which the sweeper will reap). In v1 there is a single local owner; the
 // parameter keeps per-owner listing additive later.

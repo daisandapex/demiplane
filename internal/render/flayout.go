@@ -106,11 +106,19 @@ func seriesFamily(slug string, siblings []string) []string {
 }
 
 // treeHTML renders the series tree: every member of the family, the current
-// page marked and unlinked.
-func treeHTML(slug string, fam []string, base string) string {
-	var b strings.Builder
+// page marked and unlinked. It writes through the render's budgeted out, each
+// entry held to the remaining budget before it is built; the family is at
+// most MaxSeriesMembers long.
+func treeHTML(st *state, slug string, fam []string, base string) (string, error) {
+	b := st.newOut()
 	b.WriteString(`<nav class="ftree" id="ftree" aria-label="Series"><p class="rail-h">Series</p><ol>`)
 	for _, s := range fam {
+		if err := st.tick(); err != nil {
+			return "", err
+		}
+		if err := st.fits(escapedLen(base) + 2*escapedLen(s) + 64); err != nil {
+			return "", err
+		}
 		if s == slug {
 			b.WriteString(`<li><span aria-current="page">` + html.EscapeString(s) + `</span></li>`)
 			continue
@@ -118,7 +126,10 @@ func treeHTML(slug string, fam []string, base string) string {
 		b.WriteString(`<li><a href="` + navHref(base, s) + `">` + html.EscapeString(s) + `</a></li>`)
 	}
 	b.WriteString("</ol></nav>\n")
-	return b.String()
+	if st.err != nil {
+		return "", st.err
+	}
+	return b.String(), nil
 }
 
 // topbar is the one-row sticky bar of an F page: the wordmark kicker on the

@@ -54,6 +54,10 @@ type Limits struct {
 	MaxMetaFields int
 	// MaxMetaBytes caps the frontmatter block rendered as the meta-header.
 	MaxMetaBytes int
+	// MaxSeriesMembers caps the series family a page navigates (itself
+	// included). A larger series renders without the series tree and the
+	// prev/next row.
+	MaxSeriesMembers int
 }
 
 // Per-field frontmatter caps for the meta-header.
@@ -81,6 +85,9 @@ var DefaultLimits = Limits{
 	MaxListDepth:    64,
 	MaxMetaFields:   256,
 	MaxMetaBytes:    64 << 10,
+	// MaxSeriesMembers: the server asks the store for at most this many
+	// siblings, so a larger series is seen as one and renders no navigation.
+	MaxSeriesMembers: 1000,
 }
 
 // withDefaults fills zero fields from DefaultLimits.
@@ -109,19 +116,23 @@ func (l Limits) withDefaults() Limits {
 	if l.MaxMetaBytes <= 0 {
 		l.MaxMetaBytes = DefaultLimits.MaxMetaBytes
 	}
+	if l.MaxSeriesMembers <= 0 {
+		l.MaxSeriesMembers = DefaultLimits.MaxSeriesMembers
+	}
 	return l
 }
 
 // unlimited is the policy for trusted, operator-shipped documents (Body).
 var unlimited = Limits{
-	MaxTableColumns: maxInt,
-	MaxTableCells:   maxInt,
-	MaxOutputBytes:  maxInt,
-	MaxLines:        maxInt,
-	MaxHeadings:     maxInt,
-	MaxListDepth:    maxInt,
-	MaxMetaFields:   maxInt,
-	MaxMetaBytes:    maxInt,
+	MaxTableColumns:  maxInt,
+	MaxTableCells:    maxInt,
+	MaxOutputBytes:   maxInt,
+	MaxLines:         maxInt,
+	MaxHeadings:      maxInt,
+	MaxListDepth:     maxInt,
+	MaxMetaFields:    maxInt,
+	MaxMetaBytes:     maxInt,
+	MaxSeriesMembers: maxInt,
 }
 
 const maxInt = int(^uint(0) >> 1)

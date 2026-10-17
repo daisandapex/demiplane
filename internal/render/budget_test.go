@@ -393,3 +393,75 @@ func TestInputCaps(t *testing.T) {
 		t.Errorf("frontmatter with the meta-header off was refused: %v", err)
 	}
 }
+
+// TestSeriesNavigationCapped: a family within MaxSeriesMembers gets its tree
+// and prev/next row; a larger one renders without either, and the tree is
+// charged to the output budget.
+func TestSeriesNavigationCapped(t *testing.T) {
+	sib := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("s-%04d", i)
+		}
+		return out
+	}
+	opts := func(n int, lim Limits) Options {
+		return Options{Header: true, Colophon: true, Slug: "s-5000", Siblings: sib(n),
+			ContentBase: "https://c.example", Limits: lim}
+	}
+	lim := Limits{MaxSeriesMembers: 10}
+	out, err := Render(context.Background(), []byte("# T\n\nbody\n"), opts(9, lim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `class="ftree"`) || !strings.Contains(string(out), `class="nav"`) {
+		t.Error("a family at the cap lost its navigation")
+	}
+	out, err = Render(context.Background(), []byte("# T\n\nbody\n"), opts(10, lim))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), `class="ftree"`) || strings.Contains(string(out), `class="nav"`) {
+		t.Error("a family past the cap still rendered navigation")
+	}
+	// The tree counts against the budget: a budget that holds the page but
+	// not its tree refuses it.
+	small := Limits{MaxOutputBytes: 40 << 10}
+	if _, err := Render(context.Background(), []byte("# T\n\nbody\n"), opts(900, small)); !errors.Is(err, ErrBudget) {
+		t.Errorf("a tree past the budget: err %v, want ErrBudget", err)
+	}
+}
+
+// TestLongFenceInfoIsNotLowercased: a fence info string far longer than any
+// language name selects no highlighter.
+func TestLongFenceInfoIsNotLowercased(t *testing.T) {
+	if got := canonLang(strings.Repeat("GO", 1000)); got != "" {
+		t.Errorf("canonLang(long) = %q, want none", got)
+	}
+	if got := canonLang("Go title=x"); got != "go" {
+		t.Errorf("canonLang(Go title=x) = %q", got)
+	}
+}
+
+// TestSeriesNavigationAllocationBounded: a page in a very large series with a
+// long content origin allocates a small multiple of its output budget, not the
+// size of the whole navigation.
+func TestSeriesNavigationAllocationBounded(t *testing.T) {
+	sib := make([]string, 100_000)
+	for i := range sib {
+		sib[i] = fmt.Sprintf("series-member-%06d", i)
+	}
+	base := "https://" + strings.Repeat("h", 200) + ".example"
+	opts := Options{Header: true, Colophon: true, Slug: "series-member-x", Siblings: sib,
+		ContentBase: base, Limits: Limits{MaxOutputBytes: 1 << 20}}
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, _ = Render(context.Background(), []byte("# T\n\nbody\n"), opts)
+	runtime.ReadMemStats(&after)
+	alloc := after.TotalAlloc - before.TotalAlloc
+	t.Logf("allocated %d KiB rendering a page with %d siblings", alloc>>10, len(sib))
+	if alloc > 16<<20 {
+		t.Errorf("rendering allocated %d MiB, want at most 16 MiB (budget 1 MiB)", alloc>>20)
+	}
+}

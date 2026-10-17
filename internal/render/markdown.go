@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	demiplane "github.com/daisandapex/demiplane"
 	"github.com/daisandapex/demiplane/internal/theme"
@@ -242,6 +243,10 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 	// owns the look, so its pages keep the plain masthead and single column;
 	// F would hand an operator's sheet a grid, rail and tree it never styled.
 	fLayout := opts.Header && opts.CSS == ""
+	// A series past the member cap renders as no series: no tree, no prev/next.
+	if len(opts.Siblings)+1 > st.lim.MaxSeriesMembers {
+		opts.Siblings = nil
+	}
 	// The body tags its own lead paragraph (the dek) and, on F pages, the
 	// paragraphs that open with inline code, and collects the outline as it
 	// writes headings, so no finished HTML is rewritten or rescanned.
@@ -267,7 +272,9 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 		}
 		metaHTML = "" // it lives in the rail now
 		if fam := seriesFamily(opts.Slug, opts.Siblings); fam != nil {
-			tree = treeHTML(opts.Slug, fam, opts.ContentBase)
+			if tree, err = treeHTML(st, opts.Slug, fam, opts.ContentBase); err != nil {
+				return nil, err
+			}
 		}
 		bodyClass = "f"
 		if tree != "" {
@@ -287,7 +294,7 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 	case fLayout:
 		pg.add(topbar(themeName, toggle, tree != ""))
 		pg.add(`<div class="fgrid">` + "\n")
-		pg.add(tree)
+		pg.keep(tree)
 		pg.add(`<header class="dochead"><h1 class="doctitle">` + title + "</h1></header>\n")
 	case opts.Header:
 		pg.add(masthead(title, themeName, toggle))
@@ -464,7 +471,10 @@ func headingText(raw string) string {
 func slugify(s string) string {
 	var b strings.Builder
 	prevHyphen := false
-	for _, r := range strings.ToLower(s) {
+	for _, r := range s {
+		// Per rune, so lowering never builds a copy of s (lowercasing can
+		// lengthen UTF-8 text).
+		r = unicode.ToLower(r)
 		switch {
 		case b.Len() >= maxSlugLen:
 			return strings.TrimRight(b.String(), "-")
@@ -639,7 +649,10 @@ const replyBoxCSS = `
 // publish path uses Render.
 func Body(src []byte) string {
 	st := newState(context.Background(), unlimited)
-	l, _ := splitLines(st, strings.ReplaceAll(string(src), "\r\n", "\n"))
+	l, err := splitLines(st, strings.ReplaceAll(string(src), "\r\n", "\n"))
+	if err != nil {
+		return ""
+	}
 	o := st.newOut()
 	_ = renderBlocks(st, l, 0, o)
 	return o.String()
@@ -778,7 +791,10 @@ func renderBlocks(st *state, l *lines, from int, o *out) error {
 		case reHeading.MatchString(trimmed):
 			flushPara()
 			m := reHeading.FindStringSubmatch(trimmed)
-			if err := st.inlineFits(m[2]); err != nil {
+			// The heading text appears twice (the heading and its anchor's
+			// label), with an id of at most maxSlugLen bytes twice and fixed
+			// markup; all of it is held to the budget before any is built.
+			if err := st.fits(2*inlineUpper(m[2]) + 2*maxSlugLen + 128); err != nil {
 				return err
 			}
 			if st.headings++; st.headings > st.lim.MaxHeadings {
@@ -1291,7 +1307,9 @@ func safeURL(u string) bool {
 	if strings.ContainsRune(u, '\\') || hasControl(u) {
 		return false
 	}
-	lu := strings.ToLower(strings.TrimSpace(u))
+	// Lowercased per ASCII byte: the checks below match ASCII schemes and
+	// separators only, and full Unicode lowercasing can lengthen the text.
+	lu := asciiLower(strings.TrimSpace(u))
 	if lu == "" {
 		return false
 	}
@@ -1330,6 +1348,23 @@ func safeURL(u string) bool {
 		}
 	}
 	return true
+}
+
+// asciiLower lowercases the ASCII letters of s, leaving every other byte as
+// it is, so the result is never longer than s.
+func asciiLower(s string) string {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c >= 'A' && c <= 'Z' {
+			b := []byte(s)
+			for j := i; j < len(b); j++ {
+				if b[j] >= 'A' && b[j] <= 'Z' {
+					b[j] += 'a' - 'A'
+				}
+			}
+			return string(b)
+		}
+	}
+	return s
 }
 
 // hasControl reports whether s contains a C0 or C1 control character or DEL.

@@ -1050,21 +1050,17 @@ func replyMode(q url.Values) string {
 //
 // A series is only a family when it was declared: slug text never creates one.
 // The named-slug requirement keeps auto-generated capability slugs out of the nav
-// — a generated slug is not a stable link target. A List error is non-fatal; the
+// — a generated slug is not a stable link target. A lookup error is non-fatal; the
 // colophon simply shows the meta row with no series nav.
 func (s *Server) seriesSiblings(series, named string) []string {
 	if series == "" || named == "" {
 		return nil
 	}
-	arts, err := s.store.List(store.DefaultOwner)
+	// The store returns at most as many siblings as the renderer navigates; a
+	// series at that size renders no navigation (render.Limits.MaxSeriesMembers).
+	siblings, err := s.store.SeriesSlugs(store.DefaultOwner, series, named, render.DefaultLimits.MaxSeriesMembers)
 	if err != nil {
 		return nil
-	}
-	var siblings []string
-	for _, a := range arts {
-		if a.Slug != named && a.Series == series {
-			siblings = append(siblings, a.Slug)
-		}
 	}
 	return siblings
 }

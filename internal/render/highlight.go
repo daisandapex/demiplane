@@ -78,12 +78,17 @@ var langs = map[string]*langSpec{
 // canonLang folds the language fence's info-string to a supported spec key,
 // accepting the common aliases. An unsupported or empty language returns "".
 func canonLang(lang string) string {
-	l := strings.ToLower(strings.TrimSpace(lang))
+	l := strings.TrimSpace(lang)
 	// A fence info-string may carry more than the language (```go title=x); the
-	// first token is the language.
+	// first token is the language. It is taken, and a token too long to be a
+	// language refused, before it is lowercased.
 	if i := strings.IndexAny(l, " \t"); i >= 0 {
 		l = l[:i]
 	}
+	if len(l) > 16 {
+		return ""
+	}
+	l = strings.ToLower(l)
 	switch l {
 	case "go", "golang":
 		return "go"
