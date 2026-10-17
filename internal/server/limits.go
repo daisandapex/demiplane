@@ -114,8 +114,14 @@ func (s *Server) withRequestLimits(next http.Handler) http.Handler {
 func (s *Server) withRequestDeadlines(next http.Handler) http.Handler {
 	l := s.reqLimits
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rc := http.NewResponseController(w)
 		now := time.Now()
+		// --write-timeout bounds the whole response from here: every write
+		// deadline set below or by a handler (downloads, the live-reload
+		// stream) is capped at it.
+		if srv, ok := r.Context().Value(http.ServerContextKey).(*http.Server); ok && srv.WriteTimeout > 0 {
+			w = &cappedWriteDeadline{ResponseWriter: w, limit: now.Add(srv.WriteTimeout)}
+		}
+		rc := http.NewResponseController(w)
 		// The body deadline goes on first, before any refusal, so that even a
 		// refused request cannot hold the connection while the server drains
 		// the body it left unread.
@@ -147,6 +153,23 @@ func (s *Server) withRequestDeadlines(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// cappedWriteDeadline caps every write deadline set through it (with
+// http.ResponseController) at limit; clearing the deadline sets limit.
+type cappedWriteDeadline struct {
+	http.ResponseWriter
+	limit time.Time
+}
+
+func (c *cappedWriteDeadline) SetWriteDeadline(t time.Time) error {
+	if t.IsZero() || t.After(c.limit) {
+		t = c.limit
+	}
+	return http.NewResponseController(c.ResponseWriter).SetWriteDeadline(t)
+}
+
+// Unwrap lets http.ResponseController reach the connection's other methods.
+func (c *cappedWriteDeadline) Unwrap() http.ResponseWriter { return c.ResponseWriter }
 
 // withAdmission bounds requests in progress, in all and per client, and
 // carries the Server and the request's admission slots in the context. One
