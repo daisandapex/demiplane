@@ -255,3 +255,19 @@ func TestBrowseIndexCapsSeriesCounts(t *testing.T) {
 		t.Errorf("browse index does not cap the series count:\n%s", w.Body.String())
 	}
 }
+
+// TestLandingStatesNoArtifactCount: GET / no longer counts the store on
+// every request; the instance line carries only the auth state.
+func TestLandingStatesNoArtifactCount(t *testing.T) {
+	for _, browse := range []bool{false, true} {
+		w := httptest.NewRecorder()
+		New(browseStore(t, 3), Config{Browse: browse}).Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+		page := w.Body.String()
+		if regexp.MustCompile(`\d+ artifacts? · auth`).MatchString(page) {
+			t.Errorf("browse=%v: landing states an artifact count", browse)
+		}
+		if !strings.Contains(page, "auth: open (no token configured)") {
+			t.Errorf("browse=%v: landing lost the auth state", browse)
+		}
+	}
+}

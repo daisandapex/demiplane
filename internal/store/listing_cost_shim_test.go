@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func familiesForTest(t *testing.T, st *Store, limit int) ([]Artifact, map[string]int, bool) {
+func familiesForTest(t *testing.T, st *Store, limit int) ([]Artifact, map[string]SeriesSize, bool) {
 	t.Helper()
 	newest, members, truncated, err := st.NewestPerFamily(context.Background(), DefaultOwner, limit)
 	if err != nil {
@@ -21,10 +21,10 @@ func familiesForTest(t *testing.T, st *Store, limit int) ([]Artifact, map[string
 // and the index constraints its plan must show.
 func listingQueriesForTest() map[string]listingQuery {
 	return map[string]listingQuery{
-		"families":     {qFamilies, []any{"local", 0, FamilyScanBudget}, []string{"private=?"}},
-		"series count": {qSeriesCount, []any{"local", "big", 0, SeriesCountCap + 1}, []string{"private=? AND series=?"}},
-		"list ties":    {qListTies, []any{"local", 1700050100, "big-00100", 0, 201}, []string{"private=? AND created_at=? AND slug>?"}},
-		"list older":   {qListOlder, []any{"local", 1700050100, 0, 201}, []string{"private=? AND created_at<?"}},
-		"series slugs": {qSeriesSlugs, []any{"local", 0, "big", "big-00001", 50}, []string{"private=? AND series=?"}},
+		"families":       {qFamilies, []any{"local", FamilyScanBudget}, []string{"private=?"}},
+		"series members": {qSeriesMembers, []any{"local", "big", seriesCountExamine}, []string{"private=? AND series=?"}},
+		"list ties":      {qListTies, []any{"local", 1700050100, "big-00100", 201}, []string{"private=? AND created_at=? AND slug>?"}},
+		"list older":     {qListOlder, []any{"local", 1700050100, 201}, []string{"private=? AND created_at<?"}},
+		"series slugs":   {qSeriesSlugs, []any{"local", "big", "big-00001", 50}, []string{"private=? AND series=?"}},
 	}
 }

@@ -1115,14 +1115,10 @@ func renderedName(filename string) string {
 // regardless of state: the privacy ethos, a copy-pasteable publish one-liner,
 // the endpoint vocabulary, and pointers to /docs, /llms.txt, and /help. When
 // --browse is enabled it also lists the (non-private) artifacts; otherwise it
-// only shows the count, so slugs are never leaked by default.
+// lists nothing, so slugs are never leaked by default. It states no artifact
+// count: an exact one would cost a request time proportional to the store.
 func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	base := s.requestBase(r)
-	count, err := s.store.Count(store.DefaultOwner)
-	if err != nil {
-		log.Printf("landing count failed: %s", logsafe.Err(err))
-		count = -1
-	}
 
 	var b strings.Builder
 	b.WriteString(`<span class="kicker">Self-hosted publishing</span>`)
@@ -1154,10 +1150,7 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	if s.authToken != "" {
 		authState = "bearer token required for write/list"
 	}
-	if count >= 0 {
-		fmt.Fprintf(&b, `<p class="kicker">This instance</p><p>%s · auth: %s</p>`,
-			plural(count, "artifact"), html.EscapeString(authState))
-	}
+	fmt.Fprintf(&b, `<p class="kicker">This instance</p><p>auth: %s</p>`, html.EscapeString(authState))
 	if s.browse {
 		b.WriteString(s.artifactTable(r))
 	}
@@ -1178,6 +1171,7 @@ type landingRow struct {
 	label   string    // display text: full slug (singleton) or series name
 	slug    string    // link target: the row's own slug, or the newest member's
 	count   int       // family size (1 for a singleton)
+	more    bool      // the family may be larger than count
 	created time.Time // newest member's publish time
 	locked  bool      // lock glyph (singletons only; a series is mixed)
 }
@@ -1188,7 +1182,7 @@ type landingRow struct {
 // newest member (the artifact given). A one-member series stays a plain row.
 // This is the landing analogue of the gallery's client-side series grouping
 // (slug-prefix inference is gone: one shared token was never a family signal).
-func familyRows(newest []store.Artifact, members map[string]int) []landingRow {
+func familyRows(newest []store.Artifact, members map[string]store.SeriesSize) []landingRow {
 	rows := make([]landingRow, 0, len(newest))
 	for _, a := range newest {
 		row := landingRow{
@@ -1198,9 +1192,9 @@ func familyRows(newest []store.Artifact, members map[string]int) []landingRow {
 			created: a.CreatedAt,
 			locked:  a.HasPassword(),
 		}
-		if n := members[a.Series]; a.Series != "" && n > 1 {
+		if n := members[a.Series]; a.Series != "" && (n.N > 1 || n.More) {
 			// A mixed family drops the lock glyph.
-			row.label, row.count, row.locked = a.Series, n, false
+			row.label, row.count, row.more, row.locked = a.Series, n.N, n.More, false
 		}
 		rows = append(rows, row)
 	}
@@ -1244,12 +1238,12 @@ func (s *Server) artifactTable(r *http.Request) string {
 	}
 	for _, row := range shown {
 		label := html.EscapeString(row.label)
-		if row.count > 1 {
+		if row.count > 1 || row.more {
 			// A series reads as "dispatch (8) →", linking to the newest member;
 			// past the count cap, "dispatch (100+) →".
 			n := strconv.Itoa(row.count)
-			if row.count > store.SeriesCountCap {
-				n = strconv.Itoa(store.SeriesCountCap) + "+"
+			if row.more {
+				n += "+"
 			}
 			label = fmt.Sprintf(`%s <span class="scount">(%s)</span> →`, label, n)
 		} else if row.locked {

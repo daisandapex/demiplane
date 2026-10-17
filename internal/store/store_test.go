@@ -770,7 +770,7 @@ func TestNewestPerFamily(t *testing.T) {
 	if got, want := strings.Join(slugs, " "), "dispatch-08 design-lab notes solo-1"; got != want {
 		t.Errorf("families = %q, want %q", got, want)
 	}
-	if members["dispatch"] != 3 || members["solo"] != 1 || len(members) != 2 {
+	if members["dispatch"] != (SeriesSize{N: 3}) || members["solo"] != (SeriesSize{N: 1}) || len(members) != 2 {
 		t.Errorf("members = %v, want dispatch 3, solo 1", members)
 	}
 	if truncated {

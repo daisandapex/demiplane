@@ -90,7 +90,7 @@ func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	paged := r.URL.Query().Has("after")
-	if shown == 0 && !paged {
+	if shown == 0 && !paged && next == nil {
 		// True empty state (no public artifacts at all) — orient a newcomer.
 		b.WriteString(`<div class="gempty"><div class="t">No artifacts yet</div>` +
 			`<p>Publish your first page, then it shows up here. New to demiplane? ` +

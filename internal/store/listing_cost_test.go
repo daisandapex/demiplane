@@ -4,8 +4,11 @@
 package store
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // bigStore holds 20,000 private artifacts (the newest), 20,000 public members
@@ -70,14 +73,14 @@ func TestBrowseFamiliesReadBoundedRows(t *testing.T) {
 	if !truncated {
 		t.Error("the scan budget ran out among one series' members, but truncated is false")
 	}
-	if n := st.familyRowsRead.Load(); n > 1000 {
+	if n := st.rowsExamined.Load(); n > FamilyScanBudget+int64(seriesCountExamine) {
 		t.Errorf("NewestPerFamily read %d rows for 9 families", n)
 	}
 	if len(newest) == 0 || newest[0].Slug != "big-20000" {
 		t.Errorf("first family = %v, want big-20000", newest)
 	}
-	if n := members["big"]; n > 101 {
-		t.Errorf("series size counted to %d; counts stop past the cap", n)
+	if n := members["big"]; n.N != SeriesCountCap || !n.More {
+		t.Errorf("series size = %+v, want %d and more", n, SeriesCountCap)
 	}
 }
 
@@ -106,4 +109,108 @@ type listingQuery struct {
 	sql             string
 	args            []any
 	wantConstraints []string
+}
+
+// expiredStore holds 20,000 public artifacts past their TTL but not yet
+// swept (the newest; every other one in series "big"), then 300 live ones
+// (every third in "big").
+func expiredStore(t *testing.T) *Store {
+	t.Helper()
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	for _, q := range []string{
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 20000)
+		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, series, expires_at)
+		 SELECT printf('exp-%05d', i), '', 'text/plain', 1, 1700100000 + i, 'local',
+		        CASE WHEN i % 2 = 0 THEN 'big' ELSE '' END, 1 FROM n`,
+		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 300)
+		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, series)
+		 SELECT printf('live-%03d', i), '', 'text/plain', 1, 1700000000 + i, 'local',
+		        CASE WHEN i % 3 = 0 THEN 'big' ELSE '' END FROM n`,
+	} {
+		if _, err := st.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return st
+}
+
+// TestListingsStepOverABoundedExpiredBatch: an unswept expired batch costs
+// each listing read at most its budget of index entries, the reads report
+// that they stopped short, and paging still lists every live artifact once.
+func TestListingsStepOverABoundedExpiredBatch(t *testing.T) {
+	st := expiredStore(t)
+	ctx := context.Background()
+
+	seen := map[string]int{}
+	var after *ListCursor
+	for calls := 0; ; calls++ {
+		if calls > 200 {
+			t.Fatal("paging never ends")
+		}
+		st.rowsExamined.Store(0)
+		page, next, err := st.ListPage(ctx, DefaultOwner, after, 200)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := st.rowsExamined.Load(); n > 200+1+ExamineSlack {
+			t.Fatalf("one ListPage examined %d entries", n)
+		}
+		for _, a := range page {
+			if strings.HasPrefix(a.Slug, "exp-") {
+				t.Fatalf("expired %s listed", a.Slug)
+			}
+			seen[a.Slug]++
+		}
+		if next == nil {
+			break
+		}
+		after = next
+	}
+	if len(seen) != 300 {
+		t.Errorf("paging listed %d live artifacts, want 300", len(seen))
+	}
+	for slug, n := range seen {
+		if n != 1 {
+			t.Errorf("%s listed %d times", slug, n)
+		}
+	}
+
+	st.rowsExamined.Store(0)
+	newest, members, truncated, err := st.NewestPerFamily(ctx, DefaultOwner, 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := st.rowsExamined.Load(); n > FamilyScanBudget+int64(len(members))*seriesCountExamine {
+		t.Errorf("NewestPerFamily examined %d entries", n)
+	}
+	if len(newest) != 0 || !truncated {
+		t.Errorf("families = %d, truncated %v; want none found and truncated within the expired batch", len(newest), truncated)
+	}
+
+	st.rowsExamined.Store(0)
+	size, err := st.seriesSize(ctx, DefaultOwner, "big", time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := st.rowsExamined.Load(); n > seriesCountExamine || !size.More {
+		t.Errorf("seriesSize examined %d entries, size %+v; want at most %d and More", n, size, seriesCountExamine)
+	}
+
+	st.rowsExamined.Store(0)
+	slugs, err := st.SeriesSlugs(ctx, DefaultOwner, "big", "", 1000)
+	if !errors.Is(err, ErrListingTruncated) {
+		t.Errorf("SeriesSlugs err = %v, want ErrListingTruncated (%d slugs)", err, len(slugs))
+	}
+	if n := st.rowsExamined.Load(); n > 1000+ExamineSlack {
+		t.Errorf("SeriesSlugs examined %d entries", n)
+	}
+	for _, s := range slugs {
+		if strings.HasPrefix(s, "exp-") {
+			t.Fatalf("expired %s returned", s)
+		}
+	}
 }

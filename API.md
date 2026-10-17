@@ -325,7 +325,10 @@ gate exists.
 A response holds at most 200 artifacts. When more follow, it carries `next`, a
 cursor; pass it back as `?after=<next>` for the following page. The last page
 has no `next`. `count` is the number of artifacts in this response. A malformed
-`after` gets `400`.
+`after` gets `400`. A response can hold fewer than 200 artifacts, even none, and
+still carry `next`: one request steps over a bounded number of expired
+artifacts the sweeper has not removed yet, so keep following `next` until it is
+absent.
 
 ```json
 {

@@ -1023,7 +1023,7 @@ func TestFamilyRows(t *testing.T) {
 		{Slug: "dispatch-note", CreatedAt: base.Add(-4 * time.Hour)},
 		{Slug: "solo-1", Series: "solo", CreatedAt: base.Add(-5 * time.Hour), PasswordHash: "x"},
 	}
-	rows := familyRows(newest, map[string]int{"dispatch": 2, "solo": 1})
+	rows := familyRows(newest, map[string]store.SeriesSize{"dispatch": {N: 2}, "solo": {N: 1}})
 	if len(rows) != 5 {
 		t.Fatalf("familyRows len = %d, want 5", len(rows))
 	}
