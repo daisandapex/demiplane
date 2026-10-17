@@ -36,6 +36,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/limit"
 	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/render"
 	"github.com/daisandapex/demiplane/internal/server"
@@ -151,7 +152,15 @@ func runServe(args []string) error {
 	browse := fs.Bool("browse", false, "serve an HTML index of non-private artifacts at GET /")
 	maxUpload := fs.Int64("max-upload", defaultMaxUpload, "max publish body size in bytes (default 100 MiB; 0 = unlimited)")
 	storeQuota := fs.Int64("store-quota", 0, storeQuotaUsage)
-	writeTimeout := fs.Duration("write-timeout", 0, "HTTP write timeout (0 = none; keep 0 if serving large files)")
+	writeTimeout := fs.Duration("write-timeout", 0, "whole-response HTTP write timeout (0 = none); it also ends live-reload streams, so prefer --response-timeout")
+	bodyTimeout := fs.Duration("body-timeout", 30*time.Second, "time a request may take to send its body; for uploads, the grace before --upload-min-rate applies and the longest allowed stall (0 = no limit)")
+	uploadMinRate := fs.Int64("upload-min-rate", 16<<10, "minimum average upload rate in bytes/s after --body-timeout (0 = no rate floor)")
+	responseTimeout := fs.Duration("response-timeout", 60*time.Second, "write deadline for each response, plus size / --download-min-rate for artifact bodies; live-reload streams are exempt (0 = none)")
+	downloadMinRate := fs.Int64("download-min-rate", 16<<10, "bytes/s an artifact download is given time for on top of --response-timeout (0 = no allowance for size)")
+	maxConns := fs.Int("max-conns", 1024, "open connections per listener; further connections wait (0 = unlimited)")
+	maxConnsPerClient := fs.Int("max-conns-per-client", 64, "open connections per client address per listener; further ones are closed (0 = unlimited)")
+	maxRequests := fs.Int("max-requests", 256, "requests in progress per listener; the excess gets 503 (0 = unlimited)")
+	maxRequestsPerClient := fs.Int("max-requests-per-client", 32, "requests in progress per client address per listener; the excess gets 503 (0 = unlimited)")
 	idleTimeout := fs.Duration("idle-timeout", 120*time.Second, "HTTP idle (keep-alive) timeout")
 	themeName := fs.String("theme", "", "theme for the whole instance (chrome + ?render=md pages): light (default), dark, or a pinned palette catppuccin|dracula|one-dark")
 	cssFile := fs.String("css", "", "path to a custom stylesheet for ?render=md pages; replaces the built-in theme")
@@ -175,6 +184,11 @@ func runServe(args []string) error {
 	}
 	if *storeQuota < 0 {
 		return fmt.Errorf("--store-quota must be >= 0 (0 = unlimited)")
+	}
+	if *bodyTimeout < 0 || *uploadMinRate < 0 || *responseTimeout < 0 || *downloadMinRate < 0 ||
+		*maxConns < 0 || *maxConnsPerClient < 0 || *maxRequests < 0 || *maxRequestsPerClient < 0 {
+		return fmt.Errorf("--body-timeout, --upload-min-rate, --response-timeout, --download-min-rate, " +
+			"--max-conns, --max-conns-per-client, --max-requests and --max-requests-per-client must not be negative")
 	}
 	if *themeName != "" && !theme.Valid(*themeName) {
 		return fmt.Errorf("--theme %q: unknown theme (choose one of: %s)", *themeName, strings.Join(theme.Names, ", "))
@@ -262,6 +276,14 @@ func runServe(args []string) error {
 		RenderMetaHeader:  chrome.metaHeader,
 		RenderMaxOutput:   *renderMaxOutput,
 		RenderConcurrency: *renderConcurrency,
+		Requests: server.RequestLimits{
+			BodyTimeout:          offIfZero(*bodyTimeout),
+			UploadMinRate:        offIfZero(*uploadMinRate),
+			ResponseTimeout:      offIfZero(*responseTimeout),
+			DownloadMinRate:      offIfZero(*downloadMinRate),
+			MaxRequests:          offIfZero(*maxRequests),
+			MaxRequestsPerClient: offIfZero(*maxRequestsPerClient),
+		},
 	})
 
 	// Native TLS (optional module, `-tags tls`; ADR 0004). nil moduleTLS =
@@ -278,8 +300,10 @@ func runServe(args []string) error {
 	// ReadHeaderTimeout caps slowloris-style header stalls. A whole-request
 	// ReadTimeout is intentionally NOT set: demiplane streams arbitrarily large
 	// uploads, and a global read deadline would kill legitimate slow transfers.
-	// WriteTimeout is likewise off by default (large downloads); operators can opt
-	// in via --write-timeout. See SECURITY.md.
+	// Bodies and responses get per-route deadlines instead (--body-timeout,
+	// --upload-min-rate, --response-timeout, --download-min-rate; see
+	// internal/server/limits.go), which leave the live-reload stream alone.
+	// WriteTimeout stays off by default; --write-timeout opts in. See SECURITY.md.
 	mkServer := func(addr string, h http.Handler) *http.Server {
 		return &http.Server{
 			Addr:              addr,
@@ -314,13 +338,18 @@ func runServe(args []string) error {
 	for _, s := range servers {
 		s := s
 		go func() {
-			var err error
+			ln, err := net.Listen("tcp", s.Addr)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			ln = limit.Listener(ln, *maxConns, *maxConnsPerClient)
 			if s.TLSConfig != nil {
 				// Certificates come from TLSConfig (module-supplied); the
 				// file arguments are unused.
-				err = s.ListenAndServeTLS("", "")
+				err = s.ServeTLS(ln, "", "")
 			} else {
-				err = s.ListenAndServe()
+				err = s.Serve(ln)
 			}
 			if err != nil && err != http.ErrServerClosed {
 				errCh <- err
@@ -343,6 +372,15 @@ func runServe(args []string) error {
 		}
 		return firstErr
 	}
+}
+
+// offIfZero maps a flag's 0 ("no limit") to the negative value server
+// limits read as disabled; their own zero means "default".
+func offIfZero[T int | int64 | time.Duration](v T) T {
+	if v == 0 {
+		return -1
+	}
+	return v
 }
 
 // contentAddr resolves the address + port for the artifact (content) origin.

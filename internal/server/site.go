@@ -120,6 +120,10 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, quotaMessage, http.StatusInsufficientStorage)
 			return
 		}
+		if isBodyTimeout(err) {
+			http.Error(w, bodyTimeoutMessage, http.StatusRequestTimeout)
+			return
+		}
 		http.Error(w, "read upload: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -342,6 +346,9 @@ func (s *Server) serveSiteFile(w http.ResponseWriter, r *http.Request, site, rel
 	} else {
 		w.Header().Set("Content-Disposition",
 			fmt.Sprintf("attachment; filename=%q", sanitizeFilename(path.Base(rel))))
+	}
+	if fi, err := f.Stat(); err == nil {
+		s.extendWriteDeadline(w, fi.Size())
 	}
 	http.ServeContent(w, r, path.Base(rel), mod, f)
 }

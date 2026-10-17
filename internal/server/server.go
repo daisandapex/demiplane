@@ -68,6 +68,9 @@ type Config struct {
 	// Password bounds view-password verification (viewauth.go). The zero value
 	// uses the defaults.
 	Password PasswordLimits
+	// Requests bounds request bodies, response time and requests in progress
+	// (limits.go). The zero value uses the defaults.
+	Requests RequestLimits
 	// RenderMaxOutput caps a rendered ?render=md page in bytes; 0 takes
 	// render.DefaultLimits.
 	RenderMaxOutput int
@@ -95,6 +98,7 @@ type Server struct {
 	renderSem        chan struct{}               // render slots (renderlimit.go)
 	tokenMAC         []byte                      // random key for constant-time, length-hiding token comparison
 	views            *viewGate                   // view-password rate and concurrency limits
+	reqLimits        RequestLimits               // body, response and admission limits (limits.go), resolved
 	routes           []module.RouteModule        // compiled-in route modules, mounted on the control plane
 	contentRoutes    []module.ContentRouteModule // route modules that also mount on the content origin
 }
@@ -130,6 +134,7 @@ func New(st *store.Store, cfg Config) *Server {
 		renderSem:        newRenderSem(cfg.RenderConcurrency),
 		tokenMAC:         key,
 		views:            newViewGate(cfg.Password, viewKey()),
+		reqLimits:        cfg.Requests.resolved(),
 		routes:           module.RouteModules(),
 		contentRoutes:    module.ContentRouteModules(),
 	}
@@ -184,7 +189,7 @@ func (s *Server) ModuleDataDir(name string) (string, error) {
 func (s *Server) ControlHandler() http.Handler {
 	mux := http.NewServeMux()
 	s.registerControlRoutes(mux)
-	return withSecurityHeaders(s.guardCrossOriginWrites(mux))
+	return withSecurityHeaders(s.withRequestLimits(s.guardCrossOriginWrites(mux)))
 }
 
 // ContentHandler returns the artifact-serving handler: GET /{slug} only. It is
@@ -210,7 +215,7 @@ func (s *Server) ContentHandler() http.Handler {
 	// module's POST /answer/{slug}). The same cross-origin write guard as the
 	// control plane keeps another site from posting to them through a
 	// visitor's browser. It cannot tell apart two pages on this origin.
-	return withSecurityHeaders(s.guardCrossOriginWrites(mux))
+	return withSecurityHeaders(s.withRequestLimits(s.guardCrossOriginWrites(mux)))
 }
 
 // Handler returns a single combined handler that serves BOTH the control plane
@@ -227,7 +232,7 @@ func (s *Server) Handler() http.Handler {
 	s.mountCoreContentRoutes(mux)
 	s.mountContentRouteModules(mux)
 	mux.HandleFunc("GET /{slug}", s.handleGet)
-	return withSecurityHeaders(s.guardCrossOriginWrites(mux))
+	return withSecurityHeaders(s.withRequestLimits(s.guardCrossOriginWrites(mux)))
 }
 
 // registerControlRoutes mounts every route except the artifact catch-all
@@ -510,6 +515,10 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "upload exceeds the configured size limit", http.StatusRequestEntityTooLarge)
 				return
 			}
+			if isBodyTimeout(rerr) {
+				http.Error(w, bodyTimeoutMessage, http.StatusRequestTimeout)
+				return
+			}
 			log.Printf("render read failed: %v", rerr)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
@@ -585,6 +594,10 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		}
 		if isClientError(err) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if isBodyTimeout(err) {
+			http.Error(w, bodyTimeoutMessage, http.StatusRequestTimeout)
 			return
 		}
 		log.Printf("publish failed: %v", err)
@@ -683,6 +696,8 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 			r.Header.Del("Range")
 		}
 	}
+	// Time to send the body to a slow but honest reader, and no more.
+	s.extendWriteDeadline(w, art.Size)
 	// ServeContent handles Range requests, conditional GETs, and keeps the
 	// content-type we set above.
 	http.ServeContent(w, r, art.Filename, lastModified, f)

@@ -8,6 +8,7 @@ package main
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/daisandapex/demiplane/internal/modules/reply"
 )
@@ -50,6 +51,46 @@ func TestReplyHookConfigKeys(t *testing.T) {
 	} {
 		if err := applyModuleConfig(bad); err == nil {
 			t.Errorf("invalid hook pool config %v accepted", bad)
+		}
+	}
+}
+
+// TestReplyLimitConfigKeys pins the reply_* admission and storage keys.
+func TestReplyLimitConfigKeys(t *testing.T) {
+	t.Cleanup(func() { _ = reply.ConfigureLimits(reply.DefaultLimits()) })
+	p := filepath.Join(t.TempDir(), "config")
+	writeFile(t, p, "reply_max_per_artifact = 50\nreply_max_total = 500\nreply_max_bytes = 1048576\n"+
+		"reply_retention = 30d\nreply_rate_client = 5\nreply_rate_target = 0\nreply_rate_global = 100\n")
+	m, err := loadConfig(p)
+	if err != nil {
+		t.Fatalf("reply limit keys should parse: %v", err)
+	}
+	l, err := replyLimits(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.PerArtifact != 50 || l.Total != 500 || l.TotalBytes != 1<<20 || l.Retention != 30*24*time.Hour {
+		t.Fatalf("limits = %+v", l)
+	}
+	if l.RateClient.String() != "5/min burst 5" || !l.RateTarget.Unlimited() || l.RateGlobal.String() != "100/min burst 100" {
+		t.Fatalf("rates = %v %v %v", l.RateClient, l.RateTarget, l.RateGlobal)
+	}
+	if err := applyModuleConfig(m); err != nil {
+		t.Fatalf("valid limits rejected: %v", err)
+	}
+	if l, _ := replyLimits(map[string]string{"reply_retention": "0"}); l.Retention != 0 {
+		t.Fatal("reply_retention = 0 should keep replies forever")
+	}
+	for _, bad := range []map[string]string{
+		{"reply_max_per_artifact": "0"},
+		{"reply_max_total": "lots"},
+		{"reply_max_bytes": "-5"},
+		{"reply_max_bytes": "100"}, // below one reply
+		{"reply_retention": "soon"},
+		{"reply_rate_client": "-1"},
+	} {
+		if err := applyModuleConfig(bad); err == nil {
+			t.Errorf("invalid reply limit config %v accepted", bad)
 		}
 	}
 }

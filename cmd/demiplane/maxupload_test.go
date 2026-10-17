@@ -3,7 +3,10 @@
 
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // TestReceiveDefaultMaxUploadBounded locks the pre-public hardening: `receive`
 // must cap uploads by default so a fresh SSH forced-command install is not an
@@ -52,5 +55,17 @@ func TestStoreQuotaDefaultUnlimited(t *testing.T) {
 	}
 	if c2.storeQuota != 1<<20 {
 		t.Errorf("--store-quota = %d, want 1048576", c2.storeQuota)
+	}
+}
+
+// TestOffIfZero pins the flag mapping: a flag's 0 ("no limit") reaches the
+// server as negative (disabled), never as 0 (which the server reads as
+// "use the default").
+func TestOffIfZero(t *testing.T) {
+	if offIfZero(0) != -1 || offIfZero(int64(0)) != -1 || offIfZero(time.Duration(0)) != -1 {
+		t.Fatal("0 must map to -1")
+	}
+	if offIfZero(5) != 5 || offIfZero(30*time.Second) != 30*time.Second {
+		t.Fatal("non-zero values must pass through")
 	}
 }
