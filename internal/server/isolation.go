@@ -88,9 +88,19 @@ func isInertDocument(mt string) bool {
 // password-protected artifact, including its 401: no Referer leaves a page
 // whose URL is a secret, and no copy of the bytes is kept by the browser or a
 // shared cache after the artifact expires or is deleted.
+//
+// Cross-Origin-Resource-Policy: same-origin stops the browser handing the
+// bytes to another origin through a no-cors load. Without it a page could run
+// a protected script with <script src> (or apply a protected stylesheet, or
+// draw a protected image), carrying the viewer's cached credentials, and read
+// what it defines; no CORS grant is involved, so withholding one does not
+// help. Every sandboxed page is another origin, so protected artifacts cannot
+// be used as subresources at all; opening one, or framing it in the ?live
+// wrapper, is a navigation and is unaffected.
 func setProtectedHeaders(w http.ResponseWriter) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 }
 
 // passwordChallenge is the WWW-Authenticate value for a password-protected

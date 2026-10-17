@@ -276,6 +276,10 @@ What it breaks, deliberately:
   still frames artifacts, because the wrapper is not sandboxed.
 - Web workers, service workers and installable PWAs do not work.
 - Inside the `?live` preview, `target=_top` links do not navigate the wrapper.
+- A private or password-protected artifact cannot be loaded as a subresource
+  (script, stylesheet, image) by any page, because it answers with
+  `Cross-Origin-Resource-Policy: same-origin` and every sandboxed page is
+  another origin. Protected artifacts are documents to open, not assets.
 
 `--unsafe-no-sandbox` is the operator's way back to one shared origin, for an
 instance that hosts only content its operator trusts; service workers stay

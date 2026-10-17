@@ -133,7 +133,13 @@ alternative of an origin per artifact, are in [DESIGN.md](DESIGN.md#content-isol
   password-protected artifacts, their `401` and every `?live` wrapper carry
   `Referrer-Policy: no-referrer` and `Cache-Control: private, no-store`, so a
   capability URL does not leave in a `Referer` (or `document.referrer`) and no
-  copy outlives expiry or deletion in a browser or shared cache.
+  copy outlives expiry or deletion in a browser or shared cache. Artifact
+  responses also carry `Cross-Origin-Resource-Policy: same-origin`, so another
+  page cannot run a protected script, apply a protected stylesheet or draw a
+  protected image through a plain `<script>`, `<link>` or `<img>`, which the
+  browser would otherwise load with the viewer's cached credentials. The cost:
+  a protected artifact cannot be a subresource of any page (every sandboxed
+  page is another origin); it can only be opened or framed.
 - **Password realms.** Each artifact challenges with its own Basic realm (a
   short hash of the slug, not the slug), so a browser does not answer one
   artifact's challenge with credentials it cached for another.
@@ -152,7 +158,8 @@ alternative of an origin per artifact, are in [DESIGN.md](DESIGN.md#content-isol
   whether a URL exists or whether the viewer is authorized for it. Browsers may
   attach cached Basic credentials to those requests, because for top-level slugs
   the credential scope is the whole origin. The server checks them against each
-  artifact's own password; the page never sees the response.
+  artifact's own password; the page never sees the response, and a protected
+  response refuses to be used as its subresource.
 - **Public scripts, stylesheets and fonts are readable cross-origin.** So that a
   sandboxed page can load its own module scripts, `crossorigin` stylesheets and
   fonts (which browsers fetch in CORS mode, from origin `null`), a public

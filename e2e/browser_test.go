@@ -217,6 +217,51 @@ out.origin=self.origin;
 	}
 }
 
+// TestBrowser_ProtectedScriptsCannotBeIncluded: a hostile page must not be
+// able to run a protected script through a plain <script src> (a no-cors load,
+// which carries the viewer's cached credentials and needs no CORS grant) and
+// read what it defines. The browser is given real cached Basic credentials by
+// opening the hostile page, itself protected with the same password, through a
+// URL with credentials; the browser then attaches them to later requests on
+// the origin, as it would for a viewer who had typed the password. The script
+// URLs are absolute: a relative one would inherit the page URL's credentials,
+// and the browser refuses subresource URLs that carry credentials.
+func TestBrowser_ProtectedScriptsCannotBeIncluded(t *testing.T) {
+	chrome := requireChrome(t)
+	srv := startServer(t, serverOpts{Token: "browser-token"})
+	col := newCollector(t)
+
+	publishAs(t, srv, "locked-js", "locked.js", "pw-777", "window.lockedLeak='locked-js-canary';")
+	res := srv.do(t, http.MethodPost, srv.ControlURL+"/publish?private=true&filename=cap.js",
+		strings.NewReader("window.capLeak='cap-js-canary';"), srv.authHeader())
+	if res.Status != http.StatusCreated {
+		t.Fatalf("publish private script: %d %s", res.Status, res.Body)
+	}
+	capPath := strings.TrimPrefix(strings.TrimSpace(string(res.Body)), srv.ContentURL)
+
+	hostile := `<!doctype html><html><head>
+<script src="` + srv.ContentURL + `/locked-js"></script>
+<script src="` + srv.ContentURL + capPath + `"></script>
+</head><body><script>` + reportJS(col.srv.URL) + `
+report({js:true,locked:window.lockedLeak||null,cap:window.capLeak||null,origin:self.origin});
+</script></body></html>`
+	publishAs(t, srv, "hostile-incl", "hostile.html", "pw-777", hostile)
+
+	u := strings.Replace(srv.ContentURL, "http://", "http://viewer:pw-777@", 1) + "/hostile-incl"
+	startChrome(t, chrome, u)
+	got := col.wait(t, 30*time.Second)
+	t.Logf("inclusion report: %s", got)
+
+	if !strings.Contains(got, `"js":true`) || !strings.Contains(got, `"origin":"null"`) {
+		t.Fatalf("hostile page did not run sandboxed, so nothing was tested: %s", got)
+	}
+	for _, canary := range []string{"locked-js-canary", "cap-js-canary"} {
+		if strings.Contains(got, canary) {
+			t.Errorf("hostile page ran a protected script (%s): %s", canary, got)
+		}
+	}
+}
+
 // TestBrowser_SandboxedSiteLoadsOwnAssets is the positive control for the
 // sandbox: a multi-file site must still load its own stylesheet, classic
 // script, module script and image while running in an opaque origin.

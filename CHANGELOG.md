@@ -16,8 +16,10 @@ All notable changes to demiplane are documented here. The format follows
   stylesheets and fonts stay loadable from sandboxed pages.
 - **Private and password-protected responses are not cached or referred.**
   They, their `401` and every `?live` wrapper carry `Cache-Control: private,
-  no-store` and `Referrer-Policy: no-referrer`. Each password-protected
-  artifact has its own Basic realm.
+  no-store` and `Referrer-Policy: no-referrer`, and protected artifacts carry
+  `Cross-Origin-Resource-Policy: same-origin`, so no other page can load one as
+  a script, stylesheet or image. Each password-protected artifact has its own
+  Basic realm.
 - **Site uploads refuse options sites do not support.** `?site=` with
   `?private`, `?ttl`, `?password` or `X-Demiplane-Password` is a `400` before
   the archive is read; previously the options were ignored.

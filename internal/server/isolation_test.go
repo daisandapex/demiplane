@@ -125,8 +125,9 @@ func TestServiceWorkerScriptFetchRefused(t *testing.T) {
 }
 
 // TestProtectedResponsesNoReferrerNoStore: private and password-protected
-// responses (the 401 included) send no Referer and are never stored; public
-// ones keep the revalidating cache policy and the baseline referrer policy.
+// responses (the 401 included) send no Referer, are never stored and cannot be
+// loaded as another origin's subresource; public ones keep the revalidating
+// cache policy, the baseline referrer policy and no resource policy.
 func TestProtectedResponsesNoReferrerNoStore(t *testing.T) {
 	ts := newTestServer(t, "")
 	priv := publish(t, ts, "?private=true&filename=p.html", "<!doctype html><p>cap</p>")
@@ -143,6 +144,13 @@ func TestProtectedResponsesNoReferrerNoStore(t *testing.T) {
 		}
 		if got := resp.Header.Get("Cache-Control"); got != cache {
 			t.Errorf("%s: Cache-Control %q, want %q", name, got, cache)
+		}
+		corp := ""
+		if referrer == "no-referrer" {
+			corp = "same-origin"
+		}
+		if got := resp.Header.Get("Cross-Origin-Resource-Policy"); got != corp {
+			t.Errorf("%s: Cross-Origin-Resource-Policy %q, want %q", name, got, corp)
 		}
 	}
 	check("private", getWith(t, priv, nil), 200, "no-referrer", "private, no-store")
