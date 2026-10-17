@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/daisandapex/demiplane/internal/module"
@@ -54,8 +55,11 @@ type Module struct {
 	// startup (ConfigureHook), read on every recorded reply.
 	hook hookConfig
 	// hookDone, when non-nil, is invoked after a hook dispatch completes — a
-	// test seam for synchronizing with the fire-and-forget goroutine.
+	// test seam for synchronizing with the asynchronous pool.
 	hookDone func(Reply)
+	// pool runs hook events; created on first use from hook (hook.go).
+	poolOnce sync.Once
+	pool     *hookPool
 }
 
 // Name identifies the module (and its data-dir key).
@@ -208,13 +212,20 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ticket, ok := m.reserveHook()
+	if !ok {
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "the server is busy; your reply was not recorded, try again shortly", http.StatusServiceUnavailable)
+		return
+	}
 	rep, err := m.rs.add(slug, kind, body, time.Now())
 	if err != nil {
+		ticket.release()
 		log.Printf("reply: add failed: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	m.fireHook(rep)
+	ticket.fire(rep)
 
 	if isJSON || wantsJSON(r) {
 		writeJSON(w, http.StatusCreated, rep)
@@ -286,14 +297,22 @@ func (m *Module) handleContentSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ticket, ok := m.reserveHook()
+	if !ok {
+		w.Header().Set("Retry-After", "5")
+		m.writeAnswer(w, slug, http.StatusServiceUnavailable, false,
+			"The server is busy, so your answer was not recorded. Please try again shortly.", "")
+		return
+	}
 	rep, err := m.rs.add(slug, "comment", body, time.Now())
 	if err != nil {
+		ticket.release()
 		log.Printf("reply: add failed: %v", err)
 		m.writeAnswer(w, slug, http.StatusInternalServerError, false,
 			"The server could not save your answer, so it was not recorded. Please try again.", "")
 		return
 	}
-	m.fireHook(rep)
+	ticket.fire(rep)
 
 	// Forward flow (?next= publish param): the baked form carries the follow-up
 	// slug as a hidden field. Re-validated here (a hidden field is

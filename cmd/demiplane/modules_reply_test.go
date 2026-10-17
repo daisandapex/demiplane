@@ -16,7 +16,7 @@ import (
 // keys parse (they are registered iff the module is compiled in) and a bad
 // webhook URL is a hard startup error, per the config fail-loud contract.
 func TestReplyHookConfigKeys(t *testing.T) {
-	t.Cleanup(func() { _ = reply.ConfigureHook("", "") })
+	t.Cleanup(func() { _ = reply.ConfigureHook("", "", reply.DefaultHookOptions()) })
 
 	p := filepath.Join(t.TempDir(), "config")
 	writeFile(t, p, "reply_hook_exec = /usr/local/bin/professor-hook\nreply_hook_url = http://127.0.0.1:9999/hook\n")
@@ -30,5 +30,26 @@ func TestReplyHookConfigKeys(t *testing.T) {
 
 	if err := applyModuleConfig(map[string]string{"reply_hook_url": "not-a-url"}); err == nil {
 		t.Error("a malformed reply_hook_url must be a hard startup error")
+	}
+
+	p2 := filepath.Join(t.TempDir(), "config")
+	writeFile(t, p2, "reply_hook_exec = true\nreply_hook_timeout = 30s\nreply_hook_workers = 4\nreply_hook_queue = 0\n")
+	m2, err := loadConfig(p2)
+	if err != nil {
+		t.Fatalf("reply_hook pool keys should parse: %v", err)
+	}
+	if err := applyModuleConfig(m2); err != nil {
+		t.Fatalf("valid hook pool config rejected: %v", err)
+	}
+	for _, bad := range []map[string]string{
+		{"reply_hook_timeout": "soon"},
+		{"reply_hook_timeout": "-1s"},
+		{"reply_hook_workers": "0"},
+		{"reply_hook_workers": "many"},
+		{"reply_hook_queue": "-1"},
+	} {
+		if err := applyModuleConfig(bad); err == nil {
+			t.Errorf("invalid hook pool config %v accepted", bad)
+		}
 	}
 }
