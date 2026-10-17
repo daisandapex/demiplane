@@ -55,6 +55,10 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Fixed
 
+- **Every generated capability slug is a valid slug.** About one in 32
+  started with `-` or `_`, which the named-slug rule rejects, so it could
+  not be republished to, named in `?next=` or passed to `receive --slug`.
+  Such draws are now discarded and redrawn.
 - **Concurrent writes to one slug no longer corrupt it.** A publish racing a
   delete, the expiry sweeper or a rebake could leave a row with no bytes (a
   permanent 500) or a page rendered from an older source. Writers to a slug are

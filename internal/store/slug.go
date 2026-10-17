@@ -133,12 +133,23 @@ const capabilitySlugBytes = 18
 // GenerateCapabilitySlug returns a high-entropy, URL-safe slug for private
 // artifacts. The slug itself is the secret (capability URL), so it is generated
 // from crypto/rand and is computationally unguessable.
+//
+// The result always satisfies ValidateNamedSlug, so a capability slug is
+// addressable on every path that validates a slug (a named republish, ?next=,
+// SSH --slug) and never starts with '-'. base64url's first character can be
+// '-' or '_', which the named-slug rule refuses, so such draws are discarded
+// and redrawn: about one in 32, costing under 0.05 bits of the 144.
 func GenerateCapabilitySlug() (string, error) {
 	b := make([]byte, capabilitySlugBytes)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("generate capability slug: %w", err)
+	for {
+		if _, err := rand.Read(b); err != nil {
+			return "", fmt.Errorf("generate capability slug: %w", err)
+		}
+		s := base64.RawURLEncoding.EncodeToString(b)
+		if s[0] != '-' && s[0] != '_' {
+			return s, nil
+		}
 	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 // generateFriendlySlugSuffixed appends a short numeric suffix, used when the
