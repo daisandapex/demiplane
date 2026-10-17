@@ -6,6 +6,8 @@ package server
 import (
 	"bytes"
 	"io"
+	"io/fs"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -145,5 +147,26 @@ func TestRenderSlotsBounded(t *testing.T) {
 	<-srv.renderSem
 	if code, _, _ := postRaw(t, ts.URL+"/publish?render=md", "# hi\n"); code != http.StatusCreated {
 		t.Fatalf("publish after release = %d, want 201", code)
+	}
+}
+
+// TestRenderFailureLogIsRedacted: an unexpected render error is logged with
+// its paths replaced, like every other logged I/O error, since a store path
+// carries the slug.
+func TestRenderFailureLogIsRedacted(t *testing.T) {
+	var logged bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	rec := httptest.NewRecorder()
+	writeRenderError(rec, &fs.PathError{Op: "open", Path: "/srv/demiplane/sources/capability-secret~00aa", Err: fs.ErrPermission})
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d, want 500", rec.Code)
+	}
+	if !strings.Contains(logged.String(), "render failed") {
+		t.Fatalf("render failure not logged: %q", logged.String())
+	}
+	if strings.Contains(logged.String(), "capability-secret") {
+		t.Errorf("render failure log carries the path: %q", logged.String())
 	}
 }

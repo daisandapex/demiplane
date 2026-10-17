@@ -163,7 +163,7 @@ func (m *Module) handleForm(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	case err != nil:
-		log.Printf("reply: target lookup failed: %v", err)
+		log.Printf("reply: target lookup failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	case ref != nil:
@@ -189,7 +189,7 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	case err != nil:
-		log.Printf("reply: target lookup failed: %v", err)
+		log.Printf("reply: target lookup failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -275,7 +275,7 @@ func (m *Module) handleContentSubmit(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	case err != nil:
-		log.Printf("reply: target lookup failed: %v", err)
+		log.Printf("reply: target lookup failed: %s", logsafe.Err(err))
 		m.writeAnswer(w, slug, http.StatusInternalServerError, false,
 			"The server hit an error and your answer was not recorded. Please try again.", "")
 		return

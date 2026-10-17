@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/render"
 )
 
@@ -98,7 +99,7 @@ func writeRenderError(w http.ResponseWriter, err error) {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		http.Error(w, "render cancelled", http.StatusServiceUnavailable)
 	default:
-		log.Printf("render failed: %v", err)
+		log.Printf("render failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
 }

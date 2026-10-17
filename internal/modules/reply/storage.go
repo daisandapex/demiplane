@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no cgo), same as core's store
 )
 
@@ -146,7 +147,7 @@ func (rs *replyStore) addLimited(slug, kind, body string, now time.Time, lim Lim
 	if lim.Retention > 0 && now.Sub(rs.lastSweep) >= retentionEvery {
 		if err := rs.sweepLocked(now, lim.Retention); err != nil {
 			// Not fatal: the limits below still hold with the old rows counted.
-			log.Printf("reply: retention pass failed: %v", err)
+			log.Printf("reply: retention pass failed: %s", logsafe.Err(err))
 		}
 	}
 	tx, err := rs.db.Begin()
