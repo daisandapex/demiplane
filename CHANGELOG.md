@@ -168,6 +168,11 @@ All notable changes to demiplane are documented here. The format follows
   server's sweep removes it. At most 10,000 may be waiting; past that, a
   publish through `receive` that would replace an artifact is refused until
   the server has swept. Deletes are never refused.
+- **The server no longer releases quota it never counted.** Removing an
+  artifact, an old version or a pending deletion that `demiplane receive`
+  created after the server last measured its usage no longer lowers the
+  server's count below what the store holds; the rest is accounted at its
+  next recount.
 - **Multipart publish headers are limited to 16 KiB.** At most 16 KiB may
   precede a multipart publish's file part body (preamble, earlier form
   fields and the part's headers); more is refused with `431`.

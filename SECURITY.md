@@ -537,7 +537,11 @@ Notes on the limits:
   `demiplane receive` runs as a separate process and enforces the quota
   against its own writes; a running `serve` learns of them at its next
   recount (every `--sweep-interval`), so across processes the store can
-  briefly exceed the quota by what the other process wrote since.
+  briefly exceed the quota by what the other process wrote since. Until then
+  the server never releases space for something it has not counted, so
+  removing an artifact or version that `receive` wrote cannot lower its
+  usage below what it holds; it may over-count until the recount, never
+  under-count.
 
 ## Reporting
 
