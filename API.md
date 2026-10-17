@@ -471,7 +471,9 @@ published, using the instance's **current** renderer and theme. Control plane,
 auth: bearer.
 
 `POST /rerender/{slug}` rebakes one page; `POST /rerender` walks every stored
-artifact and rebakes each one that has a retained source. Neither takes a body.
+artifact and rebakes each one that has a retained source. Neither takes a body;
+`POST /rerender` with one (any `Content-Length` but 0, or a chunked body) gets
+`400`.
 
 This exists because rendering happens once, at publish: without it, upgrading the
 renderer or switching themes leaves every existing page on the old output until

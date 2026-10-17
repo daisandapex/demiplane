@@ -175,6 +175,13 @@ const (
 // the store. One sweep runs at a time; another gets 409 while it does. A sweep
 // whose request ends (the client went away) stops where it is.
 func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
+	// No body: on HTTP/1, net/http notices a client disconnecting only once
+	// the request body has been read to its end, so a sweep for a caller that
+	// announced a body and went away would never see its request end.
+	if r.ContentLength != 0 {
+		http.Error(w, "POST /rerender takes no request body", http.StatusBadRequest)
+		return
+	}
 	if !s.bulkRerender.TryLock() {
 		http.Error(w, "a rerender of every artifact is already running; try again when it finishes", http.StatusConflict)
 		return
