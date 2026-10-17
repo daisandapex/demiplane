@@ -162,6 +162,12 @@ All notable changes to demiplane are documented here. The format follows
   cannot be removed keeps its storage quota charge, and the failure is
   logged; such leftovers, and any left by a crash, are counted until the
   hourly reconcile removes them.
+- **Bulk rerender is bounded.** `POST /rerender` reads the store a page at a
+  time, lists at most 100 results and 100 failures, stops when its request
+  ends, and runs one sweep at a time (another gets `409`).
+- **`--write-timeout` bounds each whole response again,** from the start of
+  the request, live-reload streams included; per-route deadlines no longer
+  replace it.
 - **Downloads honour a single byte range.** A request for several ranges,
   or with a `Range` header over 128 bytes, gets the whole body instead of a
   multipart response the server sizes range by range.
@@ -296,6 +302,11 @@ All notable changes to demiplane are documented here. The format follows
 - **The browse index shows a large series as `(100+)`,** or `(N+)` when its
   size was not fully counted, and the landing no longer states the total
   number of artifacts; the browse footer reads "More in the gallery".
+- **Upgrade note: bulk rerender reports are capped.** `POST /rerender` lists
+  at most 100 results and 100 failures (new `failed_count` and `truncated`
+  fields carry the rest); read the counts for totals. A second sweep while one
+  runs gets `409`, and disconnecting stops a sweep partway (run it again to
+  finish).
 - **Upgrade note: a `/list` page can be short.** A page holds at most 200
   artifacts but can hold fewer, or none, while `next` is present; follow
   `next` until it is absent rather than stopping at a short page.

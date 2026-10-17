@@ -315,8 +315,9 @@ inherits the posture above and was reviewed adversarially before release.
   Bodies and responses get per-route deadlines instead of a whole-request
   `ReadTimeout`/`WriteTimeout`, which would cut off large transfers and the
   live-reload stream; see [Resource limits](#resource-limits). The legacy
-  `--write-timeout` (off by default) still sets a whole-response timeout and
-  also ends live-reload streams. `--idle-timeout` (default 120s) bounds idle
+  `--write-timeout` (off by default) bounds each whole response from the
+  start of the request: every per-route write deadline, downloads and
+  live-reload streams included, is capped at it. `--idle-timeout` (default 120s) bounds idle
   keep-alives.
 - **Upload cap.** `--max-upload <bytes>` (default 100 MiB; `0` = unlimited) bounds
   publish body size and returns `413` when exceeded.
@@ -412,6 +413,8 @@ only in `-tags reply` builds.
 | Browse index | index entries examined for families / per series counted (a series is counted to 100, shown as "100+") | 1,000 / 404 | (code) |
 | Site archives | entries of every kind / zip central directory / tar headers in front of one entry / archives parsed at once (others wait 5s, then `503`) | 4,096 / 2 MiB / 64 KiB / 2 | (code) |
 | TTL | `ttl` value length; longer is `400` before parsing | 64 bytes | (code) |
+| Bulk rerender | sweeps at once (another gets `409`) / slugs read per page / results and failures listed | 1 / 500 / 100 each | (code) |
+| Downloads | byte ranges honoured per request (more, or a `Range` header over 128 bytes, gets the whole body) | 1 | (code) |
 | Admission | requests in progress per listener / per client; excess `503` | 256 / 32 | `--max-requests`, `--max-requests-per-client` |
 | Admission | open connections per listener (further ones wait) / per client (further ones are closed) | 1024 / 64 | `--max-conns`, `--max-conns-per-client` |
 | Rendering | table columns; table body cells per document (rows times header width) | 128; 1,000,000 | (code) |
