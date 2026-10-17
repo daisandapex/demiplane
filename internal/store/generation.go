@@ -228,12 +228,64 @@ func (s *Store) abortWrite(slug, gen, sourceGen string) {
 
 // queueDeletion records slug's blob and source generations for removal. tx is
 // the transaction that stops the row naming them.
-func queueDeletion(tx *sql.Tx, slug, blobGen, sourceGen string) error {
-	_, err := tx.Exec(
+//
+// A record holds one allowance (metaAllowance) of the quota from the moment
+// it is queued until it is cleared: it stands in for the generation's files,
+// whose inodes stay until they are removed, and for the record itself. A
+// store that removes generations itself clears the record at once; one that
+// defers to the server (DeferDeletions) keeps it until the server sweeps.
+// queueDeletion reports whether it added a record (false: already recorded).
+// With limit set, it refuses with ErrPendingDeletions when
+// maxPendingDeletions records are outstanding.
+func queueDeletion(tx *sql.Tx, slug, blobGen, sourceGen string, limit bool) (bool, error) {
+	if limit {
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM pending_deletions`).Scan(&n); err != nil {
+			return false, fmt.Errorf("count pending deletions: %w", err)
+		}
+		if n >= maxPendingDeletions {
+			return false, ErrPendingDeletions
+		}
+	}
+	res, err := tx.Exec(
 		`INSERT OR IGNORE INTO pending_deletions (slug, blob_gen, source_gen, queued_at) VALUES (?, ?, ?, ?)`,
 		slug, blobGen, sourceGen, time.Now().Unix())
 	if err != nil {
-		return fmt.Errorf("record pending deletion: %w", err)
+		return false, fmt.Errorf("record pending deletion: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("record pending deletion: %w", err)
+	}
+	return n == 1, nil
+}
+
+// maxPendingDeletions caps the outstanding pending deletion records. A
+// store that removes generations itself never approaches it; past it, a
+// deferring store (`demiplane receive`) refuses further replacements until
+// the server has swept. Receive cannot remove the files itself instead: it
+// cannot see which ones the server's downloads hold open.
+var maxPendingDeletions = 10_000
+
+// ErrPendingDeletions means a write that would replace a generation was
+// refused because maxPendingDeletions replaced generations are still waiting
+// to be removed. It is an ErrQuota (a capacity condition).
+var ErrPendingDeletions = fmt.Errorf("%w: too many replaced files are waiting for the server to remove them", ErrQuota)
+
+// clearPending deletes a pending deletion record and, if this call removed
+// it, releases its allowance.
+func (s *Store) clearPending(slug, blobGen, sourceGen string) error {
+	s.beginTransition()
+	var released int64
+	defer func() { s.endTransition(0, released) }()
+	res, err := s.db.Exec(
+		`DELETE FROM pending_deletions WHERE slug = ? AND blob_gen = ? AND source_gen = ?`,
+		slug, blobGen, sourceGen)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 1 {
+		released = metaAllowance
 	}
 	return nil
 }
@@ -262,10 +314,9 @@ func (s *Store) finishDeletion(slug, blobGen, sourceGen string) {
 			logsafe.Slug(slug), logsafe.Err(err, slug))
 		return
 	}
-	if _, err := s.db.Exec(
-		`DELETE FROM pending_deletions WHERE slug = ? AND blob_gen = ? AND source_gen = ?`,
-		slug, blobGen, sourceGen); err != nil {
-		// The files are gone; a stale record only costs a no-op retry.
+	if err := s.clearPending(slug, blobGen, sourceGen); err != nil {
+		// The files are gone; a stale record only costs a no-op retry (and
+		// its allowance until then).
 		log.Printf("store: could not clear a pending deletion: %s", logsafe.Err(err, slug))
 	}
 }
@@ -307,9 +358,7 @@ func (s *Store) retryPendingDeletions() error {
 				return
 			}
 			if referenced {
-				_, _ = s.db.Exec(
-					`DELETE FROM pending_deletions WHERE slug = ? AND blob_gen = ? AND source_gen = ?`,
-					p.slug, p.blobGen, p.sourceGen)
+				_ = s.clearPending(p.slug, p.blobGen, p.sourceGen)
 				return
 			}
 			s.finishDeletion(p.slug, p.blobGen, p.sourceGen)

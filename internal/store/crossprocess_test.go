@@ -43,7 +43,8 @@ func TestOtherProcessLeavesOpenGenerationLinked(t *testing.T) {
 	if err := a.RecountUsage(); err != nil {
 		t.Fatal(err)
 	}
-	both := int64(metaAllowance + 1000 + 2000)
+	// The row, both generations, and the pending deletion record.
+	both := int64(2*metaAllowance + 1000 + 2000)
 	if used, _ := a.Usage(); used != both {
 		t.Fatalf("usage in the serving store after a replace elsewhere = %d, want %d (the open old generation)", used, both)
 	}
@@ -54,8 +55,9 @@ func TestOtherProcessLeavesOpenGenerationLinked(t *testing.T) {
 	if err := a.RecountUsage(); err != nil {
 		t.Fatal(err)
 	}
-	if used, _ := a.Usage(); used != both {
-		t.Fatalf("usage after a sweep with the reader open = %d, want %d", used, both)
+	// The record is cleared; the old bytes stay charged while held.
+	if used, _ := a.Usage(); used != both-metaAllowance {
+		t.Fatalf("usage after a sweep with the reader open = %d, want %d", used, both-metaAllowance)
 	}
 	f.Close()
 	if used, _ := a.Usage(); used != metaAllowance+2000 {

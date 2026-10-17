@@ -272,8 +272,11 @@ func (s *Store) measureUsage() (used, siteEntries int64, err error) {
 		return 0, 0, fmt.Errorf("measure store usage: %w", err)
 	}
 	total += n
+	// Artifact rows and pending deletion records each hold an allowance.
 	var rows int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM artifacts`).Scan(&rows); err != nil {
+	if err := s.db.QueryRow(
+		`SELECT (SELECT COUNT(*) FROM artifacts) + (SELECT COUNT(*) FROM pending_deletions)`,
+	).Scan(&rows); err != nil {
 		return 0, 0, fmt.Errorf("measure store usage: %w", err)
 	}
 	return total + (rows+entries)*metaAllowance, entries, nil
@@ -348,6 +351,25 @@ func (s *Store) charge(n int64) error {
 		return ErrQuota
 	}
 	q.inflight += n
+	return nil
+}
+
+// chargeQueued charges a new pending deletion's allowance (queueDeletion). A
+// store that removes the generation itself clears the record as soon as the
+// write commits, so it takes the allowance without a quota check: an
+// overwrite at a full quota still goes through. A deferring store keeps the
+// record until the server sweeps, so its allowance is checked like any
+// other byte.
+func (s *Store) chargeQueued() error {
+	if s.deferDeletions {
+		return s.charge(metaAllowance)
+	}
+	q := &s.quota
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.limit > 0 {
+		q.inflight += metaAllowance
+	}
 	return nil
 }
 

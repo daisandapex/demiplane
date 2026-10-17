@@ -81,7 +81,8 @@ func assertAccounted(t *testing.T, s *Store) {
 	t.Helper()
 	used, _ := s.Usage()
 	var rows int64
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM artifacts`).Scan(&rows); err != nil {
+	// Artifact rows and pending deletion records each hold an allowance.
+	if err := s.db.QueryRow(`SELECT (SELECT COUNT(*) FROM artifacts) + (SELECT COUNT(*) FROM pending_deletions)`).Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
 	entries := siteEntries(t, s)

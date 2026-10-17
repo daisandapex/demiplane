@@ -278,10 +278,26 @@ func (s *Store) swapBody(slug, gen, cur string, size int64) (int64, error) {
 	).Scan(&modified); err != nil {
 		return 0, err
 	}
-	if err := queueDeletion(tx, slug, cur, noSourceGen); err != nil {
+	queued, err := queueDeletion(tx, slug, cur, noSourceGen, true)
+	if err != nil {
 		return 0, err
 	}
-	return modified, tx.Commit()
+	// The pending deletion takes its allowance (queueDeletion).
+	var charged int64
+	if queued {
+		if err := s.chargeQueued(); err != nil {
+			return 0, err
+		}
+		charged = metaAllowance
+	}
+	s.beginTransition()
+	if err := tx.Commit(); err != nil {
+		s.endTransition(0, 0)
+		s.release(charged)
+		return 0, err
+	}
+	s.endTransition(charged, 0)
+	return modified, nil
 }
 
 // replaceBodyLocked writes r as slug's bytes at a fresh generation and points

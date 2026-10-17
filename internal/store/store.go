@@ -785,18 +785,25 @@ RETURNING modified_at;`
 	default:
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 	}
+	// A new row takes its metadata allowance from the quota (quota.go), and
+	// so does the pending deletion a replaced row leaves. The transaction
+	// holds the write lock, so whether the row exists cannot change before
+	// the commit.
+	var charged int64
 	if p.exists {
 		// Recorded before the row stops naming these files, in the same
 		// transaction, so a failed unlink after the commit is retried.
-		if err := queueDeletion(tx, a.Slug, p.blobGen, p.sourceGen); err != nil {
+		queued, err := queueDeletion(tx, a.Slug, p.blobGen, p.sourceGen, true)
+		if err != nil {
 			return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 		}
-	}
-	// A new row takes its metadata allowance from the quota (quota.go). The
-	// transaction holds the write lock, so whether the row exists cannot
-	// change before the commit.
-	var charged int64
-	if !p.exists {
+		if queued {
+			if err := s.chargeQueued(); err != nil {
+				return priorGen{}, err
+			}
+			charged = metaAllowance
+		}
+	} else {
 		if err := s.charge(metaAllowance); err != nil {
 			return priorGen{}, err
 		}
@@ -983,16 +990,23 @@ func (s *Store) deleteRow(slug, query string, args ...any) (blobGen, sourceGen s
 	if err := tx.QueryRow(query, args...).Scan(&blobGen, &sourceGen); err != nil {
 		return "", "", err
 	}
-	if err := queueDeletion(tx, slug, blobGen, sourceGen); err != nil {
+	// A delete is never refused for the cap: it is how space comes back.
+	queued, err := queueDeletion(tx, slug, blobGen, sourceGen, false)
+	if err != nil {
 		return "", "", err
 	}
-	// The row's metadata allowance leaves the quota with the row (quota.go).
+	// The row's metadata allowance leaves the quota with the row (quota.go),
+	// or passes to the pending deletion that now stands for its files.
+	var released int64 = metaAllowance
+	if queued {
+		released = 0
+	}
 	s.beginTransition()
 	if err := tx.Commit(); err != nil {
 		s.endTransition(0, 0)
 		return "", "", err
 	}
-	s.endTransition(0, metaAllowance)
+	s.endTransition(0, released)
 	return blobGen, sourceGen, nil
 }
 
