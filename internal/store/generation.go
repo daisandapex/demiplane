@@ -284,7 +284,10 @@ func (s *Store) clearPending(slug, blobGen, sourceGen string) error {
 	if err != nil {
 		return err
 	}
-	if n, err := res.RowsAffected(); err == nil && n == 1 {
+	// Only a record this process counted gives its allowance back
+	// (ledger.go); one another process queued since the last recount was
+	// never in this process's usage.
+	if n, err := res.RowsAffected(); err == nil && n == 1 && s.uncountPending(pendingKey{slug, blobGen, sourceGen}) {
 		released = metaAllowance
 	}
 	return nil

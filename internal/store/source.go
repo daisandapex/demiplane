@@ -296,6 +296,9 @@ func (s *Store) swapBody(slug, gen, cur string, size int64) (int64, error) {
 		s.release(charged)
 		return 0, err
 	}
+	if queued {
+		s.countPending(pendingKey{slug, cur, noSourceGen})
+	}
 	s.endTransition(charged, 0)
 	return modified, nil
 }

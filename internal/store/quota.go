@@ -80,6 +80,9 @@ type quotaState struct {
 	// charged in flight; any other ".tmp-" file there is abandoned, counted
 	// as live and reclaimed.
 	temps map[string]struct{}
+	// counted is what committed includes of the blob and source files, the
+	// artifact rows and the pending deletion records (ledger.go).
+	counted ledger
 }
 
 // SetQuota sets the aggregate storage quota in bytes and measures the bytes
@@ -89,16 +92,17 @@ func (s *Store) SetQuota(limit int64) error {
 	if limit <= 0 {
 		s.quota.mu.Lock()
 		s.quota.limit, s.quota.committed, s.quota.inflight, s.quota.retired = 0, 0, 0, 0
+		s.quota.counted = ledger{}
 		s.quota.mu.Unlock()
 		return nil
 	}
-	used, entries, err := s.measureUsage()
+	used, entries, l, err := s.measureUsage()
 	if err != nil {
 		return err
 	}
 	s.quota.mu.Lock()
 	s.quota.limit, s.quota.committed, s.quota.inflight = limit, used, 0
-	s.quota.entries = entries
+	s.quota.entries, s.quota.counted = entries, l
 	s.quota.mu.Unlock()
 	return nil
 }
@@ -140,7 +144,7 @@ func (s *Store) RecountUsage() error {
 		if busy {
 			continue
 		}
-		used, entries, err := s.measureUsage()
+		used, entries, l, err := s.measureUsage()
 		if err != nil {
 			return err
 		}
@@ -150,7 +154,7 @@ func (s *Store) RecountUsage() error {
 		q.mu.Lock()
 		applied := q.limit > 0 && q.active == 0 && q.gen == start
 		if applied {
-			q.committed, q.entries = used, entries
+			q.committed, q.entries, q.counted = used, entries, l
 		}
 		q.mu.Unlock()
 		if applied {
@@ -219,20 +223,31 @@ func (s *Store) endChange(c change) {
 	}
 }
 
-// moveRetired moves n bytes from the live count to the retired one (a held
-// file was removed), or for negative n releases -n retired bytes (its last
-// reader closed it). The caller holds s.open.mu (readers.go).
-func (s *Store) moveRetired(n int64) {
+// retire moves a removed file a reader holds from the live count, where
+// counted of it was (ledger.go), to the retired one, all size bytes of it:
+// they stay on disk until the reader closes. The caller holds s.open.mu
+// (readers.go).
+func (s *Store) retire(counted, size int64) {
 	q := &s.quota
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.limit <= 0 {
 		return
 	}
-	if n > 0 {
-		q.committed = max(q.committed-n, 0)
+	q.committed = max(q.committed-counted, 0)
+	q.retired += size
+}
+
+// releaseRetired releases n retired bytes: the last reader of a removed file
+// closed it. The caller holds s.open.mu (readers.go).
+func (s *Store) releaseRetired(n int64) {
+	q := &s.quota
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.limit <= 0 {
+		return
 	}
-	q.retired = max(q.retired+n, 0)
+	q.retired = max(q.retired-n, 0)
 }
 
 // commitRename renames a fully written temp file or directory into place and
@@ -244,6 +259,7 @@ func (s *Store) commitRename(from, to string, charged int64) error {
 		return err
 	}
 	s.unregisterTemp(from)
+	s.countFile(to, charged)
 	if afterLiveRename != nil {
 		afterLiveRename()
 	}
@@ -258,28 +274,57 @@ var afterUsageWalk, afterLiveRename func()
 // measureUsage sums the live regular files under the content directories
 // and the allowances of the artifact rows and site entries, and returns the
 // site entry count with it.
-func (s *Store) measureUsage() (used, siteEntries int64, err error) {
+// The ledger it returns holds what it counted (ledger.go).
+func (s *Store) measureUsage() (used, siteEntries int64, l ledger, err error) {
+	fail := func(err error) (int64, int64, ledger, error) {
+		return 0, 0, ledger{}, fmt.Errorf("measure store usage: %w", err)
+	}
+	l = newLedger()
+	// Artifact rows and pending deletion records each hold an allowance.
+	rows, err := s.db.Query(`SELECT slug FROM artifacts`)
+	if err != nil {
+		return fail(err)
+	}
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			rows.Close()
+			return fail(err)
+		}
+		l.rows[slug] = struct{}{}
+	}
+	if err := rows.Close(); err != nil {
+		return fail(err)
+	}
+	pend, err := s.db.Query(`SELECT slug, blob_gen, source_gen FROM pending_deletions`)
+	if err != nil {
+		return fail(err)
+	}
+	for pend.Next() {
+		var k pendingKey
+		if err := pend.Scan(&k.slug, &k.blobGen, &k.sourceGen); err != nil {
+			pend.Close()
+			return fail(err)
+		}
+		l.pending[k] = struct{}{}
+	}
+	if err := pend.Close(); err != nil {
+		return fail(err)
+	}
 	var total int64
 	for _, dir := range []string{s.blobDir, s.sourceDir} {
-		n, err := s.contentStats(dir)
+		n, err := s.contentStats(dir, l.files)
 		if err != nil {
-			return 0, 0, fmt.Errorf("measure store usage: %w", err)
+			return fail(err)
 		}
 		total += n
 	}
 	n, entries, err := s.siteStats()
 	if err != nil {
-		return 0, 0, fmt.Errorf("measure store usage: %w", err)
+		return fail(err)
 	}
 	total += n
-	// Artifact rows and pending deletion records each hold an allowance.
-	var rows int64
-	if err := s.db.QueryRow(
-		`SELECT (SELECT COUNT(*) FROM artifacts) + (SELECT COUNT(*) FROM pending_deletions)`,
-	).Scan(&rows); err != nil {
-		return 0, 0, fmt.Errorf("measure store usage: %w", err)
-	}
-	return total + (rows+entries)*metaAllowance, entries, nil
+	return total + (int64(len(l.rows)+len(l.pending))+entries)*metaAllowance, entries, l, nil
 }
 
 // validateMeta bounds the user-supplied metadata a publish stores in its row.
@@ -398,10 +443,10 @@ func (s *Store) removeLive(path string) error {
 // file (false when it was already gone).
 func (s *Store) removeLiveFile(path string) (bool, error) {
 	s.beginTransition()
-	size, removed, retired, err := s.unlinkFile(path)
+	_, counted, removed, retired, err := s.unlinkFile(path)
 	var c change
 	if !retired {
-		c.removed = size // a retired file's bytes moved already
+		c.removed = counted // a retired file's bytes moved already
 	}
 	s.endChange(c)
 	return removed, err
@@ -457,7 +502,7 @@ func (s *Store) removeTreeCounted(dir string) (treeRemoval, error) {
 		errs = append(errs, werr)
 	}
 	for i := len(list) - 1; i >= 0; i-- {
-		size, removed, retired, err := s.unlinkFile(list[i])
+		_, size, removed, retired, err := s.unlinkFile(list[i])
 		if err != nil {
 			errs = append(errs, err)
 		}

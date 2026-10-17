@@ -789,11 +789,14 @@ RETURNING modified_at;`
 	// so does the pending deletion a replaced row leaves. The transaction
 	// holds the write lock, so whether the row exists cannot change before
 	// the commit.
-	var charged int64
+	var (
+		charged int64
+		queued  bool
+	)
 	if p.exists {
 		// Recorded before the row stops naming these files, in the same
 		// transaction, so a failed unlink after the commit is retried.
-		queued, err := queueDeletion(tx, a.Slug, p.blobGen, p.sourceGen, true)
+		queued, err = queueDeletion(tx, a.Slug, p.blobGen, p.sourceGen, true)
 		if err != nil {
 			return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 		}
@@ -829,6 +832,12 @@ RETURNING modified_at;`
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 	}
 	committed = true
+	// What was charged is now counted (ledger.go).
+	if queued {
+		s.countPending(pendingKey{a.Slug, p.blobGen, p.sourceGen})
+	} else if !p.exists {
+		s.countRow(a.Slug)
+	}
 	s.endTransition(charged, 0)
 	a.ModifiedAt = time.Unix(modified, 0).UTC()
 	return p, nil
@@ -995,16 +1004,21 @@ func (s *Store) deleteRow(slug, query string, args ...any) (blobGen, sourceGen s
 	if err != nil {
 		return "", "", err
 	}
-	// The row's metadata allowance leaves the quota with the row (quota.go),
-	// or passes to the pending deletion that now stands for its files.
-	var released int64 = metaAllowance
-	if queued {
-		released = 0
-	}
 	s.beginTransition()
 	if err := tx.Commit(); err != nil {
 		s.endTransition(0, 0)
 		return "", "", err
+	}
+	// The row's metadata allowance leaves the quota with the row (quota.go),
+	// or passes to the pending deletion that now stands for its files; either
+	// way only if this process counted the row (ledger.go).
+	var released int64
+	if s.uncountRow(slug) {
+		if queued {
+			s.countPending(pendingKey{slug, blobGen, sourceGen})
+		} else {
+			released = metaAllowance
+		}
 	}
 	s.endTransition(0, released)
 	return blobGen, sourceGen, nil

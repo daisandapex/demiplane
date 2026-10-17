@@ -59,6 +59,7 @@ func (s *Store) discardTemp(path string, charged int64) error {
 		s.endTransition(0, 0)
 		return nil
 	}
+	s.countFile(path, charged)
 	s.endTransition(charged, 0)
 	log.Printf("store: could not remove a temp file, left for reconcile: %s", logsafe.Err(err))
 	return fmt.Errorf("remove temp file: %w", err)
@@ -89,7 +90,8 @@ func (s *Store) tempLive(path string) bool {
 // contentStats sums the regular files under dir (blobs/ or sources/),
 // leftover temp files included and this process's own temp files excluded
 // (those are charged in flight).
-func (s *Store) contentStats(dir string) (int64, error) {
+// Each regular file at the top of dir is recorded in files with its size.
+func (s *Store) contentStats(dir string, files map[string]int64) (int64, error) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -122,6 +124,7 @@ func (s *Store) contentStats(dir string) (int64, error) {
 			return 0, err
 		}
 		total += fi.Size()
+		files[p] = fi.Size()
 	}
 	return total, nil
 }

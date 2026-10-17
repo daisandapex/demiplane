@@ -102,7 +102,7 @@ func (s *Store) readerClosed(k fileKey) {
 	delete(o.refs, k)
 	if n := o.retired[k]; n > 0 {
 		delete(o.retired, k)
-		s.moveRetired(-n)
+		s.releaseRetired(n)
 	}
 }
 
@@ -111,25 +111,29 @@ func (s *Store) readerClosed(k fileKey) {
 // o.mu, recorded for its last reader and its bytes moved from the live count
 // to the retired one in one step, so the caller must not release them. A
 // file already gone is not an error and reports removed false.
-func (s *Store) unlinkFile(path string) (size int64, removed, retired bool, err error) {
+//
+// counted is how much of the file this process's usage included (ledger.go),
+// which is what the caller releases (or, for a retired file, what retire
+// moved).
+func (s *Store) unlinkFile(path string) (size, counted int64, removed, retired bool, err error) {
 	o := &s.open
 	o.gate.Lock()
 	defer o.gate.Unlock()
 	fi, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 0, false, false, nil
+			return 0, 0, false, false, nil
 		}
-		return 0, false, false, err
+		return 0, 0, false, false, err
 	}
 	if err := os.Remove(path); err != nil {
 		if os.IsNotExist(err) {
-			return 0, false, false, nil
+			return 0, 0, false, false, nil
 		}
-		return 0, false, false, err
+		return 0, 0, false, false, err
 	}
 	if !fi.Mode().IsRegular() {
-		return 0, true, false, nil
+		return 0, 0, true, false, nil
 	}
 	if k, ok := keyOf(fi); ok {
 		o.mu.Lock()
@@ -138,7 +142,8 @@ func (s *Store) unlinkFile(path string) (size int64, removed, retired bool, err 
 				o.retired = make(map[fileKey]int64)
 			}
 			o.retired[k] += fi.Size()
-			s.moveRetired(fi.Size())
+			counted = s.uncountFile(path, fi.Size())
+			s.retire(counted, fi.Size())
 			retired = true
 		}
 		o.mu.Unlock()
@@ -146,7 +151,10 @@ func (s *Store) unlinkFile(path string) (size int64, removed, retired bool, err 
 	if retired && afterRetire != nil {
 		afterRetire()
 	}
-	return fi.Size(), true, retired, nil
+	if !retired {
+		counted = s.uncountFile(path, fi.Size())
+	}
+	return fi.Size(), counted, true, retired, nil
 }
 
 // afterRetire is a test hook run after unlinkFile retires a file, before its
