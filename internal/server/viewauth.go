@@ -33,10 +33,11 @@ import (
 //     when the password is correct, and a client whose budget is empty gets
 //     429 without hashing. The artifact and the instance have failure
 //     budgets too, charged by every client's failures. When one is empty it
-//     refuses, without hashing, only clients that have failed recently (on
-//     that artifact, or anywhere for the instance budget); a client with no
-//     recent failures is always verified, so nobody else's guesses can lock
-//     a legitimate viewer out. The cost is that guessing spread over many
+//     refuses, without hashing, only clients that failed recently (on that
+//     artifact, or anywhere for the instance budget). Only completed
+//     failures count: a client's own attempt still in flight does not. A
+//     client with no recent failures is always verified, so nobody else's
+//     guesses can lock a legitimate viewer out. The cost is that guessing spread over many
 //     addresses, each new, is bounded by the KDF itself (3. below and the
 //     work factor), not by a rate.
 //  3. At most PasswordConcurrency KDF runs execute at once; the rest wait
@@ -94,6 +95,11 @@ type viewGate struct {
 	target       *limit.Keyed
 	client       *limit.Keyed
 	global       *limit.Keyed
+	// failedClient and failedClientTarget record completed failures only, at
+	// the same rates as client and clientTarget, which also hold in-flight
+	// reservations. A key whose bucket has not refilled failed recently.
+	failedClient       *limit.Keyed
+	failedClientTarget *limit.Keyed
 
 	key []byte
 	mu  sync.Mutex
@@ -116,15 +122,19 @@ func newViewGate(cfg PasswordLimits, key []byte) *viewGate {
 	if n <= 0 {
 		n = defaultPasswordConcurrency()
 	}
+	clientTargetRate := pickRate(cfg.PerClientTarget, defaultPasswordClientTargetRate)
+	clientRate := pickRate(cfg.PerClient, defaultPasswordClientRate)
 	return &viewGate{
-		kdf:          limit.NewGate(n),
-		clientTarget: limit.NewKeyed(pickRate(cfg.PerClientTarget, defaultPasswordClientTargetRate), 0),
-		target:       limit.NewKeyed(pickRate(cfg.PerTarget, defaultPasswordTargetRate), 0),
-		client:       limit.NewKeyed(pickRate(cfg.PerClient, defaultPasswordClientRate), 0),
-		global:       limit.NewKeyed(pickRate(cfg.Global, defaultPasswordGlobalRate), 1),
-		key:          key,
-		ok:           map[[32]byte]time.Time{},
-		now:          time.Now,
+		kdf:                limit.NewGate(n),
+		clientTarget:       limit.NewKeyed(clientTargetRate, 0),
+		target:             limit.NewKeyed(pickRate(cfg.PerTarget, defaultPasswordTargetRate), 0),
+		client:             limit.NewKeyed(clientRate, 0),
+		global:             limit.NewKeyed(pickRate(cfg.Global, defaultPasswordGlobalRate), 1),
+		failedClient:       limit.NewKeyed(clientRate, 0),
+		failedClientTarget: limit.NewKeyed(clientTargetRate, 0),
+		key:                key,
+		ok:                 map[[32]byte]time.Time{},
+		now:                time.Now,
 	}
 }
 
@@ -191,11 +201,12 @@ func (g *viewGate) check(ctx context.Context, r *http.Request, hash string) (res
 	}
 	client := limit.ClientKey(r)
 	clientTarget := client + "\x00" + hash
-	// Shared failure budgets refuse only clients that have failed recently.
-	if empty, w := g.target.Empty(hash); empty && g.clientTarget.Spent(clientTarget) {
+	// Shared failure budgets refuse only clients with recent completed
+	// failures; an attempt still in flight is not one.
+	if empty, w := g.target.Empty(hash); empty && g.failedClientTarget.Spent(clientTarget) {
 		return module.ViewThrottled, w
 	}
-	if empty, w := g.global.Empty(""); empty && (g.client.Spent(client) || g.clientTarget.Spent(clientTarget)) {
+	if empty, w := g.global.Empty(""); empty && (g.failedClient.Spent(client) || g.failedClientTarget.Spent(clientTarget)) {
 		return module.ViewThrottled, w
 	}
 	// The client's own budgets are reserved before hashing, so its concurrent
@@ -216,6 +227,8 @@ func (g *viewGate) check(ctx context.Context, r *http.Request, hash string) (res
 	if !match {
 		g.target.Allow(hash)
 		g.global.Allow("")
+		g.failedClient.Allow(client)
+		g.failedClientTarget.Allow(clientTarget)
 		return module.ViewNeedPassword, 0
 	}
 	limit.RefundAll(own...)

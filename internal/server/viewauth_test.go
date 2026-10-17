@@ -468,3 +468,53 @@ func TestClientGuessingIsBoundedPerArtifact(t *testing.T) {
 		t.Fatalf("other client, correct password = %d, want 200", w.Code)
 	}
 }
+
+// TestConcurrentCorrectAttemptsAreNotRecentFailures: with a shared failure
+// budget spent by others, a fresh client's concurrent correct, uncached
+// requests all succeed; one request's in-flight reservation is not a failure
+// that refuses the next. Covers the per-artifact budget (one artifact) and
+// the instance budget (two artifacts).
+func TestConcurrentCorrectAttemptsAreNotRecentFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		limits PasswordLimits
+		slugs  []string
+	}{
+		{"per-artifact budget", PasswordLimits{
+			Concurrency: 4,
+			PerTarget:   limit.Rate{Every: time.Hour, Burst: 3},
+			Global:      limit.Rate{Every: -1},
+		}, []string{"locked", "locked", "locked", "locked"}},
+		{"instance budget", PasswordLimits{
+			Concurrency: 4,
+			PerTarget:   limit.Rate{Every: -1},
+			Global:      limit.Rate{Every: time.Hour, Burst: 3},
+		}, []string{"locked", "locked-two", "locked", "locked-two"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			countKDF(t, 100*time.Millisecond)
+			h := gateServer(t, Config{Password: tc.limits})
+			for i := 0; i < 6; i++ {
+				serve(h, basicReq("locked", "wrong", fmt.Sprintf("198.51.100.%d:1", 10+i)))
+			}
+			if w := serve(h, basicReq("locked", "wrong", "198.51.100.10:1")); w.Code != http.StatusTooManyRequests {
+				t.Fatalf("shared budget not spent: a recent failer got %d, want 429", w.Code)
+			}
+			codes := make([]int, len(tc.slugs))
+			var wg sync.WaitGroup
+			for i, slug := range tc.slugs {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					codes[i] = serve(h, basicReq(slug, "letmein", "192.0.2.50:1")).Code
+				}()
+			}
+			wg.Wait()
+			for i, c := range codes {
+				if c != http.StatusOK {
+					t.Errorf("concurrent correct request %d (%s) = %d, want 200", i, tc.slugs[i], c)
+				}
+			}
+		})
+	}
+}
