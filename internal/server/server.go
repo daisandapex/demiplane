@@ -585,6 +585,10 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, filename, err := openUpload(r)
+	if errors.Is(err, errMultipartHeaders) {
+		http.Error(w, err.Error(), http.StatusRequestHeaderFieldsTooLarge)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -919,26 +923,76 @@ func openUpload(r *http.Request) (io.ReadCloser, string, error) {
 	return r.Body, r.URL.Query().Get("filename"), nil
 }
 
+// maxMultipartHeaderBytes caps what a multipart publish may send before its
+// file part's body: any preamble, the form fields in front of the file, and
+// the file part's own headers. mime/multipart would otherwise read and keep
+// up to 10 MiB of headers per part for the whole upload.
+const maxMultipartHeaderBytes = 16 << 10
+
+// multipartReadAhead is how far mime/multipart's buffered reader may read
+// past the file part's headers before the part is returned.
+const multipartReadAhead = 4096
+
+// errMultipartHeaders refuses a multipart publish over maxMultipartHeaderBytes.
+var errMultipartHeaders = fmt.Errorf("multipart publish has more than %d bytes in front of the file", maxMultipartHeaderBytes)
+
+// headerLimitReader is a request body that, while armed, allows a fixed
+// number of bytes to be read and then fails.
+type headerLimitReader struct {
+	r       io.Reader
+	armed   bool
+	left    int64
+	tripped bool
+}
+
+func (h *headerLimitReader) Read(p []byte) (int, error) {
+	if !h.armed {
+		return h.r.Read(p)
+	}
+	if h.left <= 0 {
+		h.tripped = true
+		return 0, errMultipartHeaders
+	}
+	if int64(len(p)) > h.left {
+		p = p[:h.left]
+	}
+	n, err := h.r.Read(p)
+	h.left -= int64(n)
+	return n, err
+}
+
 // openMultipart streams the first file part of a multipart request without
 // buffering it. It returns a reader tied to the part plus its filename.
+// Everything read before the file part is returned is limited to
+// maxMultipartHeaderBytes (plus mime/multipart's read-ahead), so headers are
+// never held beyond that; the part's body then streams unlimited by it.
 func openMultipart(r *http.Request) (io.ReadCloser, string, error) {
-	mr, err := r.MultipartReader()
-	if err != nil {
-		return nil, "", fmt.Errorf("parse multipart: %w", err)
+	_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || params["boundary"] == "" {
+		return nil, "", errors.New("parse multipart: no boundary in Content-Type")
 	}
+	hl := &headerLimitReader{r: r.Body, armed: true, left: maxMultipartHeaderBytes + multipartReadAhead}
+	mr := multipart.NewReader(hl, params["boundary"])
 	for {
 		part, err := mr.NextPart()
+		if hl.tripped {
+			return nil, "", errMultipartHeaders
+		}
 		if err == io.EOF {
 			return nil, "", errors.New("multipart body has no file part")
 		}
 		if err != nil {
 			return nil, "", fmt.Errorf("read multipart: %w", err)
 		}
-		if part.FileName() == "" {
+		name := part.FileName()
+		if name == "" {
 			part.Close()
 			continue
 		}
-		return &partReadCloser{part: part}, part.FileName(), nil
+		hl.armed = false
+		// Keep only the filename; the part reads its body without its headers.
+		part.Header = nil
+		return &partReadCloser{part: part}, name, nil
 	}
 }
 

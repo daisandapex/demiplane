@@ -45,7 +45,7 @@ POST   /rerender[/{slug}]  Rebake ?render=md pages from their retained markdown
 GET    /docs           Human docs (HTML).  GET /help  Machine API (JSON).
 
 ## POST /publish
-Body: raw bytes (any file type) or multipart/form-data (first file part).
+Body: raw bytes (any file type) or multipart/form-data (first file part; at most 16 KiB before its body, else 431).
 The body is streamed to disk — no size limit by default.
 Query parameters (all optional):
   ?slug=<name>    Named, stable URL that OVERWRITES in place on re-publish.

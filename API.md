@@ -57,7 +57,9 @@ access logs, proxy logs, and browser history. The token rides the
 
 Store the request body and return the artifact URL. Auth: bearer (when
 configured). Body: raw bytes of any type, or `multipart/form-data` (the first
-file part is taken). The body streams to disk, capped at `--max-upload` (default
+file part is taken; at most 16 KiB may come before its body, counting any
+preamble, the form fields in front of it and its own headers, or the request
+gets `431`). The body streams to disk, capped at `--max-upload` (default
 100 MiB; `0` lifts the cap). It must also arrive at `--upload-min-rate` or faster
 after a `--body-timeout` grace, or the request gets `408`.
 
@@ -82,7 +84,7 @@ after a `--body-timeout` grace, or the request gets `408`.
 | `Authorization: Bearer <token>` | Write auth, when the instance requires it. |
 | `X-Demiplane-Password: <pw>` | Set a view password (never via URL). Reads then need HTTP Basic. |
 | `Accept: application/json` | Return a JSON object instead of a plain-text URL. |
-| `Content-Type: multipart/form-data` | Upload the first file part instead of a raw body. |
+| `Content-Type: multipart/form-data` | Upload the first file part instead of a raw body. At most 16 KiB may precede the part's body (`431` otherwise). |
 
 ### Response
 
@@ -731,6 +733,7 @@ filtering, sorting and grouping apply to the page shown.
 | `413 Payload Too Large` | Upload exceeds `--max-upload`, a reply/site exceeds its cap (a site archive: 4,096 entries of any kind, a 2 MiB zip central directory, 64 KiB of tar headers in front of one entry, the decompressed-bytes budget), or a `?render=md` document exceeds a render limit (table width, table cells, `--render-max-output`). |
 | `421 Misdirected Request` | `--allowed-hosts` is set and the `Host` is not one it (or a base URL) names. |
 | `429 Too Many Requests` | Too many failed view-password attempts or reply submissions (with `Retry-After`), or an artifact reached its reply limit. |
+| `431 Request Header Fields Too Large` | A multipart publish sends more than 16 KiB before its file part's body (preamble, earlier form fields and the part's headers). |
 | `501 Not Implemented` | A feature (for example `?site=`) is not compiled into this build. |
 | `503 Service Unavailable` | A module (for example reply storage) is temporarily unavailable, or the server is at a concurrency limit (requests in progress, password checks, renders, site archive parsing, the reply hook pool); retry after `Retry-After`. |
 | `507 Insufficient Storage` | The write would pass `--store-quota`, the sites would hold more than 100,000 files and directories in all, or the aggregate reply limits are reached. |
