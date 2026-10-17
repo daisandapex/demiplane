@@ -1116,8 +1116,9 @@ func TestListRouteDoesNotShadowSlugs(t *testing.T) {
 
 // TestSecurityHeaders covers the stored-XSS + clickjacking hardening: nosniff
 // and same-origin framing headers on every response, a no-script CSP on SVG
-// (scriptable-but-inert content), and no script restriction on HTML (hosting
-// executable pages is an intended feature).
+// (scriptable-but-inert content), and a script-permitting sandbox on HTML
+// (hosting executable pages is an intended feature; reaching other artifacts
+// is not).
 func TestSecurityHeaders(t *testing.T) {
 	ts := newTestServer(t, "")
 
@@ -1129,10 +1130,11 @@ func TestSecurityHeaders(t *testing.T) {
 	if got := resp.Header.Get("X-Frame-Options"); got != "SAMEORIGIN" {
 		t.Errorf("X-Frame-Options = %q, want SAMEORIGIN", got)
 	}
-	// HTML pages carry ONLY the anti-clickjacking directive — no script
-	// restriction (executable pages are the product).
-	if csp := resp.Header.Get("Content-Security-Policy"); csp != "frame-ancestors 'self'" {
-		t.Errorf("HTML artifact CSP = %q, want frame-ancestors 'self' only", csp)
+	// HTML pages may run scripts (executable pages are the product), but in a
+	// sandbox without allow-same-origin, so each runs in its own opaque origin
+	// and cannot read other artifacts or register a service worker.
+	if csp := resp.Header.Get("Content-Security-Policy"); csp != "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads; worker-src 'none'; frame-ancestors 'self'" {
+		t.Errorf("HTML artifact CSP = %q, want the sandboxed document policy", csp)
 	}
 	// Referrer-Policy keeps capability slugs out of the Referer on cross-origin
 	// navigation (demiplane-hgp); present on every response.
@@ -1148,8 +1150,8 @@ func TestSecurityHeaders(t *testing.T) {
 	svgURL := publish(t, ts, "?filename=x.svg",
 		`<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>`)
 	resp2, _ := get(t, svgURL)
-	if csp := resp2.Header.Get("Content-Security-Policy"); csp != "script-src 'none'; frame-ancestors 'self'" {
-		t.Errorf("SVG CSP = %q, want script-src 'none'; frame-ancestors 'self'", csp)
+	if csp := resp2.Header.Get("Content-Security-Policy"); csp != "sandbox; script-src 'none'; worker-src 'none'; frame-ancestors 'self'" {
+		t.Errorf("SVG CSP = %q, want the sandboxed no-script policy", csp)
 	}
 	if got := resp2.Header.Get("X-Content-Type-Options"); got != "nosniff" {
 		t.Errorf("SVG X-Content-Type-Options = %q, want nosniff", got)
@@ -1343,5 +1345,30 @@ func TestSeriesParamValidation(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("publish %s = %d, want 400", q, resp.StatusCode)
 		}
+	}
+}
+
+// TestPublishRejectsMalformedQuery: a query parameter the parser cannot read
+// is dropped by url.Values, so a malformed ?private or ?password would vanish
+// and the artifact would be published without the protection asked for. Any
+// unparseable publish query is a 400 and nothing is stored.
+func TestPublishRejectsMalformedQuery(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	h := New(st, Config{}).Handler()
+	for _, q := range []string{"private=true;", "slug=a&private=1;x", "password=%ZZ", "ttl=1h&%zz"} {
+		t.Run(q, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/publish?"+q, strings.NewReader("body")))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status %d (%s), want 400", rec.Code, rec.Body)
+			}
+			if n, _ := st.Count(store.DefaultOwner); n != 0 {
+				t.Errorf("%d artifacts stored after a rejected publish", n)
+			}
+		})
 	}
 }

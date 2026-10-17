@@ -190,7 +190,10 @@ fall back to the measure and scroll horizontally inside their own container
   `prefers-color-scheme` block decides (see the theme contract above). The
   button carries `aria-pressed` (true when dark is effective), kept in sync on
   load and on click. Headerless renders ship no scripts at all and follow the
-  OS/server theme.
+  OS/server theme. Rendered pages run in the content sandbox (see Content
+  isolation below), where localStorage is unavailable: the toggle still flips
+  the open page, the storage calls fail quietly, and the choice is not carried
+  to the next page. With `--unsafe-no-sandbox` it persists as described.
 - **Footer**: a thin single-line credit, hairline top rule, muted, aligned to
   the text column.
 - **Focus**: a global `:focus-visible` ring (`2px solid var(--accent)`, 2px
@@ -220,6 +223,69 @@ from names is the same class of mistake at any pattern width, so the signal is
 an author declaration, not a guess. Ordering within a series is lexical by
 slug (zero-padded numeric suffixes sort correctly). Decided 2026-08-30
 (render-fidelity brief, item 4, option b).
+
+## Content isolation
+
+Every artifact and site lives on one content origin (ADR 0003 split the
+control plane off; it did not split artifacts from each other). Uploaded HTML
+runs scripts by design, so without more a published page could read any other
+artifact the viewer can open, ride the viewer's cached HTTP Basic
+credentials, read storage written by another page, or register a root-scoped
+service worker that intercepts later visits. Two designs keep artifacts apart.
+
+**Per-artifact origins** (`<slug>.content.example`) give each artifact a real
+origin of its own. That is the strongest boundary and it keeps every web
+platform feature, but it needs wildcard DNS and a wildcard TLS certificate (a
+DNS-01 ACME challenge, so DNS provider credentials on the host), and loopback,
+bare-IP and single-hostname deployments cannot have it at all. demiplane's
+default deployment is one binary on one hostname or one mesh IP with no DNS of
+its own, so this cannot be the default.
+
+**A per-document CSP sandbox** (chosen, 2026-10-17) needs nothing from the
+deployment. Every HTML document (uploaded, `?render=md`, site pages) is served
+with `sandbox allow-scripts allow-forms allow-popups
+allow-popups-to-escape-sandbox allow-modals allow-downloads` and no
+`allow-same-origin`, so the browser runs it in a fresh opaque origin and every
+other URL on the instance, its own neighbours included, is cross-origin to it.
+SVG, XML and XHTML get a bare `sandbox` with `script-src 'none'`. Each token is
+kept because something real needs it: scripts (executable pages are the
+product), forms (reply boxes and ordinary forms), popups that escape the
+sandbox (`target=_blank` links behave normally), modals, downloads. The
+network side refuses any request marked `Service-Worker`, and every document
+carries `worker-src 'none'`, so no URL can become a service worker even if a
+page runs unsandboxed.
+
+What a page keeps: its own markup, inline and classic scripts, stylesheets,
+images, media and links, and `postMessage`. A sandboxed page's module scripts,
+`crossorigin` stylesheets and fonts are fetched in CORS mode from origin
+`null`, which would break module-based sites (most modern bundler output). Public
+artifacts of a matching type therefore answer those requests, and only those,
+with `Access-Control-Allow-Origin: null` (see SECURITY.md for why that exposes
+nothing a cross-origin `<script>` could not already run).
+
+What it breaks, deliberately:
+
+- `localStorage`, `sessionStorage`, IndexedDB and cookies throw a
+  `SecurityError`. Pages that need persistence must handle that (demiplane's own
+  theme and navigation toggles do).
+- `fetch`/XHR from a page to its own files (a JSON data file next to a site's
+  `index.html`, say) is cross-origin and refused. Data a page needs has to be
+  inlined or loaded as a script.
+- A page cannot frame another page on the instance, its own site included:
+  `frame-ancestors 'self'` never matches an opaque parent. The `?live` wrapper
+  still frames artifacts, because the wrapper is not sandboxed.
+- Web workers, service workers and installable PWAs do not work.
+- Inside the `?live` preview, `target=_top` links do not navigate the wrapper.
+- A private or password-protected artifact cannot be loaded as a subresource
+  (script, stylesheet, image) by any page, because it answers with
+  `Cross-Origin-Resource-Policy: same-origin` and every sandboxed page is
+  another origin. Protected artifacts are documents to open, not assets.
+
+`--unsafe-no-sandbox` is the operator's way back to one shared origin, for an
+instance that hosts only content its operator trusts; service workers stay
+refused there. Per-artifact origins remain the upgrade path for a deployment
+that has wildcard DNS and certificates and needs these features with
+isolation: they would replace the sandbox, not sit on top of it.
 
 ## Typographic blockquotes
 

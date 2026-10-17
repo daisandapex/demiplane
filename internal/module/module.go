@@ -84,9 +84,21 @@ var registry []Module
 
 // Register adds a module to the registry. Call it from a module package's
 // init(); the module is then included in the binary iff that package is imported
-// (see cmd/demiplane). Duplicate names are the caller's responsibility — core
+// (see cmd/demiplane). Duplicate names are the caller's responsibility; core
 // mounts whatever is registered.
-func Register(m Module) { registry = append(registry, m) }
+//
+// A route module's top-level names are reserved as artifact slugs here, at
+// registration, rather than when core mounts its routes: a process that stores
+// artifacts without serving HTTP (`demiplane receive`) must refuse them too.
+func Register(m Module) {
+	if rm, ok := m.(RouteModule); ok {
+		store.AddReservedSlugs(rm.Reserved()...)
+	}
+	if cm, ok := m.(ContentRouteModule); ok {
+		store.AddReservedSlugs(cm.ContentReserved()...)
+	}
+	registry = append(registry, m)
+}
 
 // All returns the registered modules in registration order. Core calls this once
 // at startup to collect the route modules it mounts.

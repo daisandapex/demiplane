@@ -322,12 +322,11 @@ func (s *Server) serveSiteFile(w http.ResponseWriter, r *http.Request, site, rel
 	defer f.Close()
 
 	w.Header().Set("Content-Type", ct)
-	if store.IsScriptableNonHTML(ct) {
-		// SVG/XML/XHTML render as active documents; block embedded scripts so a
-		// published asset can't become stored XSS (same guard as handleGet).
-		// Re-states the baseline frame-ancestors directive this Set replaces.
-		w.Header().Set("Content-Security-Policy", "script-src 'none'; "+frameAncestorsSelf)
-	}
+	// Same posture as handleGet: HTML pages run sandboxed in an opaque origin,
+	// SVG/XML/XHTML get no scripts, and the site's own module scripts, styles
+	// and fonts stay loadable from its sandboxed pages (sites are public).
+	s.setContentPolicy(w, ct)
+	s.allowSandboxedSubresource(w, r, ct, false)
 	if store.IsInline(ct) {
 		w.Header().Set("Content-Disposition", "inline")
 	} else {

@@ -68,6 +68,11 @@ type Config struct {
 	// RenderMetaHeader renders a frontmatter-driven meta-header (localized date +
 	// labeled fields) on ?render=md pages; off strips frontmatter without a header.
 	RenderMetaHeader bool
+	// UnsafeNoSandbox serves HTML/SVG/XML artifacts without the per-document CSP
+	// sandbox (isolation.go), so every page runs in the shared content origin and
+	// can read any other artifact the viewer can open. Service workers stay
+	// refused. For single-operator instances that only host trusted content.
+	UnsafeNoSandbox bool
 }
 
 // Server wires the store and configuration into HTTP handlers.
@@ -86,6 +91,7 @@ type Server struct {
 	renderFooter     bool
 	renderFooterLink string
 	renderMetaHeader bool
+	sandbox          bool                        // per-document CSP sandbox on the content origin (isolation.go)
 	tokenMAC         []byte                      // random key for constant-time, length-hiding token comparison
 	routes           []module.RouteModule        // compiled-in route modules, mounted on the control plane
 	contentRoutes    []module.ContentRouteModule // route modules that also mount on the content origin
@@ -112,6 +118,7 @@ func New(st *store.Store, cfg Config) *Server {
 		renderFooter:     cfg.RenderFooter,
 		renderFooterLink: cfg.RenderFooterLink,
 		renderMetaHeader: cfg.RenderMetaHeader,
+		sandbox:          !cfg.UnsafeNoSandbox,
 		tokenMAC:         key,
 		routes:           module.RouteModules(),
 		contentRoutes:    module.ContentRouteModules(),
@@ -119,12 +126,11 @@ func New(st *store.Store, cfg Config) *Server {
 }
 
 // mountContentRouteModules mounts every compiled-in module's content-origin
-// routes and reserves the slugs they own, before the artifact catch-all. Shared
-// by ContentHandler and the combined same-origin Handler so a module's
+// routes before the artifact catch-all (module.Register reserved their names).
+// Shared by ContentHandler and the combined same-origin Handler so a module's
 // same-origin submit path exists wherever artifact bodies are served.
 func (s *Server) mountContentRouteModules(mux *http.ServeMux) {
 	for _, rm := range s.contentRoutes {
-		store.AddReservedSlugs(rm.ContentReserved()...)
 		rm.ContentRoutes(mux, s)
 	}
 }
@@ -234,10 +240,10 @@ func (s *Server) registerControlRoutes(mux *http.ServeMux) {
 	s.mountCoreControlRoutes(mux)
 
 	// Compiled-in route modules mount before the catch-all GET /{slug}. Their
-	// reserved top-level segments are registered so an artifact slug can never
-	// shadow a module route — the same invariant core holds for its own paths.
+	// top-level segments were reserved when the module registered, so an
+	// artifact slug can never shadow a module route, in this process or in
+	// `demiplane receive`.
 	for _, rm := range s.routes {
-		store.AddReservedSlugs(rm.Reserved()...)
 		rm.Routes(mux, s)
 	}
 }
@@ -374,6 +380,9 @@ func withSecurityHeaders(next http.Handler) http.Handler {
 		if r.TLS != nil {
 			w.Header().Set("Strict-Transport-Security", hstsValue)
 		}
+		if refuseServiceWorkers(w, r) {
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -387,12 +396,26 @@ const PasswordHeader = "X-Demiplane-Password"
 // Query params: ?slug= (named), ?private=, ?ttl= (e.g. 30m, 2h, 7d). The view
 // password is supplied via the X-Demiplane-Password header, never the URL.
 func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
+	// URL.Query drops any pair it cannot parse, so a malformed ?private or
+	// ?password would vanish and the artifact would be stored without the
+	// protection the caller asked for. Refuse an unparseable query instead.
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		http.Error(w, "malformed query string: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	// Multi-file / directory publish hook (feature T2.2): POST /publish?site=<name>
 	// ingests a tar/zip/multipart archive as a path-structured site. site.go owns
 	// the whole path; nil = feature not wired into this build.
 	if q.Has("site") {
+		// Sites do not implement privacy, expiry or passwords. Refuse a request
+		// for any of them before the archive is read, rather than silently
+		// publishing it public and permanent.
+		if msg := unsupportedSiteOption(q, r.Header); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
 		if publishSite != nil {
 			publishSite(s, w, r)
 		} else {
@@ -609,6 +632,23 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, url)
 }
 
+// unsupportedSiteOption returns an error message when a ?site= upload asks for
+// a protection sites do not provide (?private, ?ttl, a view password in the
+// header or the query), or "" when it asks for none. ?private=false and an
+// empty ?ttl= request nothing and pass.
+func unsupportedSiteOption(q url.Values, h http.Header) string {
+	const tail = " is not supported for ?site= uploads; publish the files individually to use it"
+	switch {
+	case queryFlag(q, "private"):
+		return "?private" + tail
+	case q.Get("ttl") != "":
+		return "?ttl" + tail
+	case q.Has("password"), len(h.Values(PasswordHeader)) > 0:
+		return "a view password (" + PasswordHeader + ")" + tail
+	}
+	return ""
+}
+
 // handleGet serves an artifact's bytes with the stored content-type, inline or
 // as an attachment per the store's policy. Password-protected artifacts require
 // HTTP Basic credentials (the password; username is ignored).
@@ -636,21 +676,27 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
+	// A capability URL or a password gate makes the response confidential, the
+	// 401 included: no Referer, no stored copy (isolation.go).
+	protected := art.Private || art.HasPassword()
+	if protected {
+		setProtectedHeaders(w)
+	}
+
 	if art.HasPassword() && !passwordOK(r, art.PasswordHash) {
-		w.Header().Set("WWW-Authenticate", `Basic realm="demiplane", charset="UTF-8"`)
+		w.Header().Set("WWW-Authenticate", passwordChallenge(slug))
 		http.Error(w, "password required", http.StatusUnauthorized)
 		return
 	}
 
 	w.Header().Set("Content-Type", art.ContentType)
-	if store.IsScriptableNonHTML(art.ContentType) {
-		// SVG/XML/XHTML render as active documents and would execute embedded
-		// <script> at our origin. demiplane intentionally hosts executable HTML
-		// pages, but these types are expected to be inert content — block script
-		// execution so a published image/document can't become stored XSS. This
-		// Set replaces the baseline frame-ancestors CSP, so re-state it here.
-		w.Header().Set("Content-Security-Policy", "script-src 'none'; "+frameAncestorsSelf)
-	}
+	// HTML runs in a sandboxed opaque origin, so it cannot read other artifacts
+	// or register a service worker; SVG/XML/XHTML also get no scripts at all. The
+	// Set replaces the baseline CSP and re-states frame-ancestors. Module
+	// scripts, styles and fonts a sandboxed page loads in CORS mode are granted
+	// for public artifacts only (isolation.go).
+	s.setContentPolicy(w, art.ContentType)
+	s.allowSandboxedSubresource(w, r, art.ContentType, protected)
 	if store.IsInline(art.ContentType) {
 		w.Header().Set("Content-Disposition", "inline")
 	} else {
@@ -663,7 +709,10 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	// otherwise ?live reloads, and any re-view of an updated artifact, show old
 	// bytes. no-cache pairs with the validators below: a conditional GET returns
 	// 304 when unchanged and fresh bytes after a re-publish or a rebake.
-	w.Header().Set("Cache-Control", "no-cache")
+	// Protected artifacts already carry no-store (set above).
+	if !protected {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
 	// The version changes on every write of the bytes, including two writes in
 	// the same second, and differs between a deleted artifact and its
 	// recreation. A date cannot tell those apart, so whenever there is an ETag

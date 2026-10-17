@@ -4,6 +4,7 @@
 package server
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -245,4 +246,68 @@ func TestGalleryIsControlPlaneOnly(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "class=\"gcard\"") {
 		t.Errorf("gallery must not render on the content origin")
 	}
+}
+
+// TestGalleryFollowsBrowseSetting: /gallery enumerates artifacts, so with
+// --browse off it is held to the same bearer token as /list; with --browse on
+// it stays public, like the landing listing.
+func TestGalleryFollowsBrowseSetting(t *testing.T) {
+	const token = "gallery-token"
+	req := func(t *testing.T, method, url, bearer string) (int, string) {
+		t.Helper()
+		r, _ := http.NewRequest(method, url, nil)
+		if bearer != "" {
+			r.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		resp, err := http.DefaultClient.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	seed := func(t *testing.T, ts *httptest.Server) {
+		t.Helper()
+		r, _ := http.NewRequest(http.MethodPost, ts.URL+"/publish?slug=hidden-doc", strings.NewReader("x"))
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set(PasswordHeader, "pw")
+		resp, err := http.DefaultClient.Do(r)
+		if err != nil || resp.StatusCode != http.StatusCreated {
+			t.Fatalf("seed publish: %v %v", err, resp)
+		}
+		resp.Body.Close()
+	}
+
+	t.Run("browse off", func(t *testing.T) {
+		ts := newConfiguredServer(t, Config{AuthToken: token})
+		seed(t, ts)
+		for _, m := range []string{http.MethodGet, http.MethodHead} {
+			code, body := req(t, m, ts.URL+"/gallery", "")
+			if code != http.StatusUnauthorized {
+				t.Errorf("%s /gallery without token = %d, want 401", m, code)
+			}
+			if strings.Contains(body, "hidden-doc") {
+				t.Errorf("%s /gallery without token leaked the slug", m)
+			}
+			if code, _ := req(t, m, ts.URL+"/gallery", "wrong"); code != http.StatusUnauthorized {
+				t.Errorf("%s /gallery with a wrong token = %d, want 401", m, code)
+			}
+		}
+		code, body := req(t, http.MethodGet, ts.URL+"/gallery", token)
+		if code != http.StatusOK || !strings.Contains(body, "hidden-doc") {
+			t.Errorf("GET /gallery with token = %d, listing present=%v", code, strings.Contains(body, "hidden-doc"))
+		}
+	})
+	t.Run("browse on", func(t *testing.T) {
+		ts := newConfiguredServer(t, Config{AuthToken: token, Browse: true})
+		seed(t, ts)
+		code, body := req(t, http.MethodGet, ts.URL+"/gallery", "")
+		if code != http.StatusOK || !strings.Contains(body, "hidden-doc") {
+			t.Errorf("GET /gallery with browse on = %d, listing present=%v", code, strings.Contains(body, "hidden-doc"))
+		}
+		if code, _ := req(t, http.MethodGet, ts.URL+"/list", ""); code != http.StatusUnauthorized {
+			t.Errorf("GET /list with browse on and no token = %d, want 401 (browse never opens /list)", code)
+		}
+	})
 }

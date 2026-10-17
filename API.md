@@ -217,17 +217,28 @@ func main() {
 Fetch an artifact's bytes as-is, with the stored content-type, on the content
 origin. Always open, except that a password-gated artifact requires HTTP Basic
 credentials (username ignored, password is the password). Range requests and
-conditional GETs are supported. Responses carry `Cache-Control: no-cache`, a
-`Last-Modified` that advances on every re-publish and every `POST /rerender`, and
-an `ETag` that changes on every write of the bytes, so a cached copy is
-revalidated and replaced after either. Two query add-ons:
+conditional GETs are supported. Public artifacts carry `Cache-Control: no-cache`;
+private and password-protected ones (and their `401`) carry
+`Cache-Control: private, no-store` and `Referrer-Policy: no-referrer`. Every
+response has a `Last-Modified` that advances on every re-publish and every
+`POST /rerender`, and an `ETag` that changes on every write of the bytes, so a
+cached copy is revalidated and replaced after either. HTML, SVG and XML are
+served in a CSP sandbox, so each page runs in an opaque origin of its own and
+cannot read other artifacts, use storage, or register a service worker (see
+[SECURITY.md](SECURITY.md#content-isolation-between-artifacts) and
+[DESIGN.md](DESIGN.md#content-isolation)). Two query add-ons:
 
 - `?live` wraps the artifact in a first-party live-reload view that refreshes the
   moment the slug is re-published. It never alters the stored bytes.
 - The reload stream itself is a Server-Sent Events endpoint at
   `GET /_events/{slug}` on the content origin. It emits `event: reload` on each
   re-publish and a heartbeat comment about every 25s. Note the literal-first
-  shape: it is `/_events/{slug}`, not `/{slug}/_events`.
+  shape: it is `/_events/{slug}`, not `/{slug}/_events`. The stream is
+  authorized like the artifact: an unknown or expired slug is `404`, a
+  password-protected artifact needs its password over HTTP Basic (`401`
+  without it; its `?live` wrapper needs it too), and the stream ends if the
+  artifact is deleted, expires or changes password. Too many streams for one
+  slug or one client is `503`.
 
 ### Get: worked examples
 
@@ -238,7 +249,7 @@ curl "$CONTENT/reports"
 # a password-gated artifact: password over HTTP Basic
 curl -u any:hunter2 "$CONTENT/q3"
 
-# subscribe to reload events (SSE)
+# subscribe to reload events (SSE); add -u any:<pw> for a password-gated one
 curl -N "$CONTENT/_events/reports"
 ```
 
@@ -618,6 +629,12 @@ site's index URL on the content origin. A `?fmt=tar|zip` hint disambiguates the
 archive; otherwise the format is sniffed. Body size is always capped for a site
 publish (the archive is buffered for extraction). Read a site back at
 `GET /{site}/{path}` on the content origin; `GET /{site}/` serves its index.
+Sites are public and do not expire: a site upload that asks for `?private`,
+`?ttl`, `?password` or an `X-Demiplane-Password` header is refused with `400`
+before the archive is read. Site pages run in the same sandbox as other HTML;
+their own scripts (classic and module), stylesheets, images and fonts load, but
+`fetch` of their own data files does not (see
+[DESIGN.md](DESIGN.md#content-isolation)).
 
 ```bash
 # publish a directory as a zip site
@@ -633,8 +650,10 @@ curl "$CONTENT/marketing/css/app.css" # any path within it
 ## GET /gallery
 
 An HTML index of the instance's non-private artifacts, on the control plane. It
-is a human browse surface (like `serve --browse` for `GET /`), never a JSON API,
-and it never lists private capability slugs.
+is a human browse surface, never a JSON API, and it never lists private
+capability slugs. It follows `serve --browse`: with browsing on it is public,
+like the `GET /` listing; with browsing off (the default) it needs the bearer
+token, like `GET /list`.
 
 ## Status codes
 
@@ -645,8 +664,9 @@ and it never lists private capability slugs.
 | `204 No Content` | Delete or ack succeeded. |
 | `304 Not Modified` | Conditional `GET /{slug}` whose `If-None-Match` or `If-Modified-Since` still matches. |
 | `302 Found` | Forward-flow redirect once a `?next` slug exists. |
-| `400 Bad Request` | Invalid or reserved slug, `private` + named slug, password in the URL query, bad `ttl`, or a malformed reply/site. |
-| `401 Unauthorized` | Missing or invalid bearer token (write/list/delete/reply admin), or a wrong view password (read). |
+| `400 Bad Request` | Invalid or reserved slug, `private` + named slug, password in the URL query, bad `ttl`, a malformed publish query string, a site upload asking for `?private`/`?ttl`/a password, or a malformed reply/site. |
+| `401 Unauthorized` | Missing or invalid bearer token (write/list/delete/reply admin, `/gallery` without `--browse`), or a wrong view password (read, `?live`, live-reload stream). |
+| `403 Forbidden` | A service-worker script fetch (never permitted), or a cross-origin write to the control plane. |
 | `404 Not Found` | No such artifact or reply, or it expired. |
 | `405 Method Not Allowed` | Wrong method for a known path (for example `POST /list`). |
 | `413 Payload Too Large` | Upload exceeds `--max-upload`, or a reply/site exceeds its cap. |
@@ -660,7 +680,7 @@ These names collide with built-in routes and are rejected (`400`) as a `?slug=`,
 so an artifact can never shadow a route: `publish`, `list`, `docs`, `help`,
 `help.json`, `llms.txt`. Feature routes reserve their own top segments too
 (for example `connect`, `gallery`, `rerender`, `reply`, `replies`, `answer`,
-`_events`).
+`_events`). `demiplane receive` refuses the same names.
 
 ## See also
 

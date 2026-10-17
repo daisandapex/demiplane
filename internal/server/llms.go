@@ -101,7 +101,8 @@ List your artifacts as JSON:
 
 ## Error codes
 200/201  OK / created.
-400      Bad request (invalid or reserved slug, private+named, password in URL query, bad ttl).
+400      Bad request (invalid or reserved slug, private+named, password in URL query, bad ttl,
+         or ?site= with ?private, ?ttl or a password, which sites do not support).
 401      Missing/invalid bearer token (write/list) or wrong view password (read).
 404      No such artifact (or it expired).
 405      Wrong HTTP method for a known path (e.g. POST /list).
@@ -184,7 +185,7 @@ func (s *Server) handleHelp(w http.ResponseWriter, r *http.Request) {
 			{Method: "GET", Path: "/help", Auth: false, Desc: "This self-describing API document (JSON)."},
 		},
 		Errors: []apiError{
-			{400, "Bad Request", "Invalid slug, reserved slug, private+named combination, password in URL query, or bad ttl."},
+			{400, "Bad Request", "Invalid slug, reserved slug, private+named combination, password in URL query, bad ttl, or a ?site= upload asking for ?private, ?ttl or a password (sites do not support them)."},
 			{401, "Unauthorized", "Missing/invalid bearer token (write/list) or wrong view password (read)."},
 			{404, "Not Found", "No such artifact, or it has expired."},
 			{405, "Method Not Allowed", "Wrong HTTP method for a known path (e.g. POST /list)."},

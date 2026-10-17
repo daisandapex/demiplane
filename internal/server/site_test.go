@@ -12,8 +12,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/daisandapex/demiplane/internal/store"
 )
 
 // --- archive builders -------------------------------------------------------
@@ -500,8 +503,8 @@ func TestSiteAssetSVGGetsNoScriptCSP(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("svg status=%d", resp.StatusCode)
 	}
-	if csp := resp.Header.Get("Content-Security-Policy"); csp != "script-src 'none'; frame-ancestors 'self'" {
-		t.Errorf("svg CSP=%q, want script-src 'none'; frame-ancestors 'self'", csp)
+	if csp := resp.Header.Get("Content-Security-Policy"); csp != "sandbox; script-src 'none'; worker-src 'none'; frame-ancestors 'self'" {
+		t.Errorf("svg CSP=%q, want the sandboxed no-script policy", csp)
 	}
 	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "image/svg+xml") {
 		t.Errorf("svg content-type=%q", resp.Header.Get("Content-Type"))
@@ -542,5 +545,93 @@ func TestSiteRoutesMountOnSplitAndCombined(t *testing.T) {
 	// The control plane must NOT serve site assets (origin isolation).
 	if resp, _ := get(t, control.URL+"/demo/css/style.css"); resp.StatusCode == http.StatusOK {
 		t.Errorf("control plane served a site asset — origin isolation breach")
+	}
+}
+
+// readSpy records whether anything read the request body.
+type readSpy struct {
+	r    io.Reader
+	read bool
+}
+
+func (s *readSpy) Read(p []byte) (int, error) {
+	s.read = true
+	return s.r.Read(p)
+}
+
+// TestSitePublishRejectsUnsupportedSecurityOptions: sites do not implement
+// privacy, expiry or passwords, so a site upload that asks for any of them is
+// refused before the archive is read, and nothing is stored. Silently dropping
+// the option would publish confidential content as public and permanent.
+func TestSitePublishRejectsUnsupportedSecurityOptions(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	h := New(st, Config{}).Handler()
+	archive := makeTar(t, threeFileSite())
+
+	cases := []struct {
+		name   string
+		query  string
+		header map[string]string
+		reject bool
+		want   string // substring of the error
+	}{
+		{"private", "private=true", nil, true, "private"},
+		{"bare private", "private", nil, true, "private"},
+		{"ttl", "ttl=1h", nil, true, "ttl"},
+		{"password query", "password=hunter2", nil, true, "password"},
+		{"password header", "", map[string]string{PasswordHeader: "hunter2"}, true, "password"},
+		{"empty password header", "", map[string]string{PasswordHeader: ""}, true, "password"},
+		{"all together", "private=1&ttl=2h&password=x", map[string]string{PasswordHeader: "y"}, true, "private"},
+		{"malformed private", "private=true;", nil, true, "query"},
+		{"malformed password", "password=%ZZ", nil, true, "query"},
+		{"private=false is no request", "private=false", nil, false, ""},
+		{"empty ttl is no request", "ttl=", nil, false, ""},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			site := fmt.Sprintf("site-%d", i)
+			spy := &readSpy{r: bytes.NewReader(archive)}
+			target := "/publish?site=" + site
+			if tc.query != "" {
+				target += "&" + tc.query
+			}
+			// Served in-process so the spy sits on the server's request body.
+			req := httptest.NewRequest(http.MethodPost, target, spy)
+			req.Header.Set("Content-Type", "application/x-tar")
+			for k, v := range tc.header {
+				req.Header[k] = []string{v}
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			body := rec.Body.String()
+
+			if !tc.reject {
+				if rec.Code != http.StatusCreated {
+					t.Fatalf("status %d (%s), want 201", rec.Code, body)
+				}
+				return
+			}
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status %d (%s), want 400", rec.Code, body)
+			}
+			if !strings.Contains(body, tc.want) {
+				t.Errorf("error %q does not name %q", body, tc.want)
+			}
+			if spy.read {
+				t.Error("the archive was read before the request was rejected")
+			}
+			if st.SiteExists(site) {
+				t.Error("a rejected site upload left a site behind")
+			}
+			rec = httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/"+site+"/", nil))
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("GET rejected site = %d, want 404", rec.Code)
+			}
+		})
 	}
 }

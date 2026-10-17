@@ -121,7 +121,10 @@ The **control plane** (`:8080`, where you publish) and the **content origin**
 (`:8081`, where artifacts are served) are separate origins on purpose. HTML and
 JavaScript you publish therefore run cross-origin to the API and cannot reach
 your publish, delete, or list endpoints. See
-[ADR 0003](docs/adr/0003-content-origin-isolation.md).
+[ADR 0003](docs/adr/0003-content-origin-isolation.md). Each published page is
+also sandboxed in an origin of its own, so one page cannot read another or
+install a service worker; pages lose storage and same-origin `fetch` in
+exchange (see [DESIGN.md](DESIGN.md#content-isolation)).
 
 ## How it compares
 
@@ -153,7 +156,7 @@ defaults, and TTL/expiry, with **no dependency on pico.sh**.
 | **Single-command publish** | POST a file, get an instant URL. curl, CLI, or native MCP. |
 | **Internal-first** | Loopback by default; bind a LAN/mesh IP to expose. A wildcard bind logs a loud warning. |
 | **Per-artifact privacy** | 144-bit unguessable capability slugs, optional view passwords, TTL/expiry with a background sweeper. |
-| **Two-plane isolation** | Control plane and content origin are separate; served content cannot touch your controls. |
+| **Two-plane isolation** | Control plane and content origin are separate; served content cannot touch your controls, and each page is sandboxed from the others. |
 | **Markdown render** | Opt-in `?render=md` with themes, syntax highlighting, heading anchors, and frontmatter meta-headers. The markdown source is kept, so `POST /rerender` rebakes pages after a theme or renderer change. |
 | **Multi-file sites** | Publish a tar/zip/multipart bundle and serve the whole tree at one slug. |
 | **Live reload** | `?live` streams updates over SSE while you iterate. |

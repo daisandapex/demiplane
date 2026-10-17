@@ -53,6 +53,11 @@ want it.
   `reply_hook_log_output = on`; logged hook output is truncated and has its
   control characters escaped. The webhook client follows no redirects, so a
   reply is never replayed to another origin or over plain HTTP.
+- **Isolation between artifacts.** A published page cannot read another
+  artifact through the viewer's browser, cannot use the viewer's cached
+  credentials for one, and cannot install a service worker. See
+  [Content isolation between artifacts](#content-isolation-between-artifacts)
+  for what that covers and what it does not.
 
 **Out of scope / explicitly accepted for v1:**
 
@@ -105,12 +110,95 @@ via `?filename=` (closing the content-type-confusion vector that bypassed the
 SVG/XML no-script CSP).
 
 **Known boundaries.** Port-separation isolates *origins* but not *cookies*
-(harmless today — demiplane is stateless; a future sessioned mode must move to a
-separate content **hostname** via `--content-base-url`). A single content origin
-does not isolate one artifact's JS from another's; per-slug subdomains are the
-future hardening. `--unsafe-same-origin` collapses both planes onto one origin
-and re-enables the footgun — use it only for a single-operator, trusted-content
-instance where you accept that.
+(harmless today, since demiplane is stateless; a future sessioned mode must move
+to a separate content **hostname** via `--content-base-url`). Artifacts share one
+content origin; the per-document sandbox below is what keeps them apart.
+`--unsafe-same-origin` collapses both planes onto one origin. Sandboxed pages
+still cannot read control-plane responses there, but the combined handler has no
+cross-origin write guard, so on an instance with no token a hosted page can
+submit a form to `POST /publish` or `DELETE`. Use it only for a single-operator,
+trusted-content instance where you accept that.
+
+## Content isolation between artifacts
+
+Every artifact and site is served from the one content origin, so the origin
+alone does not keep a hostile page away from its neighbours. Each document is
+therefore served in a browser sandbox of its own (the reasoning, and the
+alternative of an origin per artifact, are in [DESIGN.md](DESIGN.md#content-isolation)).
+
+**What is isolated:**
+
+- **Every HTML document** (uploaded pages, `?render=md` pages, site pages) is
+  served with `Content-Security-Policy: sandbox allow-scripts allow-forms
+  allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads`,
+  without `allow-same-origin`. The page runs in an opaque origin of its own, so
+  every other URL on the instance is cross-origin to it: `fetch`/XHR responses
+  from other artifacts are unreadable (with or without the viewer's cached HTTP
+  Basic credentials, which a cross-origin request only carries when the page
+  asks, and whose response it still cannot read), frames and windows holding
+  other artifacts cannot be scripted, and storage (`localStorage`, IndexedDB,
+  cookies) is unavailable. **SVG, XML and XHTML** get a bare `sandbox` plus
+  `script-src 'none'`.
+- **Service workers.** An opaque origin cannot register one. Independently,
+  every HTML, SVG and XML document carries `worker-src 'none'`, and any request
+  carrying a `Service-Worker` header (the browser's marker for a worker script
+  fetch) is refused with `403` on both planes, so no URL can become a worker
+  even with the sandbox off.
+- **Framing.** `frame-ancestors 'self'` never matches an opaque parent, so a
+  sandboxed page cannot embed another artifact at all.
+- **Confidential responses.** Responses for private (capability URL) and
+  password-protected artifacts, their `401` and every `?live` wrapper carry
+  `Referrer-Policy: no-referrer` and `Cache-Control: private, no-store`, so a
+  capability URL does not leave in a `Referer` (or `document.referrer`) and no
+  copy outlives expiry or deletion in a browser or shared cache. Artifact
+  responses also carry `Cross-Origin-Resource-Policy: same-origin`, so another
+  page cannot run a protected script, apply a protected stylesheet or draw a
+  protected image through a plain `<script>`, `<link>` or `<img>`, which the
+  browser would otherwise load with the viewer's cached credentials. The cost:
+  a protected artifact cannot be a subresource of any page (every sandboxed
+  page is another origin); it can only be opened or framed.
+- **Password realms.** Each artifact challenges with its own Basic realm (a
+  short hash of the slug, not the slug), so a browser does not answer one
+  artifact's challenge with credentials it cached for another.
+- **Live-reload streams** are authorized like the artifact (see below).
+
+**What remains:**
+
+- **The sandbox is enforced by the browser.** A browser without CSP `sandbox`
+  support (every current major browser has it) gets no isolation.
+- **`--unsafe-no-sandbox`** turns the sandbox off: every page shares the origin
+  again and can read any artifact the viewer can open. Service workers stay
+  refused.
+- **Side channels and blind requests.** A hostile page can still make the
+  browser request other artifacts (links, forms, images, scripts) and observe
+  coarse signals such as load or error events and timing, so it may learn
+  whether a URL exists or whether the viewer is authorized for it. Browsers may
+  attach cached Basic credentials to those requests, because for top-level slugs
+  the credential scope is the whole origin. The server checks them against each
+  artifact's own password; the page never sees the response, and a protected
+  response refuses to be used as its subresource.
+- **Public scripts, stylesheets and fonts are readable cross-origin.** So that a
+  sandboxed page can load its own module scripts, `crossorigin` stylesheets and
+  fonts (which browsers fetch in CORS mode, from origin `null`), a public
+  artifact or site file of a matching type answers such a request with
+  `Access-Control-Allow-Origin: null`. Only requests the browser itself labels
+  `script`, `style` or `font` qualify, the stored type must match, and private
+  or password-protected artifacts never get it. Any opaque-origin page,
+  including another site's sandboxed frame, can therefore read public JS, CSS
+  and fonts, much as any page can already run or apply them. Keep secrets out
+  of public scripts and stylesheets.
+- **A service worker registered before this release** is not removed. Its
+  update checks now get `403`, so it is never replaced, but a browser keeps an
+  installed worker until the registration is cleared. A viewer who opened a
+  hostile page on an older release should clear site data for the content
+  origin; an operator can also move the content origin to a new port or
+  hostname.
+- **Content-plane pages demiplane writes itself** (the `?live` wrapper, the
+  themed 404, the reply confirmation) run unsandboxed in the content origin.
+  They carry no uploaded script.
+- **Writes from pages.** A sandboxed page can still submit forms, for example
+  to the reply endpoint `POST /answer/{slug}`; its request arrives with
+  `Origin: null`.
 
 ## New surfaces in v1.2
 
@@ -150,9 +238,17 @@ inherits the posture above and was reviewed adversarially before release.
   under a strict per-response CSP nonce (`default-src 'none'`, `script-src` the
   nonce only, no `unsafe-inline`/`eval`); the sole reflected value (the slug) is
   regex-constrained and HTML-escaped, and the artifact renders in a same-origin
-  iframe. The SSE endpoint caps subscribers **per-slug and globally** to bound
-  file-descriptor/memory use, sends periodic heartbeats, and drops consumers on a
-  write deadline / context cancel.
+  iframe. The SSE endpoint is authorized like the artifact it watches: the slug
+  must name an existing, unexpired artifact, and a password-protected one needs
+  its password over HTTP Basic (a refusal is a `401` with that artifact's realm,
+  and the `?live` wrapper takes the same password first, so the browser answers
+  from the credentials the viewer just entered). The grant is re-checked on every republish
+  and every heartbeat, so deleting or expiring the artifact, or changing its
+  password, ends the stream. Subscribers are capped **per slug, per client
+  address** (an IPv4 address or IPv6 /64; behind a proxy all clients share the
+  proxy's address) **and globally** to bound file-descriptor/memory use; the
+  stream sends periodic heartbeats and drops consumers on a write deadline /
+  context cancel.
 - **Multi-file archive ingest (`POST /publish?site=`).** Tar, zip, and multipart
   bundles are accepted behind the publish token. Every entry path is
   traversal-checked (`..`, absolute paths, and backslashes rejected; each segment
@@ -166,8 +262,12 @@ inherits the posture above and was reviewed adversarially before release.
   (`--max-upload`, buffered to a scratch file) and the **total decompressed
   bytes** across all entries — enforced identically for zip **and** tar, so a
   compression- or sparse-tar bomb is rejected with `413` — plus a file-count cap.
-  Served assets keep the flat-artifact posture (global `nosniff`; `script-src
-  'none'` CSP on SVG/XML).
+  Served assets keep the flat-artifact posture (global `nosniff`, the
+  per-document sandbox, `script-src 'none'` on SVG/XML). Sites have no privacy,
+  expiry or password support: a site upload that asks for `?private`, `?ttl`,
+  `?password` or an `X-Demiplane-Password` header is refused with `400` before
+  the archive is read, rather than published public and permanent. A site is
+  readable by anyone who can reach the content origin until it is replaced.
 
 ## Hardening notes
 
@@ -195,10 +295,13 @@ inherits the posture above and was reviewed adversarially before release.
   `.` or `..`, contains an encoded or literal `/` or `\`, or carries a control
   character is refused with `400`.
 - **Referrer leakage.** Every response carries
-  `Referrer-Policy: strict-origin-when-cross-origin`, so a capability URL
-  (`?private=true` slug) is not disclosed in the `Referer` header when a hosted
-  page links out cross-origin. The `?live` wrapper keeps its stronger
-  `no-referrer` for the preview frame.
+  `Referrer-Policy: strict-origin-when-cross-origin`, so a public page's links
+  out cross-origin send only the origin. Private and password-protected
+  artifacts and the `?live` wrapper send `no-referrer`, so a capability URL is
+  not disclosed even to another page on the instance.
+- **Artifact index.** `GET /gallery` lists every public artifact, including
+  password-protected ones. It is public only with `--browse`; otherwise it
+  takes the bearer token, like `GET /list`.
 - **HSTS.** When native TLS terminates at demiplane (the request arrives over
   TLS), responses carry `Strict-Transport-Security: max-age=63072000`
   (two years). It is deliberately emitted **without** `includeSubDomains` and

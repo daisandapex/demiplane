@@ -50,6 +50,32 @@ All notable changes to demiplane are documented here. The format follows
   values are rejected with `400` (or a client-side error) instead of being
   stored as "never expires". A blank value (only whitespace) is an error
   too; omit the TTL for no expiry.
+- **Published pages are isolated from each other.** HTML, SVG and XML are
+  served in a CSP sandbox without `allow-same-origin`, so each page runs in an
+  opaque origin and cannot read other artifacts (with or without the viewer's
+  cached credentials) or register a service worker. Service-worker script
+  fetches are refused on both planes. Public module scripts, `crossorigin`
+  stylesheets and fonts stay loadable from sandboxed pages.
+- **Private and password-protected responses are not cached or referred.**
+  They, their `401` and every `?live` wrapper carry `Cache-Control: private,
+  no-store` and `Referrer-Policy: no-referrer`, and protected artifacts carry
+  `Cross-Origin-Resource-Policy: same-origin`, so no other page can load one as
+  a script, stylesheet or image. Each password-protected artifact has its own
+  Basic realm.
+- **Site uploads refuse options sites do not support.** `?site=` with
+  `?private`, `?ttl`, `?password` or `X-Demiplane-Password` is a `400` before
+  the archive is read; previously the options were ignored. A publish whose
+  query string does not parse is a `400` too, rather than having the
+  unreadable parameters silently dropped.
+- **`/gallery` follows `--browse`.** Without `--browse` it needs the bearer
+  token, like `/list`.
+- **Live-reload streams are authorized.** `GET /_events/{slug}` requires an
+  existing, unexpired artifact and its password, re-checks on every republish
+  and heartbeat, and caps streams per client.
+- **`demiplane receive` refuses route names.** Route names are reserved when a
+  route registers, not when the HTTP handlers are built, so SSH ingest can no
+  longer create an artifact a route shadows (`gallery`, `connect`, `answer`
+  and the rest).
 - **MCP `publish` paths are confined to a publish root.** The tool's `path`
   argument must resolve inside `--publish-root` / `DEMIPLANE_PUBLISH_ROOT`
   (default: the working directory of `demiplane mcp`) and is opened through that
@@ -67,6 +93,14 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Changed
 
+- **Upgrade note: published pages run sandboxed.** A page can no longer use
+  `localStorage`, `sessionStorage`, IndexedDB or cookies, `fetch` its own data
+  files, frame other pages on the instance, or run workers. Inline, classic and
+  module scripts, stylesheets, images and fonts still load. An instance that
+  hosts only trusted content can restore the shared origin with
+  `serve --unsafe-no-sandbox`. See DESIGN.md, "Content isolation".
+- **Upgrade note: `/gallery` needs the token unless `--browse` is set.**
+- **New flag: `serve --unsafe-no-sandbox`.**
 - **Upgrade note: `demiplane mcp` refuses `path` outside its publish root.** An
   MCP client that publishes files from outside the directory it starts
   `demiplane mcp` in (a scratch or temp directory, another repository) now gets
