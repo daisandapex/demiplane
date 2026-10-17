@@ -518,3 +518,85 @@ func TestConcurrentCorrectAttemptsAreNotRecentFailures(t *testing.T) {
 		})
 	}
 }
+
+// TestPublishPasswordHashingSharesTheKDFGate: hashing a new view password at
+// publish takes a slot of the same bounded KDF gate as checking one, so
+// concurrent password publishes cannot run more KDFs at once than the gate
+// allows.
+func TestPublishPasswordHashingSharesTheKDFGate(t *testing.T) {
+	var active, peak atomic.Int64
+	defer store.SetHashForTest(func(next func(string) (string, error)) func(string) (string, error) {
+		return func(pw string) (string, error) {
+			n := active.Add(1)
+			for {
+				p := peak.Load()
+				if n <= p || peak.CompareAndSwap(p, n) {
+					break
+				}
+			}
+			time.Sleep(50 * time.Millisecond)
+			defer active.Add(-1)
+			return next(pw)
+		}
+	})()
+	ts := newConfiguredServer(t, Config{Password: PasswordLimits{Concurrency: 2}})
+	var wg sync.WaitGroup
+	var created, busy atomic.Int64
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/publish?slug=pw-%d", ts.URL, i), strings.NewReader("x"))
+			req.Header.Set(PasswordHeader, "hunter2")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			resp.Body.Close()
+			switch resp.StatusCode {
+			case http.StatusCreated:
+				created.Add(1)
+			case http.StatusServiceUnavailable:
+				busy.Add(1)
+			default:
+				t.Errorf("publish = %d", resp.StatusCode)
+			}
+		}()
+	}
+	wg.Wait()
+	if p := peak.Load(); p > 2 {
+		t.Errorf("%d password hashes ran at once, gate 2", p)
+	}
+	if created.Load() == 0 {
+		t.Error("no password publish succeeded")
+	}
+	t.Logf("peak %d, created %d, busy %d", peak.Load(), created.Load(), busy.Load())
+}
+
+// TestPublishPasswordWaitsForTheKDFGate: with every KDF slot taken, a
+// password publish gets 503 once its wait ends, and stores nothing.
+func TestPublishPasswordWaitsForTheKDFGate(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	s := New(st, Config{Password: PasswordLimits{Concurrency: 1}})
+	if !s.views.kdf.TryAcquire() {
+		t.Fatal("could not take the KDF slot")
+	}
+	defer s.views.kdf.Release()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	r := httptest.NewRequest(http.MethodPost, "/publish?slug=gated", strings.NewReader("x")).WithContext(ctx)
+	r.Header.Set(PasswordHeader, "hunter2")
+	w := serve(s.Handler(), r)
+	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("publish with the gate full = %d (Retry-After %q), want 503", w.Code, w.Header().Get("Retry-After"))
+	}
+	if _, f, err := st.Get("gated"); err == nil {
+		f.Close()
+		t.Fatal("a refused publish was stored")
+	}
+}

@@ -67,6 +67,15 @@ func limit(r io.Reader, max int64) io.Reader {
 // stores the raw stdin bytes as a single artifact.
 func Receive(st *store.Store, opts ReceiveOptions, in io.Reader, out io.Writer) error {
 	in = limit(in, opts.MaxUpload)
+	// Hash the password once for the session: a directory sync applies it to
+	// every file, and the KDF is the expensive part.
+	if opts.Password != "" {
+		h, err := store.HashPassword(opts.Password)
+		if err != nil {
+			return err
+		}
+		opts.PasswordHash, opts.Password = h, ""
+	}
 	if opts.Untar {
 		return receiveTar(st, opts, in, out)
 	}
@@ -115,10 +124,10 @@ func receiveTar(st *store.Store, opts ReceiveOptions, in io.Reader, out io.Write
 			return err
 		}
 		art, err := st.Put(store.PutOptions{
-			Slug:     slug,
-			Filename: path.Base(hdr.Name),
-			Password: opts.Password,
-			TTL:      opts.TTL,
+			Slug:         slug,
+			Filename:     path.Base(hdr.Name),
+			PasswordHash: opts.PasswordHash,
+			TTL:          opts.TTL,
 		}, &store.BudgetReader{R: tr, Remaining: &budget})
 		if err != nil {
 			return fmt.Errorf("publish %q: %w", hdr.Name, err)

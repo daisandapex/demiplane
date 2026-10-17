@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -783,5 +784,36 @@ func TestNewestPerFamily(t *testing.T) {
 	}
 	if len(newest) != 2 || newest[1].Slug != "design-lab" || len(members) != 1 {
 		t.Errorf("limit 2: %d families ending %v, members %v", len(newest), newest, members)
+	}
+}
+
+// TestPutPasswordHash: a hash from HashPassword is stored as is; a malformed
+// one, one above the default work factor, or one together with a plaintext
+// password is refused.
+func TestPutPasswordHash(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	h, err := HashPassword("hunter2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	art, err := st.Put(PutOptions{Slug: "ok", PasswordHash: h}, strings.NewReader("x"))
+	if err != nil || art.PasswordHash != h || !PasswordMatches(art.PasswordHash, "hunter2") {
+		t.Fatalf("Put with a hash: %+v, %v", art, err)
+	}
+	parts := strings.Split(h, "$")
+	slow := strings.Join([]string{parts[0], strconv.Itoa(DefaultPBKDF2Iter + 1), parts[2], parts[3]}, "$")
+	for name, opts := range map[string]PutOptions{
+		"both":        {Slug: "both", Password: "hunter2", PasswordHash: h},
+		"malformed":   {Slug: "bad", PasswordHash: "pbkdf2-sha256$1$x$y"},
+		"work factor": {Slug: "slow", PasswordHash: slow},
+	} {
+		var ie *InputError
+		if _, err := st.Put(opts, strings.NewReader("x")); !errors.As(err, &ie) {
+			t.Errorf("%s: err = %v, want an InputError", name, err)
+		}
 	}
 }

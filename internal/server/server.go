@@ -718,13 +718,29 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		renderSpec = marshalRenderSpec(renderSpecFor(named, series, replySlugFor(replyBox, named), next, published))
 	}
 
+	// A new view password is hashed here, under the KDF gate shared with
+	// password checks, not in the store.
+	var passwordHash string
+	if pw := r.Header.Get(PasswordHeader); pw != "" {
+		h, ok, err := s.views.hashNew(r.Context(), pw)
+		if err != nil {
+			log.Printf("publish failed: %s", logsafe.Err(err, named))
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			refuseBusy(w, "busy checking passwords; try again shortly")
+			return
+		}
+		passwordHash = h
+	}
 	opts := store.PutOptions{
-		Slug:     named,
-		Filename: filename,
-		Private:  private,
-		Password: r.Header.Get(PasswordHeader),
-		TTL:      ttl,
-		Series:   series,
+		Slug:         named,
+		Filename:     filename,
+		Private:      private,
+		PasswordHash: passwordHash,
+		TTL:          ttl,
+		Series:       series,
 		// nil on a non-rendered publish, which also DROPS any source retained at
 		// this slug by an earlier rendered publish (store.Put).
 		Source:     sourceBody,

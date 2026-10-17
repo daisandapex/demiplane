@@ -236,6 +236,18 @@ func (g *viewGate) check(ctx context.Context, r *http.Request, hash string) (res
 	return module.ViewOK, 0
 }
 
+// hashNew hashes a new view password at publish under the KDF gate, so
+// publishes and checks together run at most the gate's KDFs at once. ok is
+// false when no slot frees within passwordKDFWait (or ctx ends).
+func (g *viewGate) hashNew(ctx context.Context, pw string) (hash string, ok bool, err error) {
+	if !g.kdf.Acquire(ctx, passwordKDFWait) {
+		return "", false, nil
+	}
+	defer g.kdf.Release()
+	hash, err = store.HashPassword(pw)
+	return hash, true, err
+}
+
 // CheckView is the module.Host password gate: the same check GET /{slug}
 // runs, so a module serving or accepting writes for an artifact enforces its
 // view password with the same limits.

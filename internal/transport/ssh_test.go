@@ -234,3 +234,34 @@ func makeTar(t *testing.T, files map[string]string) []byte {
 	}
 	return buf.Bytes()
 }
+
+// TestReceiveTarHashesThePasswordOnce: a directory sync with a password
+// derives the hash once for the session, not once per file, and every file
+// takes it.
+func TestReceiveTarHashesThePasswordOnce(t *testing.T) {
+	st := newStore(t)
+	calls := 0
+	defer store.SetHashForTest(func(next func(string) (string, error)) func(string) (string, error) {
+		return func(pw string) (string, error) { calls++; return next(pw) }
+	})()
+	files := map[string]string{"a.html": "a", "b.html": "b", "c.html": "c", "d.html": "d"}
+	var out bytes.Buffer
+	opts := ReceiveOptions{Untar: true, BaseURL: "http://x"}
+	opts.Password = "hunter2"
+	if err := Receive(st, opts, bytes.NewReader(makeTar(t, files)), &out); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Errorf("hashed the password %d times for %d files, want 1", calls, len(files))
+	}
+	for _, slug := range []string{"a.html", "d.html"} {
+		art, f, err := st.Get(slug)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		if !store.PasswordMatches(art.PasswordHash, "hunter2") {
+			t.Errorf("%s does not take the session password", slug)
+		}
+	}
+}

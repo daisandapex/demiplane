@@ -384,12 +384,16 @@ func (s *Store) hasColumn(name string) (bool, error) {
 // PutOptions carries the per-publish settings for Put. The zero value is a
 // valid public, no-password, no-expiry, auto-slug publish.
 type PutOptions struct {
-	Slug     string        // named slug; "" auto-generates (friendly, or capability if Private)
-	Filename string        // extension hint for content-type; "" falls back to sniffing
-	Private  bool          // mark private + (when auto-slugging) use a high-entropy capability slug
-	Password string        // plaintext view password; "" = no gate. Hashed before storage.
-	TTL      time.Duration // 0 = never expires; >0 sets expires_at = now+TTL
-	Series   string        // explicit series family (validated upstream); "" = none
+	Slug     string // named slug; "" auto-generates (friendly, or capability if Private)
+	Filename string // extension hint for content-type; "" falls back to sniffing
+	Private  bool   // mark private + (when auto-slugging) use a high-entropy capability slug
+	Password string // plaintext view password; "" = no gate. Hashed before storage.
+	// PasswordHash is a view password already hashed with HashPassword, stored
+	// as is. Set at most one of Password and PasswordHash. A server hashes
+	// under its KDF concurrency limit and passes the hash here.
+	PasswordHash string
+	TTL          time.Duration // 0 = never expires; >0 sets expires_at = now+TTL
+	Series       string        // explicit series family (validated upstream); "" = none
 	// Source is the ORIGINAL document the stored bytes were rendered from, kept
 	// so the page can be rebaked with a later renderer (source.go). nil = nothing
 	// to retain (the ordinary, non-rendered publish).
@@ -458,9 +462,14 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 		return Artifact{}, err
 	}
 
-	var passwordHash string
-	if opts.Password != "" {
-		passwordHash, err = hashPassword(opts.Password)
+	passwordHash := opts.PasswordHash
+	switch {
+	case opts.Password != "" && opts.PasswordHash != "":
+		return Artifact{}, &InputError{Msg: "set a password or a password hash, not both"}
+	case opts.PasswordHash != "" && !validPasswordHash(opts.PasswordHash):
+		return Artifact{}, &InputError{Msg: "malformed password hash"}
+	case opts.Password != "":
+		passwordHash, err = newHash(opts.Password)
 		if err != nil {
 			return Artifact{}, err
 		}

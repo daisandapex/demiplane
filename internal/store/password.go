@@ -57,6 +57,18 @@ func SetPBKDF2IterForTest(n int) func() {
 	return func() { pbkdf2Iter = prev }
 }
 
+// newHash is the hash Put uses for a new password: hashPassword, or a test's
+// wrapper (SetHashForTest).
+var newHash = hashPassword
+
+// SetHashForTest wraps the hash Put applies to a new view password and
+// returns a function restoring it. Tests only.
+func SetHashForTest(wrap func(next func(string) (string, error)) func(string) (string, error)) func() {
+	prev := newHash
+	newHash = wrap(prev)
+	return func() { newHash = prev }
+}
+
 // hashPassword returns an encoded hash of pw: "pbkdf2-sha256$<iter>$<salt>$<key>"
 // with salt and key base64 (raw, std alphabet).
 func hashPassword(pw string) (string, error) {
@@ -70,6 +82,31 @@ func hashPassword(pw string) (string, error) {
 	}
 	enc := base64.RawStdEncoding.EncodeToString
 	return fmt.Sprintf("%s$%d$%s$%s", pbkdf2Scheme, pbkdf2Iter, enc(salt), enc(key)), nil
+}
+
+// HashPassword returns the stored encoding of a new view password, for
+// PutOptions.PasswordHash. It runs the full KDF; a server calls it under the
+// same concurrency limit as password checks.
+func HashPassword(pw string) (string, error) { return newHash(pw) }
+
+// validPasswordHash reports whether encoded has the shape hashPassword
+// produces, with no more than the default work factor, so a hash passed to
+// Put cannot make later checks slower than ordinary ones.
+func validPasswordHash(encoded string) bool {
+	parts := strings.Split(encoded, "$")
+	if len(parts) != 4 || parts[0] != pbkdf2Scheme {
+		return false
+	}
+	iter, err := strconv.Atoi(parts[1])
+	if err != nil || iter <= 0 || iter > DefaultPBKDF2Iter {
+		return false
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(parts[2])
+	if err != nil || len(salt) != pbkdf2SaltLen {
+		return false
+	}
+	key, err := base64.RawStdEncoding.DecodeString(parts[3])
+	return err == nil && len(key) == pbkdf2KeyLen
 }
 
 // PasswordMatches reports whether pw matches the encoded hash. A malformed or
