@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -25,11 +24,13 @@ import (
 //     The deadline is lifted once the body has been read, so it never cuts
 //     off the response.
 //   - Responses. Every response gets a write deadline; an artifact or site
-//     file gets extra time for its size at a minimum rate. The SSE stream is
-//     exempt and keeps its own per-write deadline (live.go).
+//     file gets extra time for its size at a minimum rate. An SSE stream,
+//     once subscribed, leaves it and keeps its own per-write deadline
+//     (live.go, detachLongLived).
 //   - Admission. At most MaxRequests requests are in progress per listener,
 //     and at most MaxRequestsPerClient from one client; the excess is
-//     answered 503 at once. The SSE stream is exempt (live.go caps it).
+//     answered 503 at once. An SSE stream, once past live.go's subscriber
+//     caps, leaves these counts.
 //
 // Connection counts are bounded at the listener (limit.Listener, wired in
 // cmd/demiplane). A client is its TCP peer address (limit.ClientKey); behind
@@ -88,12 +89,6 @@ func (l RequestLimits) resolved() RequestLimits {
 	}
 }
 
-// isSSE reports whether r is the live-reload event stream, which is
-// long-lived by design and bounded by live.go instead.
-func isSSE(r *http.Request) bool {
-	return strings.HasPrefix(r.URL.Path, "/_events/")
-}
-
 // isUpload reports whether r is a publish upload, the one route whose body
 // may legitimately be large.
 func isUpload(r *http.Request) bool {
@@ -113,10 +108,8 @@ func (s *Server) withRequestLimits(next http.Handler) http.Handler {
 	inflight := limit.NewGate(l.MaxRequests)
 	perClient := newClientGates(l.MaxRequestsPerClient)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r = r.WithContext(context.WithValue(r.Context(), serverCtxKey{}, s))
 		rc := http.NewResponseController(w)
 		now := time.Now()
-		sse := isSSE(r)
 		// The body deadline goes on first, before any refusal, so that even a
 		// refused request cannot hold the connection while the server drains
 		// the body it left unread.
@@ -126,37 +119,88 @@ func (s *Server) withRequestLimits(next http.Handler) http.Handler {
 			br := &bodyDeadline{r: r.Body, w: w, rc: rc, start: now, grace: l.BodyTimeout}
 			if upload {
 				br.rate = l.UploadMinRate
-				// An upload may legitimately outlast the response timeout,
-				// so the write deadline starts when the body is done.
+				// The write deadline tightens to the response timeout when
+				// the body is done.
 				br.respTimeout = l.ResponseTimeout
 			}
 			br.arm()
 			r.Body = br
 		}
 		// Every response sets (or clears) its write deadline: one left by an
-		// earlier request on a kept-alive connection must not carry over.
-		if sse || upload || l.ResponseTimeout <= 0 {
+		// earlier request on a kept-alive connection must not carry over. An
+		// upload may legitimately outlast the response timeout, so it starts
+		// with the longest the upload policy allows plus the response timeout.
+		switch {
+		case l.ResponseTimeout <= 0:
 			_ = rc.SetWriteDeadline(time.Time{})
-		} else {
+		case upload:
+			_ = rc.SetWriteDeadline(now.Add(s.uploadWriteAllowance(r)))
+		default:
 			_ = rc.SetWriteDeadline(now.Add(l.ResponseTimeout))
-		}
-		if sse {
-			next.ServeHTTP(w, r)
-			return
 		}
 		if !inflight.TryAcquire() {
 			refuseBusy(w, "server busy; try again shortly")
 			return
 		}
-		defer inflight.Release()
 		key := limit.ClientKey(r)
 		if !perClient.acquire(key) {
+			inflight.Release()
 			refuseBusy(w, "too many requests in progress from this client")
 			return
 		}
-		defer perClient.release(key)
-		next.ServeHTTP(w, r)
+		slots := &requestSlots{release: func() {
+			perClient.release(key)
+			inflight.Release()
+		}}
+		defer slots.done()
+		ctx := context.WithValue(r.Context(), serverCtxKey{}, s)
+		ctx = context.WithValue(ctx, slotsCtxKey{}, slots)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// requestSlots is a request's place in the admission limits.
+type requestSlots struct {
+	once    sync.Once
+	release func()
+}
+
+func (rs *requestSlots) done() { rs.once.Do(rs.release) }
+
+type slotsCtxKey struct{}
+
+// detachLongLived takes an admitted request out of the admission limits and
+// the response write deadline, for a handler that has passed its own
+// admission (the SSE stream's subscriber caps) and manages its own per-write
+// deadlines.
+func detachLongLived(w http.ResponseWriter, r *http.Request) {
+	if rs, ok := r.Context().Value(slotsCtxKey{}).(*requestSlots); ok {
+		rs.done()
+	}
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+}
+
+// maxUploadAllowance bounds an upload's initial write deadline when its size
+// is not known in advance and --max-upload is off.
+const maxUploadAllowance = 24 * time.Hour
+
+// uploadWriteAllowance is how long an upload's response may take: the upload
+// policy's longest body (grace plus size at the minimum rate, size from
+// Content-Length or else --max-upload) plus the response timeout.
+func (s *Server) uploadWriteAllowance(r *http.Request) time.Duration {
+	l := s.reqLimits
+	size := r.ContentLength
+	if size < 0 {
+		size = s.maxUpload
+	}
+	if l.UploadMinRate <= 0 || size <= 0 {
+		return maxUploadAllowance
+	}
+	d := l.BodyTimeout + time.Duration(float64(size)/float64(l.UploadMinRate)*float64(time.Second)) + l.ResponseTimeout
+	if d > maxUploadAllowance {
+		d = maxUploadAllowance
+	}
+	return d
 }
 
 // refuseBusy answers an admission refusal and closes the connection rather

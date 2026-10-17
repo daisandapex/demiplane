@@ -423,3 +423,59 @@ func TestSlowValidUploadOutlastsResponseTimeout(t *testing.T) {
 		t.Fatalf("steady upload not stored: %v", err)
 	}
 }
+
+// TestUploadResponseHasAWriteDeadlineWithoutBodyEOF: an upload answered
+// before its body is read (an early refusal) still gets a write deadline, so
+// a client that never reads cannot hold the response.
+func TestUploadResponseHasAWriteDeadlineWithoutBodyEOF(t *testing.T) {
+	s, _ := limitServer(t, Config{Requests: RequestLimits{
+		BodyTimeout:     200 * time.Millisecond,
+		UploadMinRate:   1 << 20,
+		ResponseTimeout: 200 * time.Millisecond,
+	}})
+	big := bytes.Repeat([]byte("r"), 32<<20)
+	wrote := make(chan error, 1)
+	h := s.withRequestLimits(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := w.Write(big) // answer without reading the body
+		wrote <- err
+	}))
+	ts := httptest.NewServer(h)
+	t.Cleanup(ts.Close)
+	rawPost(t, ts.Listener.Addr().String(), "/publish?site=x", 10, nil)
+	select {
+	case err := <-wrote:
+		if err == nil {
+			t.Fatal("a 32 MiB response to a client that reads nothing completed")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("response write still blocked after 10s with a 200ms response timeout")
+	}
+}
+
+// TestSubscribedStreamLeavesAdmission: an open live stream does not hold a
+// request slot.
+func TestSubscribedStreamLeavesAdmission(t *testing.T) {
+	s, st := limitServer(t, Config{Requests: RequestLimits{MaxRequests: 1, MaxRequestsPerClient: 1}})
+	if _, err := st.Put(store.PutOptions{Slug: "watched"}, strings.NewReader("v1")); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.ContentHandler())
+	t.Cleanup(ts.Close)
+	resp, err := http.Get(ts.URL + "/_events/watched")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("subscribe = %d", resp.StatusCode)
+	}
+	bufio.NewReader(resp.Body).ReadString('\n') // connected
+	r2, err := http.Get(ts.URL + "/watched")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.Body.Close()
+	if r2.StatusCode != http.StatusOK {
+		t.Fatalf("GET with a stream open and one request slot = %d, want 200", r2.StatusCode)
+	}
+}
