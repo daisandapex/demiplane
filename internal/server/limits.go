@@ -171,6 +171,19 @@ func (c *cappedWriteDeadline) SetWriteDeadline(t time.Time) error {
 // Unwrap lets http.ResponseController reach the connection's other methods.
 func (c *cappedWriteDeadline) Unwrap() http.ResponseWriter { return c.ResponseWriter }
 
+// ReadFrom passes io.Copy through to the connection's ReadFrom, so
+// downloads keep the sendfile path under --write-timeout.
+func (c *cappedWriteDeadline) ReadFrom(src io.Reader) (int64, error) {
+	if rf, ok := c.ResponseWriter.(io.ReaderFrom); ok {
+		return rf.ReadFrom(src)
+	}
+	return io.Copy(writerOnly{c.ResponseWriter}, src)
+}
+
+// writerOnly hides every method but Write, so io.Copy into it cannot recurse
+// into ReadFrom.
+type writerOnly struct{ io.Writer }
+
 // withAdmission bounds requests in progress, in all and per client, and
 // carries the Server and the request's admission slots in the context. One
 // wrapper per listener: the in-progress counts are per listener.
