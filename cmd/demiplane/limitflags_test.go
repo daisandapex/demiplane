@@ -46,6 +46,8 @@ func TestServeRejectsBadLimitFlags(t *testing.T) {
 		{"--live-max-per-client", "-1"},
 		{"--live-max-per-client-slug", "0"},
 		{"--live-max-total", "0"},
+		{"--live-max-pending", "0"},
+		{"--live-max-pending-per-client", "-1"},
 	} {
 		dir := t.TempDir() + "/store"
 		err := runServe(append([]string{"--store", dir}, args...))

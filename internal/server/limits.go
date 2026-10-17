@@ -189,14 +189,21 @@ func (rs *requestSlots) done() { rs.once.Do(rs.release) }
 
 type slotsCtxKey struct{}
 
+// releaseAdmission gives back an admitted request's admission slots early,
+// for a handler whose wait is bounded by its own admission instead (the SSE
+// stream's pending caps). Releasing twice is a no-op.
+func releaseAdmission(r *http.Request) {
+	if rs, ok := r.Context().Value(slotsCtxKey{}).(*requestSlots); ok {
+		rs.done()
+	}
+}
+
 // detachLongLived takes an admitted request out of the admission limits and
 // the response write deadline, for a handler that has passed its own
 // admission (the SSE stream's subscriber caps) and manages its own per-write
 // deadlines.
 func detachLongLived(w http.ResponseWriter, r *http.Request) {
-	if rs, ok := r.Context().Value(slotsCtxKey{}).(*requestSlots); ok {
-		rs.done()
-	}
+	releaseAdmission(r)
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 }
 

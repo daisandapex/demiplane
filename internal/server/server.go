@@ -103,6 +103,7 @@ type Server struct {
 	hostRules        []hostRule    // accepted-host policy; nil = any Host
 	proxies          limit.Proxies // trusted reverse proxies for client identity
 	liveLimits       LiveLimits    // live-reload stream caps (live.go)
+	liveHub          *liveHub      // the mounted live-reload hub (tests)
 	authToken        string
 	browse           bool
 	maxUpload        int64

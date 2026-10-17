@@ -189,6 +189,8 @@ func runServe(args []string) error {
 	liveMaxPerClient := fs.Int("live-max-per-client", 16, "live-reload streams from one client on all artifacts; past it 503")
 	liveMaxPerClientSlug := fs.Int("live-max-per-client-slug", 2, "live-reload streams from one client on one artifact; past it 503")
 	liveMaxTotal := fs.Int("live-max-total", 256, "live-reload streams in all; when full, a new client replaces the oldest stream of a client holding at least two more, else gets 503")
+	liveMaxPending := fs.Int("live-max-pending", 32, "live-reload requests waiting, in all, for an ended stream's slot (up to 11s each); past it 503")
+	liveMaxPendingPerClient := fs.Int("live-max-pending-per-client", 1, "live-reload requests waiting from one client for an ended stream's slot; past it 503")
 	renderConcurrency := fs.Int("render-concurrency", 0, "max markdown renders at once (0 = GOMAXPROCS, capped at 4); a render that waits 5s for a slot gets 503")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -204,8 +206,9 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *liveMaxPerSlug < 1 || *liveMaxPerClient < 1 || *liveMaxPerClientSlug < 1 || *liveMaxTotal < 1 {
-		return fmt.Errorf("--live-max-per-slug, --live-max-per-client, --live-max-per-client-slug and --live-max-total must be at least 1")
+	if *liveMaxPerSlug < 1 || *liveMaxPerClient < 1 || *liveMaxPerClientSlug < 1 || *liveMaxTotal < 1 ||
+		*liveMaxPending < 1 || *liveMaxPendingPerClient < 1 {
+		return fmt.Errorf("--live-max-per-slug, --live-max-per-client, --live-max-per-client-slug, --live-max-total, --live-max-pending and --live-max-pending-per-client must be at least 1")
 	}
 	if *passwordConcurrency < 0 {
 		return fmt.Errorf("--password-concurrency must not be negative")
@@ -334,6 +337,9 @@ func runServe(args []string) error {
 			PerClient:     *liveMaxPerClient,
 			PerClientSlug: *liveMaxPerClientSlug,
 			Total:         *liveMaxTotal,
+
+			Pending:          *liveMaxPending,
+			PendingPerClient: *liveMaxPendingPerClient,
 		},
 		Requests: server.RequestLimits{
 			BodyTimeout:          offIfZero(*bodyTimeout),

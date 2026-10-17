@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/daisandapex/demiplane/internal/limit"
+	"github.com/daisandapex/demiplane/internal/store"
 )
 
 // proxiedLiveServer is a test server behind a trusted proxy at 127.0.0.1, so
@@ -329,4 +330,128 @@ func TestLiveHubNewcomerGivesUpOnAStuckHandler(t *testing.T) {
 	if _, ok := h.subscribe(ctx, "s3", "b"); !ok {
 		t.Fatal("b refused once the ended stream's handler returned")
 	}
+}
+
+// TestSSENewcomersWaitingOnADrainDoNotStarveTheListener: newcomers waiting
+// for a stuck ended stream's handler hold no ordinary request slots, so
+// unrelated requests on the listener are served while they wait; the pending
+// caps refuse the excess at once.
+func TestSSENewcomersWaitingOnADrainDoNotStarveTheListener(t *testing.T) {
+	p, _ := limit.ParseProxies("127.0.0.1")
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	s := New(st, Config{
+		TrustedProxies: p,
+		// Fewer request slots than waiting newcomers: had the waiters kept
+		// theirs, nothing else could be served.
+		Requests: RequestLimits{MaxRequests: 3, MaxRequestsPerClient: -1},
+		Live:     LiveLimits{PerSlug: 16, PerClient: 16, PerClientSlug: 16, Total: 2, Pending: 4, PendingPerClient: 1},
+	})
+	ts := httptest.NewServer(s.Handler())
+	t.Cleanup(ts.Close)
+	publish(t, ts, "?slug=drain", "x")
+	hub := s.liveHub
+	hub.drainWait = 1500 * time.Millisecond
+	// Two streams whose handlers never return by themselves.
+	stuck1, _ := subscribeNow(hub, "drain", "203.0.113.200")
+	stuck2, _ := subscribeNow(hub, "drain", "203.0.113.200")
+	t.Cleanup(func() { hub.unsubscribe(stuck1); hub.unsubscribe(stuck2) })
+
+	const newcomers = 40
+	codes := make(chan int, newcomers)
+	start := time.Now()
+	for i := 0; i < newcomers; i++ {
+		go func() {
+			req, _ := http.NewRequest(http.MethodGet, ts.URL+"/_events/drain", nil)
+			// Ten clients, four requests each.
+			req.Header.Set("X-Forwarded-For", fmt.Sprintf("198.51.100.%d", i%10))
+			resp, err := sseClient(t).Do(req)
+			if err != nil {
+				codes <- 0
+				return
+			}
+			resp.Body.Close()
+			codes <- resp.StatusCode
+		}()
+		time.Sleep(3 * time.Millisecond) // each passes request admission in turn
+	}
+	time.Sleep(300 * time.Millisecond) // the newcomers are waiting now
+	hub.mu.Lock()
+	waiting, perClient := hub.pending, 0
+	for _, n := range hub.pendingClient {
+		perClient = max(perClient, n)
+	}
+	hub.mu.Unlock()
+	if waiting != 4 || perClient != 1 {
+		t.Errorf("%d newcomers waiting, at most %d from one client; want 4 and 1 (the pending caps)", waiting, perClient)
+	}
+	for i := 0; i < 5; i++ {
+		resp, err := http.Get(ts.URL + "/drain")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("unrelated GET while newcomers wait = %d, want 200", resp.StatusCode)
+		}
+	}
+	// Every newcomer is refused: the excess at once, the waiters when the
+	// single drain wait runs out (the stuck handlers never return).
+	for i := 0; i < newcomers; i++ {
+		select {
+		case c := <-codes:
+			if c != http.StatusServiceUnavailable {
+				t.Errorf("newcomer = %d, want 503", c)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("a newcomer never returned")
+		}
+	}
+	if el := time.Since(start); el > 3*time.Second {
+		t.Errorf("newcomers took %v; the wait is one drainWait (1.5s) in all", el)
+	}
+	assertNoPending(t, hub)
+}
+
+// TestLiveHubPendingReservations: a newcomer's pending reservation is
+// released when its wait is cancelled, times out or is admitted, and the
+// per-client pending cap refuses a second wait from the same client.
+func TestLiveHubPendingReservations(t *testing.T) {
+	h := newLiveHub(LiveLimits{PerSlug: 16, PerClient: 16, PerClientSlug: 16, Total: 2, Pending: 8, PendingPerClient: 1})
+	h.drainWait = 200 * time.Millisecond
+	a1, _ := subscribeNow(h, "s", "a")
+	subscribeNow(h, "s", "a")
+
+	// Cancelled.
+	ctx, cancel := context.WithCancel(context.Background())
+	res := make(chan bool, 1)
+	go func() { _, ok := h.subscribe(ctx, "t", "b"); res <- ok }()
+	time.Sleep(50 * time.Millisecond)
+	if _, ok := subscribeNow(h, "u", "b"); ok {
+		t.Fatal("second pending wait from one client admitted")
+	}
+	cancel()
+	if <-res {
+		t.Fatal("cancelled newcomer admitted")
+	}
+	assertNoPending(t, h)
+
+	// Timed out.
+	if _, ok := subscribeNow(h, "t", "b"); ok {
+		t.Fatal("newcomer admitted while the slot never freed")
+	}
+	assertNoPending(t, h)
+
+	// Admitted.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		h.unsubscribe(a1)
+	}()
+	if _, ok := subscribeNow(h, "t", "b"); !ok {
+		t.Fatal("newcomer refused after the slot freed")
+	}
+	assertNoPending(t, h)
 }

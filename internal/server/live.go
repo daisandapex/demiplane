@@ -79,11 +79,15 @@ const (
 	// IPv6 /64, or the forwarded client behind a --trusted-proxy) on all slugs.
 	// liveMaxPerClientSlug: streams from one client on one slug.
 	// liveMaxTotal: streams in all, the ceiling on the FDs and goroutines the
-	// endpoint can hold.
-	liveMaxPerSlug       = 16
-	liveMaxPerClient     = 16
-	liveMaxPerClientSlug = 2
-	liveMaxTotal         = 256
+	// endpoint can hold. liveMaxPending and liveMaxPendingPerClient: requests
+	// waiting for an ended stream's slot, in all and from one client; they
+	// hold no request-admission slot while they wait.
+	liveMaxPerSlug          = 16
+	liveMaxPerClient        = 16
+	liveMaxPerClientSlug    = 2
+	liveMaxTotal            = 256
+	liveMaxPending          = 32
+	liveMaxPendingPerClient = 1
 	// liveNonceBytes is the entropy of the per-response CSP nonce for the wrapper
 	// reload script (128 bits, base64-encoded).
 	liveNonceBytes = 16
@@ -96,6 +100,7 @@ func init() {
 	// store; live.go is the sole subscriber (see notify.go).
 	registerCoreContentRoute([]string{"_events"}, func(mux *http.ServeMux, s *Server) {
 		hub := newLiveHub(s.liveLimits)
+		s.liveHub = hub
 		s.store.SetNotifier(hub)
 		mux.HandleFunc("GET /_events/{slug}", func(w http.ResponseWriter, r *http.Request) {
 			s.handleLiveEvents(hub, w, r)
@@ -112,6 +117,10 @@ type LiveLimits struct {
 	PerClient     int // streams from one client on all slugs
 	PerClientSlug int // streams from one client on one slug
 	Total         int // streams in all
+	// Pending and PendingPerClient cap requests waiting for an ended
+	// stream's slot, in all and from one client.
+	Pending          int
+	PendingPerClient int
 }
 
 func (l LiveLimits) resolved() LiveLimits {
@@ -126,6 +135,9 @@ func (l LiveLimits) resolved() LiveLimits {
 		PerClient:     pick(l.PerClient, liveMaxPerClient),
 		PerClientSlug: pick(l.PerClientSlug, liveMaxPerClientSlug),
 		Total:         pick(l.Total, liveMaxTotal),
+
+		Pending:          pick(l.Pending, liveMaxPending),
+		PendingPerClient: pick(l.PendingPerClient, liveMaxPendingPerClient),
 	}
 }
 
@@ -143,6 +155,9 @@ func (l LiveLimits) resolved() LiveLimits {
 // many, which its reconnect would only move back. An ended stream keeps its
 // slot until its handler returns (at most liveWriteTimeout, if it is blocked
 // in a write); the newcomer waits for that, so the caps are never exceeded.
+// Waiting newcomers hold no request-admission slot, so their number is
+// bounded separately (LiveLimits.Pending, PendingPerClient), and each waits
+// at most drainWait in all.
 type liveHub struct {
 	mu        sync.Mutex
 	limits    LiveLimits
@@ -151,9 +166,12 @@ type liveHub struct {
 	total     int
 	seq       uint64
 	heartbeat time.Duration // liveHeartbeat, captured when the hub is built
-	// drainWait bounds how long a newcomer waits for an ended stream's
-	// handler to return; a field so tests can shorten it.
+	// drainWait bounds how long a newcomer waits, in all, for ended
+	// streams' handlers to return; a field so tests can shorten it.
 	drainWait time.Duration
+	// pending counts newcomers waiting for a slot, in all and by client.
+	pending       int
+	pendingClient map[string]int
 }
 
 // liveSub is one stream. ch carries reload signals; gone is closed when the
@@ -171,11 +189,12 @@ type liveSub struct {
 
 func newLiveHub(l LiveLimits) *liveHub {
 	return &liveHub{
-		limits:    l.resolved(),
-		subs:      make(map[string]map[*liveSub]struct{}),
-		byClient:  make(map[string]map[*liveSub]struct{}),
-		heartbeat: liveHeartbeat,
-		drainWait: liveWriteTimeout + time.Second,
+		limits:        l.resolved(),
+		subs:          make(map[string]map[*liveSub]struct{}),
+		byClient:      make(map[string]map[*liveSub]struct{}),
+		heartbeat:     liveHeartbeat,
+		drainWait:     liveWriteTimeout + time.Second,
+		pendingClient: make(map[string]int),
 	}
 }
 
@@ -196,38 +215,51 @@ func (h *liveHub) Notify(slug string) {
 
 // subscribe admits a stream for slug on behalf of client. It returns
 // ok=false when the client is at one of its own caps, or a shared cap is full
-// and no other client holds at least two more streams than this one. When it
-// ends another client's stream to make room, it waits (bounded by drainWait
-// and ctx) for that stream's handler to return before taking the slot.
+// and no other client holds at least two more streams than this one, or the
+// pending caps are full. When it must wait for an ended stream's handler to
+// return, it holds a pending reservation, released however the wait ends,
+// and waits at most drainWait in all (and no longer than ctx).
 func (h *liveHub) subscribe(ctx context.Context, slug, client string) (*liveSub, bool) {
+	var deadline <-chan time.Time
+	reserved := false
+	defer func() {
+		if reserved {
+			h.unreserve(client)
+		}
+	}()
 	// A slug cap and the total cap may each need a stream ended; the last
 	// pass only admits.
 	for pass := 0; pass < 3; pass++ {
-		sub, ended := h.admit(slug, client, pass < 2)
+		sub, wait, ok := h.admit(slug, client, pass < 2, reserved)
 		if sub != nil {
 			return sub, true
 		}
-		if ended == nil {
+		if !ok {
 			return nil, false
 		}
-		t := time.NewTimer(h.drainWait)
+		reserved = true
+		if deadline == nil {
+			t := time.NewTimer(h.drainWait)
+			defer t.Stop()
+			deadline = t.C
+		}
 		select {
-		case <-ended.done:
-			t.Stop()
+		case <-wait.done:
 		case <-ctx.Done():
-			t.Stop()
 			return nil, false
-		case <-t.C:
+		case <-deadline:
 			return nil, false
 		}
 	}
 	return nil, false
 }
 
-// admit takes a slot for client on slug if the caps allow. If a shared cap
-// is full and mayEnd is set, it ends one stream to make room and returns it
-// instead, for the caller to wait on.
-func (h *liveHub) admit(slug, client string, mayEnd bool) (sub, ended *liveSub) {
+// admit takes a slot for client on slug if the caps allow and returns it.
+// If a shared cap is full and mayWait is set, it instead picks a stream to
+// wait for (ending it if it is live) and returns that with ok; unless
+// reserved, it first takes a pending reservation, and refuses when the
+// pending caps are full. ok=false is a refusal.
+func (h *liveHub) admit(slug, client string, mayWait, reserved bool) (sub, wait *liveSub, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	// A client's own caps count its live streams; ended ones are leaving.
@@ -241,36 +273,61 @@ func (h *liveHub) admit(slug, client string, mayEnd bool) (sub, ended *liveSub) 
 		}
 	}
 	if mine >= h.limits.PerClient || onSlug >= h.limits.PerClientSlug {
-		return nil, nil
+		return nil, nil, false
 	}
 	// The shared caps count every slot held, ended streams included.
-	if len(h.subs[slug]) >= h.limits.PerSlug {
-		if !mayEnd {
-			return nil, nil
+	var set map[*liveSub]struct{}
+	held := mine
+	switch {
+	case len(h.subs[slug]) >= h.limits.PerSlug:
+		set, held = h.subs[slug], onSlug
+	case h.total >= h.limits.Total:
+	default:
+		h.seq++
+		sub = &liveSub{
+			ch: make(chan struct{}, 1), gone: make(chan struct{}), done: make(chan struct{}),
+			slug: slug, client: client, seq: h.seq,
 		}
-		return nil, h.endOne(h.subs[slug], client, onSlug)
+		h.add(sub)
+		return sub, nil, true
 	}
-	if h.total >= h.limits.Total {
-		if !mayEnd {
-			return nil, nil
+	if !mayWait {
+		return nil, nil, false
+	}
+	wait = h.slotToWaitFor(set, client, held, len(h.subs[slug]) >= h.limits.PerSlug)
+	if wait == nil {
+		return nil, nil, false
+	}
+	if !reserved {
+		if h.pending >= h.limits.Pending || h.pendingClient[client] >= h.limits.PendingPerClient {
+			return nil, nil, false
 		}
-		return nil, h.endOne(nil, client, mine)
+		h.pending++
+		h.pendingClient[client]++
 	}
-	h.seq++
-	sub = &liveSub{
-		ch: make(chan struct{}, 1), gone: make(chan struct{}), done: make(chan struct{}),
-		slug: slug, client: client, seq: h.seq,
+	if !wait.ended {
+		wait.ended = true
+		close(wait.gone)
 	}
-	h.add(sub)
-	return sub, nil
+	return nil, wait, true
 }
 
-// endOne returns a stream whose slot the requester may wait for: the oldest
-// live stream of the client holding the most live streams (in set, or in all
-// when set is nil), which it ends, if that client holds at least two more
-// than held, the requester's own count there; otherwise a stream already
-// ended and still draining, if any; otherwise nil. Caller holds mu.
-func (h *liveHub) endOne(set map[*liveSub]struct{}, requester string, held int) *liveSub {
+func (h *liveHub) unreserve(client string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.pending--
+	if h.pendingClient[client]--; h.pendingClient[client] <= 0 {
+		delete(h.pendingClient, client)
+	}
+}
+
+// slotToWaitFor picks the stream whose slot the requester may wait for, in
+// slug's set (bySlug) or in all: the oldest live stream of the client
+// holding the most live streams there, if that client holds at least two
+// more than held, the requester's own count; otherwise a stream already
+// ended and still draining, if any; otherwise nil. It ends nothing. Caller
+// holds mu.
+func (h *liveHub) slotToWaitFor(set map[*liveSub]struct{}, requester string, held int, bySlug bool) *liveSub {
 	counts := map[string]int{}
 	oldest := map[string]*liveSub{}
 	var draining *liveSub
@@ -287,7 +344,7 @@ func (h *liveHub) endOne(set map[*liveSub]struct{}, requester string, held int) 
 			oldest[s.client] = s
 		}
 	}
-	if set != nil {
+	if bySlug {
 		for s := range set {
 			consider(s)
 		}
@@ -311,8 +368,6 @@ func (h *liveHub) endOne(set map[*liveSub]struct{}, requester string, held int) 
 			victim = oldest[c]
 		}
 	}
-	victim.ended = true
-	close(victim.gone)
 	return victim
 }
 
@@ -432,6 +487,9 @@ func (s *Server) handleLiveEvents(hub *liveHub, w http.ResponseWriter, r *http.R
 	}
 
 	client := liveClientKey(r)
+	// Leave the request-admission limits before any wait for a slot: the
+	// hub's pending caps bound waiting newcomers instead.
+	releaseAdmission(r)
 	sub, ok := hub.subscribe(r.Context(), slug, client)
 	if !ok {
 		http.Error(w, "too many live subscribers", http.StatusServiceUnavailable)
@@ -439,7 +497,7 @@ func (s *Server) handleLiveEvents(hub *liveHub, w http.ResponseWriter, r *http.R
 	}
 	defer hub.unsubscribe(sub)
 	// Subscribed: the stream is bounded by the subscriber caps and per-write
-	// deadlines now, not by the request limits.
+	// deadlines now, not by the request limits or the response deadline.
 	detachLongLived(w, r)
 
 	rc := http.NewResponseController(w)
