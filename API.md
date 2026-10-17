@@ -507,16 +507,24 @@ is no version history, no diff, and no editor.
     { "slug": "notes", "rerendered": true, "size": 8192 },
     { "slug": "logo.svg", "rerendered": false, "reason": "no retained markdown source (published before source retention, or not a ?render=md page)" }
   ],
-  "truncated": false
+  "truncated": false,
+  "complete": true
 }
 ```
 
 The sweep's counts (`rerendered`, `skipped`, `failed_count`) cover every
 artifact, but `results` and `failed` each list at most 100 entries; `truncated`
 is `true` when either list was cut. One sweep runs at a time: a `POST /rerender`
-while another is running gets `409`. A sweep stops when its request ends, so a
-client that disconnects stops it partway (pages already rebaked stay rebaked;
-run it again to finish).
+while another is running gets `409`.
+
+A sweep that runs longer than a second sends its `200` status and then a newline
+every second until the report, so the response may start with blank lines
+(whitespace before the JSON, which JSON readers ignore). A client that
+disconnects stops the sweep partway; pages already rebaked stay rebaked. A sweep
+also stops after 30 minutes: then `complete` is `false` and `next` names the
+last artifact it finished, and `POST /rerender?after=<next>` carries on from
+there. `complete` is also `false`, with an `error`, if reading the store failed
+after the status was sent.
 
 Without `Accept: application/json` both routes answer in plain text.
 

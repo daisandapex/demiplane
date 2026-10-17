@@ -8,8 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"sync"
 	"time"
 
 	"github.com/daisandapex/demiplane/internal/logsafe"
@@ -163,6 +166,14 @@ const (
 	rerenderListMax = 100
 )
 
+// rerenderKeepAlive is how often a running sweep writes a newline to its
+// client, and rerenderSweepMax how long one sweep may run. Vars only so tests
+// can shorten them.
+var (
+	rerenderKeepAlive = time.Second
+	rerenderSweepMax  = 30 * time.Minute
+)
+
 // handleRerenderAll walks every stored artifact and rebakes the ones that
 // retain a source, counting the rest as skipped, so the report an operator gets
 // after upgrading an instance accounts for the whole store, not just the part
@@ -172,8 +183,12 @@ const (
 //
 // The walk reads the store a page at a time and the report lists at most
 // rerenderListMax results and failures, so a sweep's memory does not grow with
-// the store. One sweep runs at a time; another gets 409 while it does. A sweep
-// whose request ends (the client went away) stops where it is.
+// the store. One sweep runs at a time; another gets 409 while it does.
+//
+// A sweep ends early in two ways. It stops when its client is gone: the
+// request ending, or a keep-alive write failing (net/http does not always
+// notice a disconnect, for instance once a pipelined request follows). And it
+// stops at rerenderSweepMax, reporting where; ?after=<slug> resumes after it.
 func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 	// No body: on HTTP/1, net/http notices a client disconnecting only once
 	// the request body has been read to its end, so a sweep for a caller that
@@ -182,37 +197,69 @@ func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST /rerender takes no request body", http.StatusBadRequest)
 		return
 	}
+	after := r.URL.Query().Get("after")
+	if len(after) > 255 {
+		http.Error(w, "after is not a slug", http.StatusBadRequest)
+		return
+	}
 	if !s.bulkRerender.TryLock() {
 		http.Error(w, "a rerender of every artifact is already running; try again when it finishes", http.StatusConflict)
 		return
 	}
 	defer s.bulkRerender.Unlock()
-	ctx := r.Context()
+
+	ctx, cancel := context.WithTimeout(r.Context(), rerenderSweepMax)
+	defer cancel()
+	r = r.WithContext(ctx)
+	rc := http.NewResponseController(w)
+	// The sweep outlasts the ordinary response timeout; the keep-alives and
+	// rerenderSweepMax bound it instead (and --write-timeout, if set).
+	_ = rc.SetWriteDeadline(time.Now().Add(rerenderSweepMax + time.Minute))
+	asJSON := wantsJSON(r)
+	contentType := "text/plain; charset=utf-8"
+	if asJSON {
+		contentType = "application/json; charset=utf-8"
+	}
+	ka := startSweepKeepAlive(w, rc, contentType, cancel)
 
 	var (
 		results                      []rerenderResult
 		failed                       = map[string]string{}
 		rerendered, skipped, failedN int
-		truncated                    bool
-		after                        string
+		truncated, listFailed        bool
+		done                         string // the last slug the sweep finished with
 	)
+	stoppedEarly := func() bool { return errors.Is(ctx.Err(), context.DeadlineExceeded) }
+walk:
 	for {
 		slugs, next, err := s.store.SlugPage(ctx, store.DefaultOwner, after, rerenderPage)
 		if err != nil {
 			if ctx.Err() != nil {
+				if stoppedEarly() {
+					break walk
+				}
+				ka.stop()
 				return
 			}
 			log.Printf("rerender sweep list failed: %s", logsafe.Err(err))
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
+			listFailed = true
+			break walk
 		}
 		for _, slug := range slugs {
 			if ctx.Err() != nil {
+				if stoppedEarly() {
+					break walk
+				}
+				ka.stop()
 				return
 			}
 			res, err := s.rerenderSlug(r, slug)
 			if err != nil {
 				if ctx.Err() != nil {
+					if stoppedEarly() {
+						break walk
+					}
+					ka.stop()
 					return
 				}
 				reason := "rerender failed; see the server log"
@@ -230,6 +277,7 @@ func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 				} else {
 					truncated = true
 				}
+				done = slug
 				continue
 			}
 			if res.Rerendered {
@@ -242,6 +290,7 @@ func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 			} else {
 				truncated = true
 			}
+			done = slug
 		}
 		if next == "" {
 			break
@@ -249,18 +298,35 @@ func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 		after = next
 	}
 
-	if wantsJSON(r) {
-		writeJSON(w, http.StatusOK, map[string]any{
+	started := ka.stop()
+	if listFailed && !started {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	complete := !listFailed && !stoppedEarly()
+	if !started {
+		w.Header().Set("Content-Type", contentType)
+		w.WriteHeader(http.StatusOK)
+	}
+	if asJSON {
+		report := map[string]any{
 			"rerendered":   rerendered,
 			"skipped":      skipped,
 			"failed_count": failedN,
 			"failed":       failed,
 			"results":      results,
 			"truncated":    truncated,
-		})
+			"complete":     complete,
+		}
+		if !complete {
+			report["next"] = done
+		}
+		if listFailed {
+			report["error"] = "listing the store failed; see the server log"
+		}
+		_ = json.NewEncoder(w).Encode(report)
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprintf(w, "rerendered %d, skipped %d, failed %d\n", rerendered, skipped, failedN)
 	for _, res := range results {
 		if res.Rerendered {
@@ -273,6 +339,68 @@ func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 	if truncated {
 		fmt.Fprintf(w, "  (lists cut at %d entries each)\n", rerenderListMax)
 	}
+	switch {
+	case listFailed:
+		fmt.Fprintf(w, "stopped: listing the store failed; see the server log\n")
+	case !complete:
+		fmt.Fprintf(w, "stopped at the %v sweep limit; resume with POST /rerender?after=%s\n", rerenderSweepMax, url.QueryEscape(done))
+	}
+}
+
+// sweepKeepAlive writes a newline to a sweep's client every
+// rerenderKeepAlive (sending the 200 status and content type first), so a
+// client that has gone is noticed even when net/http does not cancel the
+// request: a failed write calls gone. Leading newlines are whitespace to a
+// JSON reader.
+type sweepKeepAlive struct {
+	mu      sync.Mutex
+	started bool
+	quit    chan struct{}
+	done    chan struct{}
+}
+
+func startSweepKeepAlive(w http.ResponseWriter, rc *http.ResponseController, contentType string, gone func()) *sweepKeepAlive {
+	k := &sweepKeepAlive{quit: make(chan struct{}), done: make(chan struct{})}
+	go func() {
+		defer close(k.done)
+		t := time.NewTicker(rerenderKeepAlive)
+		defer t.Stop()
+		for {
+			select {
+			case <-k.quit:
+				return
+			case <-t.C:
+			}
+			k.mu.Lock()
+			if !k.started {
+				w.Header().Set("Content-Type", contentType)
+				w.WriteHeader(http.StatusOK)
+				k.started = true
+			}
+			_, err := io.WriteString(w, "\n")
+			if err == nil {
+				err = rc.Flush()
+			}
+			k.mu.Unlock()
+			if err != nil {
+				gone()
+				return
+			}
+		}
+	}()
+	return k
+}
+
+// stop ends the keep-alives and reports whether any were sent (so the status
+// is already 200). The caller may write the rest of the response after it.
+func (k *sweepKeepAlive) stop() bool {
+	select {
+	case <-k.quit:
+	default:
+		close(k.quit)
+	}
+	<-k.done
+	return k.started
 }
 
 // rerenderSlug rebakes one slug's retained source with the current renderer and
