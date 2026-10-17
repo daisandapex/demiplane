@@ -672,13 +672,15 @@ token, like `GET /list`.
 | `204 No Content` | Delete or ack succeeded. |
 | `304 Not Modified` | Conditional `GET /{slug}` whose `If-None-Match` or `If-Modified-Since` still matches. |
 | `302 Found` | Forward-flow redirect once a `?next` slug exists. |
-| `400 Bad Request` | Invalid or reserved slug, `private` + named slug, password in the URL query, bad `ttl`, a malformed publish query string, a site upload asking for `?private`/`?ttl`/a password, or a malformed reply/site. |
+| `307 Temporary Redirect` | A non-canonical path (`//`, `/./`, `/../`); `Location` is the canonical path with its escaping and query kept. |
+| `400 Bad Request` | Invalid or reserved slug, `private` + named slug, password in the URL query, bad `ttl`, a malformed publish query string, a site upload asking for `?private`/`?ttl`/a password, a malformed reply/site, or an ambiguous path (a segment that decodes to `.` or `..`, or holds an encoded `/` or `\`, or a control character). |
 | `401 Unauthorized` | Missing or invalid bearer token (write/list/delete/reply admin, `/gallery` without `--browse`), or a missing or wrong view password (read, `?live`, live-reload stream, reply). |
 | `403 Forbidden` | A service-worker script fetch (never permitted), or a cross-origin browser write (another site posting through a visitor's browser). |
 | `404 Not Found` | No such artifact or reply, or it expired. |
 | `405 Method Not Allowed` | Wrong method for a known path (for example `POST /list`). |
 | `408 Request Timeout` | The request body arrived too slowly (`--body-timeout`, `--upload-min-rate`). |
 | `413 Payload Too Large` | Upload exceeds `--max-upload`, a reply/site exceeds its cap, or a `?render=md` document exceeds a render limit (table width, table cells, `--render-max-output`). |
+| `421 Misdirected Request` | `--allowed-hosts` is set and the `Host` is not one it (or a base URL) names. |
 | `429 Too Many Requests` | Too many failed view-password attempts or reply submissions (with `Retry-After`), or an artifact reached its reply limit. |
 | `501 Not Implemented` | A feature (for example `?site=`) is not compiled into this build. |
 | `503 Service Unavailable` | A module (for example reply storage) is temporarily unavailable, or the server is at a concurrency limit (requests in progress, password checks, renders, the reply hook pool); retry after `Retry-After`. |

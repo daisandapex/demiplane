@@ -118,10 +118,12 @@ SVG/XML no-script CSP).
 to a separate content **hostname** via `--content-base-url`). Artifacts share one
 content origin; the per-document sandbox below is what keeps them apart.
 `--unsafe-same-origin` collapses both planes onto one origin. Sandboxed pages
-still cannot read control-plane responses there, but the combined handler has no
-cross-origin write guard, so on an instance with no token a hosted page can
-submit a form to `POST /publish` or `DELETE`. Use it only for a single-operator,
-trusted-content instance where you accept that.
+still cannot read control-plane responses there, but the combined handler can
+only run the content listener's write guard, which admits an opaque-origin
+(`Origin: null`) write that carries no other origin's `Referer` (see
+[Resource limits](#resource-limits), "Replies"). On an instance with no token a
+hosted page can therefore submit a form to `POST /publish`. Use it only for a
+single-operator, trusted-content instance where you accept that.
 
 ## Content isolation between artifacts
 
@@ -246,9 +248,13 @@ inherits the posture above and was reviewed adversarially before release.
   must name an existing, unexpired artifact, and a password-protected one needs
   its password over HTTP Basic (a refusal is a `401` with that artifact's realm,
   and the `?live` wrapper takes the same password first, so the browser answers
-  from the credentials the viewer just entered). The grant is re-checked on every republish
-  and every heartbeat, so deleting or expiring the artifact, or changing its
-  password, ends the stream. Subscribers are capped **per slug, per client
+  from the credentials the viewer just entered). The grant is re-checked on
+  every republish and every heartbeat, so deleting or expiring the artifact, or
+  changing its password, ends the stream. Every password check here, including
+  the re-check after a republish re-salts the hash, goes through the
+  view-password limits ([Resource limits](#resource-limits)), so open streams
+  cannot multiply KDF work; a check refused for load is a `429` or `503`, and
+  ends an open stream. Subscribers are capped **per slug, per client
   address** (an IPv4 address or IPv6 /64; behind a proxy all clients share the
   proxy's address) **and globally** to bound file-descriptor/memory use; the
   stream sends periodic heartbeats and drops consumers on a write deadline /
@@ -386,14 +392,22 @@ Notes on the limits:
   HMAC of the stored hash and the password under a per-process key), so a
   viewer who has authenticated is not affected by a flood of wrong guesses
   against the same page; a new viewer of that page may get `429` until the
-  per-artifact budget refills. Reply submit and form routes run the same
+  per-artifact budget refills. Reply submit and form routes, the `?live`
+  wrapper and the live-reload stream (including its re-checks) run the same
   check.
+- **Order of checks.** Body and write deadlines are set first, so they also
+  bound a request refused before routing (a service-worker fetch, an unknown
+  `Host`, an ambiguous path). Admission counts only requests that pass those
+  checks; the cross-origin write guards and the routes come after it.
 - **Replies.** A reply is accepted only for an artifact whose publish enabled
   replies (`?reply=form` or `?reply=question`); the choice is stored with the
   artifact and replaced by every publish to the slug. The content listener
-  refuses cross-origin browser writes, except from an opaque origin
-  (`Origin: null`, which is what a sandboxed artifact page sends) whose
-  `Referer` is absent or on the content origin. That check is defence in
+  refuses cross-origin browser writes, judged against the content origin
+  (`--content-base-url`, else derived as for content URLs, compared as scheme,
+  host and port), except from an opaque origin (`Origin: null`, which is what
+  a sandboxed artifact page sends) whose `Referer` is absent or names the
+  content origin. Behind a proxy, set the base URLs so the public origin is
+  the one compared. That check is defence in
   depth only: another site can post from a sandboxed frame with no Referer,
   and no origin check can tell apart two pages on the same content origin.
   The per-artifact opt-in, the view password and the reply limits are what
@@ -402,7 +416,8 @@ Notes on the limits:
   inserted in one transaction, so concurrent submissions cannot overshoot.
 - **Reply hooks.** A submission takes its place in the hook pool before the
   reply is stored, so no stored reply is ever dropped by a full pool. Hook
-  output is read as it streams and only the first 512 bytes are kept. Work
+  output is read as it streams and only the first 512 bytes are kept; they
+  reach the log only with `reply_hook_log_output = on`. Work
   meant to outlive a hook must detach (`systemd-run`, `setsid`); a plain
   background child is killed with the hook's process group.
 - **Storage quota.** Not counted: the metadata database, module data (replies,

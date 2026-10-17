@@ -157,6 +157,8 @@ Two additions close the answer → next-lesson loop without any polling:
   reply write. The exec action runs in its own process group, which is killed
   when the shell exits or `reply_hook_timeout` (default 5m) passes, so
   long-running work must detach (`systemd-run`, as above, or `setsid`). A
+  failing exec hook's output stays out of the log unless
+  `reply_hook_log_output = on`, and a webhook redirect is a failed delivery. A
   malformed value is a hard startup error, like any other config key.
 
 - **Forward flow (`?next=`).** Publish a lesson with the sequel's slug:

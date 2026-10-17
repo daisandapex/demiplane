@@ -126,8 +126,8 @@ reply_hook_url  = http://127.0.0.1:9099/reply-event
   as `DEMIPLANE_REPLY_ID/SLUG/KIND/BODY` env vars. It runs in its own process
   group, killed when the shell exits or after `reply_hook_timeout` (default
   `5m`), so long-running work must detach (as the `systemd-run` example does,
-  or with `setsid`). Output is read as it streams; the first 512 bytes are kept
-  for the failure log.
+  or with `setsid`). Output is read as it streams and only the first 512 bytes
+  are kept, whether or not they are logged (see below).
 - **webhook** — the same JSON is POSTed (`application/json`, 30 s bound).
   Redirects are not followed (a `3xx` is logged as a failed delivery), so the
   reply is only ever sent to the configured URL; point it at the final
@@ -143,7 +143,7 @@ independent of hook fate. A malformed value is a hard startup error, like any
 other config key.
 
 Failure logs are kept free of reply content and hook credentials. The exec
-hook's output is discarded by default, because a grading hook often echoes the
+hook's output stays out of the log by default, because a grading hook often echoes the
 answer it was given; set `reply_hook_log_output = on` while debugging a hook to
 log the first 512 bytes, with control characters escaped. Webhook failures log
 only the URL's origin (`scheme://host`), never its userinfo, path or query.

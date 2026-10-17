@@ -155,7 +155,7 @@ validates and consumes them —
 func init() {
     registerModuleConfig([]string{"reply_hook_exec", "reply_hook_url"},
         func(cfg map[string]string) error {
-            return reply.ConfigureHook(cfg["reply_hook_exec"], cfg["reply_hook_url"], false)
+            return reply.ConfigureHook(cfg["reply_hook_exec"], cfg["reply_hook_url"], reply.DefaultHookOptions())
         })
 }
 ```

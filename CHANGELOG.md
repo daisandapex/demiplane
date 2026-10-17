@@ -8,15 +8,62 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+
+- **Published pages are isolated from each other.** HTML, SVG and XML are
+  served in a CSP sandbox without `allow-same-origin`, so each page runs in an
+  opaque origin and cannot read other artifacts (with or without the viewer's
+  cached credentials) or register a service worker. Service-worker script
+  fetches are refused on both planes. Public module scripts, `crossorigin`
+  stylesheets and fonts stay loadable from sandboxed pages.
+- **Private and password-protected responses are not cached or referred.**
+  They, their `401` and every `?live` wrapper carry `Cache-Control: private,
+  no-store` and `Referrer-Policy: no-referrer`, and protected artifacts carry
+  `Cross-Origin-Resource-Policy: same-origin`, so no other page can load one as
+  a script, stylesheet or image. Each password-protected artifact has its own
+  Basic realm.
+- **Site uploads refuse options sites do not support.** `?site=` with
+  `?private`, `?ttl`, `?password` or `X-Demiplane-Password` is a `400` before
+  the archive is read; previously the options were ignored. A publish whose
+  query string does not parse is a `400` too, rather than having the
+  unreadable parameters silently dropped.
+- **`/gallery` follows `--browse`.** Without `--browse` it needs the bearer
+  token, like `/list`.
+- **Live-reload streams are authorized.** `GET /_events/{slug}` requires an
+  existing, unexpired artifact and its password, re-checks on every republish
+  and heartbeat, and caps streams per client. Its password checks, including
+  the re-check after a republish, go through the view-password limits.
+- **`demiplane receive` refuses route names.** Route names are reserved when a
+  route registers, not when the HTTP handlers are built, so SSH ingest can no
+  longer create an artifact a route shadows (`gallery`, `connect`, `answer`
+  and the rest).
+- **Resource limits on unauthenticated work.** View-password checks are
+  rate-limited per artifact, per client and globally, run at bounded
+  concurrency, and remember a verified password for 10 minutes. Request bodies
+  have deadlines (uploads a minimum rate), responses have write deadlines,
+  and requests and connections in progress are capped per listener and per
+  client. Markdown rendering bounds table width, table cells and output size,
+  runs in linear time, stops when the client goes away, and runs at bounded
+  concurrency. An optional aggregate storage quota (`--store-quota`) counts
+  uploads in flight, archive scratch and extracted bytes. Limits, defaults and
+  flags: [SECURITY.md](SECURITY.md#resource-limits).
+- **Replies are admitted, not just accepted.** Replies need a publish that
+  enabled them, the artifact's view password when it has one, and room in
+  per-client, per-artifact and global rate limits and in per-artifact and
+  aggregate storage limits, checked atomically. The content listener refuses
+  cross-origin browser writes, judged against the content origin; a sandboxed
+  page's own reply form is admitted. Reply hooks run on a bounded pool, in their own
+  process group, with output capped while it streams.
 - **New `--allowed-hosts` accepted-host policy.** When set, requests for any
   other `Host` (beyond the `--base-url` and `--content-base-url` hosts) get
   `421` on both planes. With `--base-url` set and no `--content-base-url`,
   content URLs are now derived from the base URL rather than the request
   `Host`.
-- **The control-plane write guard compares full origins.** Its `Origin`
+- **The write guards compare full origins.** The control plane's `Origin`
   fallback now matches scheme, host and port (default ports normalized)
   against the `--base-url` origin when set, else the listener's own origin,
-  instead of host and port alone.
+  instead of host and port alone. The content listener's guard does the same
+  against the content origin (`--content-base-url`, else derived as for
+  content URLs), including the `Referer` check for sandboxed pages.
 - **Request paths are canonicalized before routing.** Non-canonical paths
   redirect to their canonical form with the original escaping (previously the
   redirect re-escaped `%` signs), and paths with encoded dot segments,
@@ -42,7 +89,8 @@ All notable changes to demiplane are documented here. The format follows
   Errors from the store and the filesystem are logged with every path
   replaced, rerender logs a slug tag instead of the slug, webhook failures log
   only the URL's origin, and the exec hook's output is omitted unless the new
-  `reply_hook_log_output = on` key is set (then truncated and escaped). The
+  `reply_hook_log_output = on` key is set (then truncated and escaped; it is
+  captured bounded either way). The
   fatal error line of `serve` and `receive` is redacted the same way.
 - **Every accepted TTL expires.** `?ttl=`, `receive --ttl`, the MCP `publish`
   tool and `demiplane publish --ttl` share one parser. Day values must be plain
@@ -50,49 +98,6 @@ All notable changes to demiplane are documented here. The format follows
   values are rejected with `400` (or a client-side error) instead of being
   stored as "never expires". A blank value (only whitespace) is an error
   too; omit the TTL for no expiry.
-- **Published pages are isolated from each other.** HTML, SVG and XML are
-  served in a CSP sandbox without `allow-same-origin`, so each page runs in an
-  opaque origin and cannot read other artifacts (with or without the viewer's
-  cached credentials) or register a service worker. Service-worker script
-  fetches are refused on both planes. Public module scripts, `crossorigin`
-  stylesheets and fonts stay loadable from sandboxed pages.
-- **Private and password-protected responses are not cached or referred.**
-  They, their `401` and every `?live` wrapper carry `Cache-Control: private,
-  no-store` and `Referrer-Policy: no-referrer`, and protected artifacts carry
-  `Cross-Origin-Resource-Policy: same-origin`, so no other page can load one as
-  a script, stylesheet or image. Each password-protected artifact has its own
-  Basic realm.
-- **Site uploads refuse options sites do not support.** `?site=` with
-  `?private`, `?ttl`, `?password` or `X-Demiplane-Password` is a `400` before
-  the archive is read; previously the options were ignored. A publish whose
-  query string does not parse is a `400` too, rather than having the
-  unreadable parameters silently dropped.
-- **`/gallery` follows `--browse`.** Without `--browse` it needs the bearer
-  token, like `/list`.
-- **Live-reload streams are authorized.** `GET /_events/{slug}` requires an
-  existing, unexpired artifact and its password, re-checks on every republish
-  and heartbeat, and caps streams per client.
-- **`demiplane receive` refuses route names.** Route names are reserved when a
-  route registers, not when the HTTP handlers are built, so SSH ingest can no
-  longer create an artifact a route shadows (`gallery`, `connect`, `answer`
-  and the rest).
-- **Resource limits on unauthenticated work.** View-password checks are
-  rate-limited per artifact, per client and globally, run at bounded
-  concurrency, and remember a verified password for 10 minutes. Request bodies
-  have deadlines (uploads a minimum rate), responses have write deadlines,
-  and requests and connections in progress are capped per listener and per
-  client. Markdown rendering bounds table width, table cells and output size,
-  runs in linear time, stops when the client goes away, and runs at bounded
-  concurrency. An optional aggregate storage quota (`--store-quota`) counts
-  uploads in flight, archive scratch and extracted bytes. Limits, defaults and
-  flags: [SECURITY.md](SECURITY.md#resource-limits).
-- **Replies are admitted, not just accepted.** Replies need a publish that
-  enabled them, the artifact's view password when it has one, and room in
-  per-client, per-artifact and global rate limits and in per-artifact and
-  aggregate storage limits, checked atomically. The content listener refuses
-  cross-origin browser writes. Reply hooks run on a bounded pool, in their own
-  process group, with output capped while it streams.
-
 - **MCP `publish` paths are confined to a publish root.** The tool's `path`
   argument must resolve inside `--publish-root` / `DEMIPLANE_PUBLISH_ROOT`
   (default: the working directory of `demiplane mcp`) and is opened through that
@@ -110,14 +115,14 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Changed
 
-- **Upgrade note: published pages run sandboxed.** A page can no longer use
-  `localStorage`, `sessionStorage`, IndexedDB or cookies, `fetch` its own data
-  files, frame other pages on the instance, or run workers. Inline, classic and
-  module scripts, stylesheets, images and fonts still load. An instance that
-  hosts only trusted content can restore the shared origin with
-  `serve --unsafe-no-sandbox`. See DESIGN.md, "Content isolation".
-- **Upgrade note: `/gallery` needs the token unless `--browse` is set.**
-- **New flag: `serve --unsafe-no-sandbox`.**
+- **Upgrade note: published pages run sandboxed.** HTML, SVG and XML pages
+  run in an opaque origin. A page can no longer use `localStorage`,
+  `sessionStorage`, IndexedDB or cookies, `fetch` its own data files or other
+  same-origin URLs, frame other pages on the instance, or run workers. Inline,
+  classic and module scripts, stylesheets, images and fonts still load. An
+  instance that hosts only trusted content can restore the shared origin with
+  the new `serve --unsafe-no-sandbox` flag, which logs a warning at startup.
+  See DESIGN.md, "Content isolation".
 - **Upgrade note: replies are opt-in per artifact (`-tags reply`).**
   `/reply/{slug}` and `/answer/{slug}` now answer `404` unless the artifact's
   latest publish used `?reply=form` (new: the reply form, page unchanged) or
@@ -128,11 +133,13 @@ All notable changes to demiplane are documented here. The format follows
   password-protected page now needs its password.
 - **Upgrade note: replies older than 90 days are deleted** by default. Set
   `reply_retention = 0` to keep them, or another duration such as `365d`.
-- **Upgrade note: a reply hook's process group is killed when its shell
-  exits** (or after `reply_hook_timeout`, default 5m). A hook that leaves a
-  plain background job running must detach it with `systemd-run` or
-  `setsid`. A full hook pool refuses new replies with `503` instead of
-  queueing without bound (`reply_hook_workers`, `reply_hook_queue`).
+- **Upgrade note: reply hooks.** A hook's process group is killed when its
+  shell exits (or after `reply_hook_timeout`, default 5m); a hook that leaves a
+  plain background job running must detach it with `systemd-run` or `setsid`.
+  A full hook pool refuses new replies with `503` instead of queueing without
+  bound (`reply_hook_workers`, `reply_hook_queue`). A failing exec hook's
+  output is no longer logged unless `reply_hook_log_output = on`. A webhook
+  that answers with a redirect is a failed delivery; configure the final URL.
 - **Upgrade note: new limits can refuse requests that used to succeed.** A
   `?render=md` document over a render limit gets `413`; a slow body `408`; a
   busy server `503`; throttled password attempts or reply submissions `429`;
@@ -140,6 +147,27 @@ All notable changes to demiplane are documented here. The format follows
   its address, so raise or disable the per-client limits
   (`--max-conns-per-client`, `--max-requests-per-client`) and enforce them at
   the proxy.
+- **Upgrade note: ambiguous paths are refused.** A path segment that decodes
+  to `.` or `..`, or contains an encoded `/` or `\` or a control character,
+  gets `400` on both planes; `//`, `/./` and `/../` redirect (`307`) to the
+  canonical path.
+- **Upgrade note: TTLs must produce a real expiry.** A `ttl` under one
+  second or over about 292 years, a non-finite value, a day value with an
+  exponent or sign, or a value made only of whitespace is a `400` (or a
+  client-side error), where some of these used to be stored as "never
+  expires". Omit the TTL for no expiry.
+- **Upgrade note: site uploads reject options they ignored.** `?site=` with
+  `?private`, `?ttl` or a password is a `400`, as is any publish whose query
+  string does not parse.
+- **Upgrade note: `--base-url` is the control plane's origin.** With it set,
+  a browser write to the control plane must come from exactly that scheme,
+  host and port, and content URLs are derived from it (with the content port)
+  when `--content-base-url` is unset. Behind a TLS-terminating proxy set
+  `--base-url` to the public `https://` origin, and set `--content-base-url`
+  when the content plane has its own public host name, or sandboxed pages'
+  reply forms are refused as cross-origin. The new `--allowed-hosts` refuses
+  any other `Host` with `421`.
+- **Upgrade note: `/gallery` needs the token unless `--browse` is set.**
 - **Upgrade note: `demiplane mcp` refuses `path` outside its publish root.** An
   MCP client that publishes files from outside the directory it starts
   `demiplane mcp` in (a scratch or temp directory, another repository) now gets
