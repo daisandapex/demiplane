@@ -44,7 +44,7 @@ func (s *Store) siteRoot() string { return filepath.Join(s.root, "sites") }
 
 // cleanSiteRelPath validates and normalizes a site-relative file path from an
 // archive entry. It is the traversal gate for the multi-file publish path: it
-// rejects absolute paths, "." / ".." segments, and any segment that is not a
+// rejects backslashes, absolute paths, ".." segments, and any segment that is not a
 // URL-safe slug token (which also rejects dotfiles and empty segments). The
 // returned path is forward-slash separated and rooted inside the site.
 //
@@ -53,11 +53,17 @@ func (s *Store) siteRoot() string { return filepath.Join(s.root, "sites") }
 // its layout — but validates each segment with the same URL-safe rule the named
 // slug validator uses, so traversal is structurally impossible.
 func cleanSiteRelPath(name string) (string, error) {
-	// Normalize Windows separators. Deliberately do NOT path.Clean the input:
-	// Clean would silently RESOLVE a "../" into a different in-tree path rather
-	// than reject it, masking a malicious entry. The spec requires rejecting
-	// "..", so we inspect the raw segments and refuse any traversal token.
-	p := strings.ReplaceAll(name, "\\", "/")
+	// A backslash is refused, not read as a separator: "/" is the only separator
+	// in an archive entry name, and treating a backslash as one would let a name
+	// mean different paths to different tools. Deliberately do NOT path.Clean
+	// the input either: Clean would silently RESOLVE a "../" into a different
+	// in-tree path rather than reject it, masking a malicious entry. The spec
+	// requires rejecting "..", so we inspect the raw segments and refuse any
+	// traversal token.
+	if strings.ContainsRune(name, '\\') {
+		return "", inputErrorf("site entry %q contains a backslash", name)
+	}
+	p := name
 	if strings.HasPrefix(p, "/") {
 		return "", inputErrorf("site entry %q is an absolute path", name)
 	}

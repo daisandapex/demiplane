@@ -41,6 +41,9 @@ func TestCleanSiteRelPath(t *testing.T) {
 		".git/config",    // leading-dot segment
 		"a/.hidden",      // leading-dot nested
 		"bad seg/x.html", // space is not URL-safe
+		`a\b.html`,       // backslash is not a separator
+		`..\escape`,
+		`\abs.html`,
 	}
 	for _, in := range bad {
 		if got, err := cleanSiteRelPath(in); err == nil {
