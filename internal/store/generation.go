@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/daisandapex/demiplane/internal/logsafe"
 )
 
 // generation.go makes each write of an artifact's bytes a new file and the
@@ -92,11 +94,7 @@ func (s *Store) removeGenFiles(slug, blobGen, sourceGen string) error {
 // unreferenced file; it is logged without the path, which carries the slug.
 func (s *Store) dropReplacedGen(slug, blobGen, sourceGen string) {
 	if err := s.removeGenFiles(slug, blobGen, sourceGen); err != nil {
-		var pe *os.PathError
-		if errors.As(err, &pe) {
-			err = pe.Err
-		}
-		log.Printf("store: could not remove a replaced artifact file: %v", err)
+		log.Printf("store: could not remove a replaced artifact file: %s", logsafe.Err(err, slug))
 	}
 }
 

@@ -36,6 +36,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/server"
 	"github.com/daisandapex/demiplane/internal/store"
@@ -440,7 +441,7 @@ func runSweeper(ctx context.Context, st *store.Store, interval time.Duration) {
 	sweep := func() {
 		n, err := st.SweepExpired(time.Now())
 		if err != nil {
-			log.Printf("ttl sweep error: %v", err)
+			log.Printf("ttl sweep error: %s", logsafe.Err(err))
 			return
 		}
 		if n > 0 {

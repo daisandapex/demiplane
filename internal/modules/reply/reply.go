@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/store"
 )
@@ -120,7 +121,7 @@ func (m *Module) ensureStore(host module.Host) {
 		m.rs, err = openReplyStore(dir)
 	}
 	if err != nil {
-		log.Printf("reply module: storage unavailable, serving 503: %v", err)
+		log.Printf("reply module: storage unavailable, serving 503: %s", logsafe.Err(err))
 	}
 }
 
@@ -140,7 +141,7 @@ func (m *Module) ready(w http.ResponseWriter) bool {
 func (m *Module) artifactExists(slug string) bool {
 	ok, err := m.host.Store().HasPublic(slug)
 	if err != nil {
-		log.Printf("reply: existence check failed for slug: %v", err)
+		log.Printf("reply: existence check failed for slug: %s", logsafe.Err(err))
 		return false
 	}
 	return ok
@@ -199,7 +200,7 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 
 	n, err := m.rs.count(slug)
 	if err != nil {
-		log.Printf("reply: count failed: %v", err)
+		log.Printf("reply: count failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -210,7 +211,7 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 
 	rep, err := m.rs.add(slug, kind, body, time.Now())
 	if err != nil {
-		log.Printf("reply: add failed: %v", err)
+		log.Printf("reply: add failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -275,7 +276,7 @@ func (m *Module) handleContentSubmit(w http.ResponseWriter, r *http.Request) {
 
 	n, err := m.rs.count(slug)
 	if err != nil {
-		log.Printf("reply: count failed: %v", err)
+		log.Printf("reply: count failed: %s", logsafe.Err(err))
 		m.writeAnswer(w, slug, http.StatusInternalServerError, false,
 			"The server hit an error and your answer was not recorded. Please try again.", "")
 		return
@@ -288,7 +289,7 @@ func (m *Module) handleContentSubmit(w http.ResponseWriter, r *http.Request) {
 
 	rep, err := m.rs.add(slug, "comment", body, time.Now())
 	if err != nil {
-		log.Printf("reply: add failed: %v", err)
+		log.Printf("reply: add failed: %s", logsafe.Err(err))
 		m.writeAnswer(w, slug, http.StatusInternalServerError, false,
 			"The server could not save your answer, so it was not recorded. Please try again.", "")
 		return
@@ -347,7 +348,7 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	replies, err := m.rs.list(q.Get("slug"), status)
 	if err != nil {
-		log.Printf("reply: list failed: %v", err)
+		log.Printf("reply: list failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -372,7 +373,7 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		log.Printf("reply: ack failed: %v", err)
+		log.Printf("reply: ack failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

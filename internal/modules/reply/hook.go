@@ -14,7 +14,10 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 	"time"
+
+	"github.com/daisandapex/demiplane/internal/logsafe"
 )
 
 // The reply-event hook fires a configurable action whenever a reply is durably
@@ -39,7 +42,8 @@ const (
 	hookExecTimeout = 5 * time.Minute
 	// hookHTTPTimeout bounds one webhook POST end to end.
 	hookHTTPTimeout = 30 * time.Second
-	// hookLogOutputCap bounds how much hook output an error log line carries.
+	// hookLogOutputCap bounds how much hook output is captured, and so how much
+	// an error log line carries, when output logging is turned on.
 	hookLogOutputCap = 512
 )
 
@@ -50,6 +54,11 @@ var hookClient = &http.Client{Timeout: hookHTTPTimeout}
 type hookConfig struct {
 	execCmd string // command line for /bin/sh -c; "" = no exec action
 	url     string // webhook POST target; "" = no webhook action
+	// logOutput adds the exec hook's (escaped, truncated) output to its
+	// failure log line. Off by default: a grading hook commonly echoes the
+	// submitted answer, and an answer is the replier's content, not a
+	// diagnostic.
+	logOutput bool
 }
 
 func (h hookConfig) enabled() bool { return h.execCmd != "" || h.url != "" }
@@ -58,14 +67,16 @@ func (h hookConfig) enabled() bool { return h.execCmd != "" || h.url != "" }
 // package singleton the server mounts). Called at startup by the build-tagged
 // config wiring in cmd/demiplane; a bad value is a hard startup error, per the
 // config file's fail-loud contract. An empty value disables that action.
-func ConfigureHook(execCmd, webhookURL string) error {
+// logOutput opts in to logging the exec hook's output on failure.
+func ConfigureHook(execCmd, webhookURL string, logOutput bool) error {
 	if webhookURL != "" {
 		u, err := url.Parse(webhookURL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return fmt.Errorf("reply_hook_url %q: must be an absolute http(s) URL", webhookURL)
+			// The value is a credential-bearing URL: name only its origin.
+			return fmt.Errorf("reply_hook_url %s: must be an absolute http(s) URL", logsafe.URL(webhookURL))
 		}
 	}
-	std.hook = hookConfig{execCmd: execCmd, url: webhookURL}
+	std.hook = hookConfig{execCmd: execCmd, url: webhookURL, logOutput: logOutput}
 	return nil
 }
 
@@ -86,7 +97,7 @@ func (m *Module) fireHook(rep Reply) {
 	done := m.hookDone
 	go func() {
 		if h.execCmd != "" {
-			runHookExec(h.execCmd, rep, payload)
+			runHookExec(h.execCmd, rep, payload, h.logOutput)
 		}
 		if h.url != "" {
 			runHookWebhook(h.url, payload)
@@ -99,8 +110,10 @@ func (m *Module) fireHook(rep Reply) {
 
 // runHookExec runs the exec action: `/bin/sh -c <cmdline>` with the reply JSON
 // on stdin and DEMIPLANE_REPLY_{ID,SLUG,KIND,BODY} in the environment. Errors
-// (spawn failure, non-zero exit, timeout) are logged with truncated output.
-func runHookExec(cmdline string, rep Reply, payload []byte) {
+// (spawn failure, non-zero exit, timeout) are logged. The hook's output is
+// discarded unless logOutput is set, in which case at most hookLogOutputCap
+// bytes are kept and logged with control characters escaped.
+func runHookExec(cmdline string, rep Reply, payload []byte, logOutput bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), hookExecTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", cmdline)
@@ -111,30 +124,72 @@ func runHookExec(cmdline string, rep Reply, payload []byte) {
 		"DEMIPLANE_REPLY_KIND="+rep.Kind,
 		"DEMIPLANE_REPLY_BODY="+rep.Body,
 	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("reply hook exec failed (reply %d): %v; output: %s",
-			rep.ID, err, truncateForLog(out))
+	// A hook that backgrounds a child holding the output pipe must not pin
+	// this goroutine past the hook's own exit.
+	cmd.WaitDelay = 5 * time.Second
+	var out cappedBuffer
+	if logOutput {
+		cmd.Stdout = &out
+		cmd.Stderr = &out
 	}
+	err := cmd.Run()
+	if err == nil {
+		return
+	}
+	if !logOutput {
+		log.Printf("reply hook exec failed (reply %d): %s", rep.ID, logsafe.Err(err))
+		return
+	}
+	log.Printf("reply hook exec failed (reply %d): %s; output: %s",
+		rep.ID, logsafe.Err(err), logsafe.Text(out.String()))
 }
 
 // runHookWebhook runs the webhook action: POST the reply JSON to url. A
 // transport error or non-2xx status is logged; the response body is discarded.
+//
+// The configured URL is a credential (services put the secret in the userinfo,
+// the path or the query), so logs name only its origin.
 func runHookWebhook(url string, payload []byte) {
 	resp, err := hookClient.Post(url, "application/json", bytes.NewReader(payload))
 	if err != nil {
-		log.Printf("reply hook webhook failed: %v", err)
+		log.Printf("reply hook webhook failed: %s", logsafe.Err(err))
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		log.Printf("reply hook webhook: %s returned %d", url, resp.StatusCode)
+		log.Printf("reply hook webhook: %s returned %d", logsafe.URL(url), resp.StatusCode)
 	}
 }
 
-// truncateForLog bounds hook output for an error log line.
-func truncateForLog(b []byte) []byte {
-	if len(b) > hookLogOutputCap {
-		return append(bytes.Clone(b[:hookLogOutputCap]), []byte("…")...)
+// cappedBuffer keeps the first hookLogOutputCap bytes written to it and
+// discards the rest, so a verbose hook cannot grow memory without bound.
+type cappedBuffer struct {
+	mu        sync.Mutex
+	b         []byte
+	truncated bool
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if room := hookLogOutputCap - len(c.b); room > 0 {
+		if len(p) > room {
+			c.b = append(c.b, p[:room]...)
+			c.truncated = true
+		} else {
+			c.b = append(c.b, p...)
+		}
+	} else if len(p) > 0 {
+		c.truncated = true
 	}
-	return b
+	return len(p), nil
+}
+
+func (c *cappedBuffer) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.truncated {
+		return string(c.b) + "…"
+	}
+	return string(c.b)
 }

@@ -8,6 +8,11 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **Logs no longer carry capability slugs, store paths or hook secrets.**
+  Errors from the store and the filesystem are logged with every path
+  replaced, rerender logs a slug tag instead of the slug, webhook failures log
+  only the URL's origin, and the exec hook's output is omitted unless the new
+  `reply_hook_log_output = on` key is set (then truncated and escaped).
 - **Every accepted TTL expires.** `?ttl=`, `receive --ttl`, the MCP `publish`
   tool and `demiplane publish --ttl` share one parser. Day values must be plain
   decimals and are converted exactly; non-finite, overflowing and sub-second

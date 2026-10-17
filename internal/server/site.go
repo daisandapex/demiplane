@@ -16,6 +16,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/store"
 )
 
@@ -100,7 +101,7 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 	// MaxBytesReader above stops an oversize body loudly (*http.MaxBytesError).
 	tmp, err := os.CreateTemp("", "demiplane-site-*.arc")
 	if err != nil {
-		log.Printf("site publish: scratch file: %v", err)
+		log.Printf("site publish: scratch file: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -128,7 +129,7 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		log.Printf("site publish: new writer: %v", err)
+		log.Printf("site publish: new writer: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -151,7 +152,7 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		log.Printf("site publish: commit: %v", err)
+		log.Printf("site publish: commit: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -314,7 +315,7 @@ func (s *Server) serveSiteFile(w http.ResponseWriter, r *http.Request, site, rel
 			http.NotFound(w, r)
 			return
 		}
-		log.Printf("serve site file failed: %v", err)
+		log.Printf("serve site file failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

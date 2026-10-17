@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no cgo)
 )
 
@@ -817,7 +818,7 @@ func (s *Store) SweepExpired(now time.Time) (int, error) {
 	for _, slug := range slugs {
 		reaped, err := s.reapIfExpired(slug, now)
 		if err != nil {
-			return n, fmt.Errorf("delete expired %q: %w", slug, err)
+			return n, fmt.Errorf("delete expired %s: %w", logsafe.Slug(slug), err)
 		}
 		if reaped {
 			n++

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/render"
 	"github.com/daisandapex/demiplane/internal/store"
 )
@@ -86,7 +87,7 @@ type renderSpec struct {
 func marshalRenderSpec(spec renderSpec) string {
 	b, err := json.Marshal(spec)
 	if err != nil {
-		log.Printf("render spec marshal failed (source retained without it): %v", err)
+		log.Printf("render spec marshal failed (source retained without it): %s", logsafe.Err(err))
 		return ""
 	}
 	return string(b)
@@ -127,7 +128,7 @@ func (s *Server) handleRerender(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		log.Printf("rerender %q failed: %v", slug, err)
+		log.Printf("rerender %s failed: %s", logsafe.Slug(slug), logsafe.Err(err, slug))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -154,7 +155,7 @@ func (s *Server) handleRerender(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 	slugs, err := s.store.Slugs(store.DefaultOwner)
 	if err != nil {
-		log.Printf("rerender sweep list failed: %v", err)
+		log.Printf("rerender sweep list failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -165,7 +166,7 @@ func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 	for _, slug := range slugs {
 		res, err := s.rerenderSlug(r, slug)
 		if err != nil {
-			log.Printf("rerender %q failed: %v", slug, err)
+			log.Printf("rerender %s failed: %s", logsafe.Slug(slug), logsafe.Err(err, slug))
 			failed[slug] = "rerender failed; see the server log"
 			continue
 		}
@@ -226,7 +227,7 @@ func (s *Server) renderRetained(r *http.Request, slug string, rec store.SourceRe
 			// A spec we cannot read is not a reason to refuse to rebake: the
 			// source is intact and the defaults produce a correct page. Log it
 			// and carry on rather than leaving the artifact stuck on old output.
-			log.Printf("rerender %q: unreadable render spec, using defaults: %v", slug, uerr)
+			log.Printf("rerender %s: unreadable render spec, using defaults: %s", logsafe.Slug(slug), logsafe.Err(uerr, slug))
 			spec = renderSpec{}
 		}
 	}

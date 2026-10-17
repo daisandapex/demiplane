@@ -516,7 +516,8 @@ mesh), while listing and acking are publisher actions (bearer). A reply record i
 
 `kind` is one of `approve`, `defer`, `comment`. The inline `?reply` box always
 records `comment`. A recorded reply can fire a server-side hook (config keys
-`reply_hook_exec` and `reply_hook_url`) so an agent reacts with zero polling.
+`reply_hook_exec` and `reply_hook_url`, plus `reply_hook_log_output` to log a
+failing exec hook's output) so an agent reacts with zero polling.
 
 ### Replies: worked examples
 

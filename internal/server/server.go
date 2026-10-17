@@ -9,8 +9,6 @@ package server
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/render"
 	"github.com/daisandapex/demiplane/internal/store"
@@ -474,7 +473,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "upload exceeds the configured size limit", http.StatusRequestEntityTooLarge)
 				return
 			}
-			log.Printf("render read failed: %v", rerr)
+			log.Printf("render read failed: %s", logsafe.Err(rerr))
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -539,7 +538,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		log.Printf("publish failed: %v", err)
+		log.Printf("publish failed: %s", logsafe.Err(err, named))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -584,7 +583,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 			s.serveContentNotFound(w, r)
 			return
 		}
-		log.Printf("get %s failed: %v", redactSlug(slug), err)
+		log.Printf("get %s failed: %s", logsafe.Slug(slug), logsafe.Err(err, slug))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -700,7 +699,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		log.Printf("delete %s failed: %v", redactSlug(slug), err)
+		log.Printf("delete %s failed: %s", logsafe.Slug(slug), logsafe.Err(err, slug))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -728,7 +727,7 @@ type listItem struct {
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	arts, err := s.store.List(store.DefaultOwner)
 	if err != nil {
-		log.Printf("list failed: %v", err)
+		log.Printf("list failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -842,7 +841,7 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	base := s.requestBase(r)
 	count, err := s.store.Count(store.DefaultOwner)
 	if err != nil {
-		log.Printf("landing count failed: %v", err)
+		log.Printf("landing count failed: %s", logsafe.Err(err))
 		count = -1
 	}
 
@@ -955,7 +954,7 @@ func collapseSeries(pub []store.Artifact) []landingRow {
 func (s *Server) artifactTable(r *http.Request) string {
 	arts, err := s.store.List(store.DefaultOwner)
 	if err != nil {
-		log.Printf("browse list failed: %v", err)
+		log.Printf("browse list failed: %s", logsafe.Err(err))
 		return ""
 	}
 	base := s.contentBase(r)
@@ -1018,11 +1017,9 @@ func plural(n int, noun string) string {
 
 // redactSlug returns a short, non-reversible tag for a slug so error logs never
 // leak the slug itself — for a private artifact the slug IS the capability
-// secret, and logs are a common exposure surface.
-func redactSlug(slug string) string {
-	sum := sha256.Sum256([]byte(slug))
-	return "slug#" + hex.EncodeToString(sum[:])[:12]
-}
+// secret, and logs are a common exposure surface. See internal/logsafe, which
+// also strips the capability-bearing paths inside wrapped filesystem errors.
+func redactSlug(slug string) string { return logsafe.Slug(slug) }
 
 // shortType trims charset/boundary params from a content type for display.
 func shortType(ct string) string {

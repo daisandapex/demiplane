@@ -22,8 +22,18 @@ func init() {
 	//   reply_hook_exec = <command>    run via /bin/sh -c; reply JSON on stdin,
 	//                                  DEMIPLANE_REPLY_{ID,SLUG,KIND,BODY} in env
 	//   reply_hook_url  = <http(s) URL> reply JSON POSTed to it
-	registerModuleConfig([]string{"reply_hook_exec", "reply_hook_url"},
+	//   reply_hook_log_output = on     log the exec hook's output on failure
+	//                                  (off by default; it often echoes answers)
+	registerModuleConfig([]string{"reply_hook_exec", "reply_hook_url", "reply_hook_log_output"},
 		func(cfg map[string]string) error {
-			return reply.ConfigureHook(cfg["reply_hook_exec"], cfg["reply_hook_url"])
+			logOutput := false
+			if v := cfg["reply_hook_log_output"]; v != "" {
+				b, err := parseOnOff("reply_hook_log_output", v)
+				if err != nil {
+					return err
+				}
+				logOutput = b
+			}
+			return reply.ConfigureHook(cfg["reply_hook_exec"], cfg["reply_hook_url"], logOutput)
 		})
 }

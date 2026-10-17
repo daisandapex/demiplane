@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/store"
 )
 
@@ -48,7 +49,7 @@ func init() {
 func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
 	arts, err := s.store.List(store.DefaultOwner)
 	if err != nil {
-		log.Printf("gallery list failed: %v", err)
+		log.Printf("gallery list failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

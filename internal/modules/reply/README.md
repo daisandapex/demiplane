@@ -119,6 +119,12 @@ hook is logged and can never fail, delay, or roll back the reply write — the
 viewer's honest confirmation is independent of hook fate. A malformed
 `reply_hook_url` is a hard startup error, like any other config key.
 
+Failure logs are kept free of reply content and hook credentials. The exec
+hook's output is discarded by default, because a grading hook often echoes the
+answer it was given; set `reply_hook_log_output = on` while debugging a hook to
+log the first 512 bytes, with control characters escaped. Webhook failures log
+only the URL's origin (`scheme://host`), never its userinfo, path or query.
+
 ## Forward flow (`?next=` — auto-advance to the next lesson)
 
 Publish a lesson naming its sequel and the student flows forward after

@@ -40,8 +40,15 @@ want it.
   `X-Demiplane-Password` header on publish and HTTP Basic on read).
 - **Input handling.** Uploads stream to disk (bounded memory); slugs are
   validated against path traversal; the optional markdown renderer HTML-escapes
-  all source and allowlists link schemes; error logs redact slugs (a private
-  slug is a secret).
+  all source and allowlists link schemes.
+- **Log hygiene.** A private slug is a secret, so error logs never carry one:
+  slugs are logged as a short hash tag (`slug#…`), and the filesystem paths
+  inside wrapped I/O errors (which embed the slug) are replaced by `[path]` on
+  every path that logs a store error, including rerender, expiry and the
+  sweeper. Reply-hook failures log the webhook's origin only (no userinfo,
+  path or query) and omit the exec hook's output unless
+  `reply_hook_log_output = on`; logged hook output is truncated and has its
+  control characters escaped.
 
 **Out of scope / explicitly accepted for v1:**
 
