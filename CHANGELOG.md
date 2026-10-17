@@ -45,7 +45,9 @@ All notable changes to demiplane are documented here. The format follows
   runs in linear time, stops when the client goes away, and runs at bounded
   concurrency. An optional aggregate storage quota (`--store-quota`) counts
   uploads in flight, archive scratch and extracted bytes. Limits, defaults and
-  flags: [SECURITY.md](SECURITY.md#resource-limits).
+  flags: [SECURITY.md](SECURITY.md#resource-limits). Behind a reverse proxy
+  listed in the new `--trusted-proxy`, per-client limits key on the client
+  named in `X-Forwarded-For` instead of the proxy.
 - **Replies are admitted, not just accepted.** Replies need a publish that
   enabled them, the artifact's view password when it has one, and room in
   per-client, per-artifact and global rate limits and in per-artifact and
@@ -143,10 +145,11 @@ All notable changes to demiplane are documented here. The format follows
 - **Upgrade note: new limits can refuse requests that used to succeed.** A
   `?render=md` document over a render limit gets `413`; a slow body `408`; a
   busy server `503`; throttled password attempts or reply submissions `429`;
-  a full store or reply store `507`. Behind a reverse proxy all clients share
-  its address, so raise or disable the per-client limits
-  (`--max-conns-per-client`, `--max-requests-per-client`) and enforce them at
-  the proxy.
+  a full store or reply store `507`. Behind a reverse proxy, set the new
+  `--trusted-proxy` to the proxy's addresses so per-client limits see each
+  client (from `X-Forwarded-For`), and raise or disable
+  `--max-conns-per-client`, which always counts the proxy's connections.
+  Without `--trusted-proxy` all clients share the proxy's address.
 - **Upgrade note: ambiguous paths are refused.** A path segment that decodes
   to `.` or `..`, or contains an encoded `/` or `\` or a control character,
   gets `400` on both planes; `//`, `/./` and `/../` redirect (`307`) to the

@@ -75,9 +75,10 @@ want it.
   request can cause (see [Resource limits](#resource-limits)): password
   checks, reply submissions and hooks, request bodies, responses, requests and
   connections in progress, and markdown rendering. These limits are per
-  process and keyed by the TCP peer address; they make a single instance hard
-  to exhaust, not impossible. Behind a reverse proxy every client shares the
-  proxy's address, so enforce per-client limits at the proxy. The aggregate
+  process and keyed by the client address; they make a single instance hard
+  to exhaust, not impossible. Behind a reverse proxy, list it in
+  `--trusted-proxy` so per-client limits see each client; otherwise every
+  client shares the proxy's address. The aggregate
   storage quota is off by default (`--store-quota`).
 
 ## Origin isolation — hosted JS cannot reach the control plane
@@ -360,8 +361,12 @@ inherits the posture above and was reviewed adversarially before release.
 ## Resource limits
 
 Every limit below is per process. A "client" is the TCP peer address, with
-IPv6 grouped by /64; forwarding headers are ignored, as everywhere else in
-demiplane. Flags are on `serve`; `reply_*` keys go in the config file and exist
+IPv6 grouped by /64. Forwarding headers are ignored unless the peer is listed
+in `--trusted-proxy` (IPs or CIDRs); then `X-Forwarded-For` is read from the
+right, past every trusted hop, and the first other address is the client.
+Entries further left are written by the client and never used. The
+connection caps (`--max-conns-per-client`) are applied when a connection is
+accepted, before any header is read, so they always see the proxy. Flags are on `serve`; `reply_*` keys go in the config file and exist
 only in `-tags reply` builds.
 
 | Surface | Limit | Default | Knob |

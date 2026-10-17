@@ -117,8 +117,11 @@ whole-response timeout, default off; it also ends live-reload streams). Resource
 `--max-conns-per-client` [64] open per listener, and `--store-quota` [0 = unlimited] for the
 store as a whole. For `?render=md`, `--render-max-output` [32 MiB] must be positive and
 `--render-concurrency` [GOMAXPROCS, at most 4] takes its default at `0`. Behind a
-reverse proxy every client shares the proxy's address, so set the per-client limits at the
-proxy (or raise them here). See [SECURITY.md](../SECURITY.md#resource-limits). Content-type
+reverse proxy, set `--trusted-proxy <ip-or-cidr,...>` to the proxy's addresses so
+per-client limits are keyed by the client in `X-Forwarded-For` (read from the right, past
+trusted hops); without it every client shares the proxy's address. The proxy must set or
+append `X-Forwarded-For`, and `--max-conns-per-client` still counts the proxy's
+connections, so raise it or set it to `0`. See [SECURITY.md](../SECURITY.md#resource-limits). Content-type
 is inferred from the filename extension, then sniffed from the bytes; known web types
 serve **inline**, everything else as a download.
 
