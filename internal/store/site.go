@@ -103,6 +103,7 @@ type SiteWriter struct {
 	finalDir string // <root>/sites/<site>
 	count    int
 	done     bool
+	charged  int64 // quota bytes charged to the staged files (quota.go)
 }
 
 // NewSiteWriter starts a transactional publish for the named site. The site name
@@ -156,19 +157,32 @@ func (w *SiteWriter) AddFile(relpath string, r io.Reader) error {
 		return fmt.Errorf("create site temp file: %w", err)
 	}
 	tmpName := tmp.Name()
-	if _, err := io.Copy(tmp, r); err != nil {
+	// Decompressed bytes are charged as they are written, so an archive that
+	// expands past the store quota stops here.
+	cw := &chargedWriter{s: w.store, w: tmp}
+	if _, err := io.Copy(cw, r); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
+		w.store.release(cw.charged)
 		return fmt.Errorf("write site file %q: %w", clean, err)
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
+		w.store.release(cw.charged)
 		return fmt.Errorf("close site file %q: %w", clean, err)
+	}
+	// A path staged twice replaces the earlier file; release its bytes.
+	var replaced int64
+	if fi, err := os.Lstat(dest); err == nil && fi.Mode().IsRegular() {
+		replaced = fi.Size()
 	}
 	if err := os.Rename(tmpName, dest); err != nil {
 		os.Remove(tmpName)
+		w.store.release(cw.charged)
 		return fmt.Errorf("commit site file %q: %w", clean, err)
 	}
+	w.store.release(replaced)
+	w.charged += cw.charged - replaced
 	w.count++
 	return nil
 }
@@ -204,8 +218,9 @@ func (w *SiteWriter) Commit() (int, error) {
 		return 0, fmt.Errorf("commit site: %w", err)
 	}
 	w.done = true
+	w.store.settle(w.charged)
 	if backup != "" {
-		os.RemoveAll(backup)
+		_ = w.store.removeLiveTree(backup)
 	}
 	return w.count, nil
 }
@@ -217,7 +232,10 @@ func (w *SiteWriter) Abort() error {
 		return nil
 	}
 	w.done = true
-	return os.RemoveAll(w.tmpDir)
+	err := os.RemoveAll(w.tmpDir)
+	w.store.release(w.charged)
+	w.charged = 0
+	return err
 }
 
 // SiteExists reports whether the named site has been published.
@@ -239,7 +257,7 @@ func (s *Store) DeleteSite(site string) error {
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return ErrNotFound
 	}
-	if err := os.RemoveAll(dir); err != nil {
+	if err := s.removeLiveTree(dir); err != nil {
 		return fmt.Errorf("delete site: %w", err)
 	}
 	return nil

@@ -88,6 +88,8 @@ type Store struct {
 	notifier Notifier
 	// locks serializes writers to the same slug (generation.go).
 	locks slugLocks
+	// quota is the optional aggregate storage accounting (quota.go).
+	quota quotaState
 }
 
 // Open opens (creating if needed) a store rooted at dir. The store root, its
@@ -333,7 +335,7 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 	if opts.Source != nil {
 		sourceGen = gen
 		if err := s.writeSource(s.sourceFile(slug, sourceGen), opts.Source); err != nil {
-			os.Remove(s.blobFile(slug, gen))
+			_ = s.removeLive(s.blobFile(slug, gen))
 			return Artifact{}, err
 		}
 	}
@@ -508,11 +510,15 @@ func (s *Store) writeBlob(final string, r io.Reader) (sniffed string, size int64
 		return "", 0, fmt.Errorf("create temp blob: %w", err)
 	}
 	tmpName := tmp.Name()
+	// Every byte written is charged against the store quota first (quota.go).
+	cw := &chargedWriter{s: s, w: tmp}
 	defer func() {
-		// Remove the temp file if we did not successfully rename it away.
+		// Remove the temp file if we did not successfully rename it away, and
+		// give back what it was charged.
 		if err != nil {
 			tmp.Close()
 			os.Remove(tmpName)
+			s.release(cw.charged)
 		}
 	}()
 
@@ -524,10 +530,10 @@ func (s *Store) writeBlob(final string, r io.Reader) (sniffed string, size int64
 	head = head[:n]
 	sniffed = http.DetectContentType(head)
 
-	if _, werr := tmp.Write(head); werr != nil {
+	if _, werr := cw.Write(head); werr != nil {
 		return "", 0, fmt.Errorf("write blob head: %w", werr)
 	}
-	copied, cerr := io.Copy(tmp, r)
+	copied, cerr := io.Copy(cw, r)
 	if cerr != nil {
 		return "", 0, fmt.Errorf("stream blob: %w", cerr)
 	}
@@ -541,6 +547,7 @@ func (s *Store) writeBlob(final string, r io.Reader) (sniffed string, size int64
 		err = fmt.Errorf("commit blob: %w", rerr)
 		return "", 0, err
 	}
+	s.settle(cw.charged)
 	return sniffed, size, nil
 }
 

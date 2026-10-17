@@ -74,19 +74,24 @@ func (s *Store) writeSource(path string, body []byte) error {
 		return fmt.Errorf("create temp source: %w", err)
 	}
 	tmpName := tmp.Name()
-	if _, err := tmp.Write(body); err != nil {
+	cw := &chargedWriter{s: s, w: tmp}
+	if _, err := cw.Write(body); err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
+		s.release(cw.charged)
 		return fmt.Errorf("write source: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
+		s.release(cw.charged)
 		return fmt.Errorf("close source: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
+		s.release(cw.charged)
 		return fmt.Errorf("commit source: %w", err)
 	}
+	s.settle(cw.charged)
 	return nil
 }
 
@@ -270,12 +275,12 @@ func (s *Store) replaceBodyLocked(slug string, expect *string, r io.Reader) (Art
 		size, gen, time.Now().Unix(), slug, cur,
 	).Scan(&modified)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		os.Remove(s.blobFile(slug, gen))
+		_ = s.removeLive(s.blobFile(slug, gen))
 		return Artifact{}, fmt.Errorf("update body: %w", err)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		// Deleted or republished by another process since the lookup.
-		os.Remove(s.blobFile(slug, gen))
+		_ = s.removeLive(s.blobFile(slug, gen))
 		if _, lerr := s.lookup(slug); errors.Is(lerr, ErrNotFound) {
 			return Artifact{}, ErrNotFound
 		}
