@@ -87,3 +87,18 @@ func TestPublishPathCapped(t *testing.T) {
 		t.Fatalf("a file over the cap: err %+v, want a size refusal", err)
 	}
 }
+
+// errReader fails every read with a non-EOF error.
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+// TestCappedFileProbeErrorFails: once the cap is reached, a read error on the
+// probe for more data fails the stream; it must not read as a clean end,
+// which would upload the first part of a growing file as complete.
+func TestCappedFileProbeErrorFails(t *testing.T) {
+	c := &cappedFile{r: errReader{}, left: 0}
+	if _, err := c.Read(make([]byte, 8)); err == nil || err == io.EOF {
+		t.Fatalf("probe error read as %v, want a failure", err)
+	}
+}

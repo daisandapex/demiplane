@@ -203,27 +203,43 @@ var errPublishPathTooLarge = fmt.Errorf("path is larger than %d bytes", maxPubli
 // maxPublishPathBytes of it. A file that is (or grows) larger fails the read,
 // and so the upload, instead of being truncated.
 type cappedFile struct {
-	f    *os.File
+	f    *os.File  // the opened, checked file (closed by Close)
+	r    io.Reader // what is read: f
 	left int64
 }
 
+// Read passes the file through until the cap; there it probes for one more
+// byte, and only a clean end of file ends the stream. More data, or any read
+// error, fails it, so a growing or failing file is never uploaded truncated.
 func (c *cappedFile) Read(p []byte) (int, error) {
 	if c.left <= 0 {
 		var probe [1]byte
-		if n, _ := c.f.Read(probe[:]); n > 0 {
+		n, err := c.r.Read(probe[:])
+		switch {
+		case n > 0:
 			return 0, errPublishPathTooLarge
+		case err == io.EOF:
+			return 0, io.EOF
+		case err != nil:
+			return 0, err
+		default:
+			return 0, io.ErrNoProgress
 		}
-		return 0, io.EOF
 	}
 	if int64(len(p)) > c.left {
 		p = p[:c.left]
 	}
-	n, err := c.f.Read(p)
+	n, err := c.r.Read(p)
 	c.left -= int64(n)
 	return n, err
 }
 
-func (c *cappedFile) Close() error { return c.f.Close() }
+func (c *cappedFile) Close() error {
+	if c.f == nil {
+		return nil
+	}
+	return c.f.Close()
+}
 
 // openPublishPath opens a model-supplied `path` for the publish tool and
 // returns it as a capped stream: the bytes uploaded are the bytes checked,
@@ -311,7 +327,7 @@ func openPublishPath(c *Client, p string) (*cappedFile, *rpcError) {
 		return nil, refuse("%s", errPublishPathTooLarge.Error())
 	}
 	keep = true
-	return &cappedFile{f: f, left: maxPublishPathBytes}, nil
+	return &cappedFile{f: f, r: f, left: maxPublishPathBytes}, nil
 }
 
 // isTokenFile reports whether fi is the token file recorded at startup or the
