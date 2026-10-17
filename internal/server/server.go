@@ -1193,42 +1193,27 @@ type landingRow struct {
 	locked  bool      // lock glyph (singletons only; a series is mixed)
 }
 
-// collapseSeries folds a newest-first artifact slice into landing rows, grouping
-// by the explicit series value set at publish (?series=). An artifact with no
-// series always stays a plain row; a declared family of two or more collapses to
-// a single reference linking to its newest member. Row order follows
-// first-sighting, which — because the input is newest-first — orders families by
-// their newest member. This is the landing analogue of the gallery's client-side
-// series grouping (slug-prefix inference is gone: one shared token was never a
-// family signal).
-func collapseSeries(pub []store.Artifact) []landingRow {
-	type acc struct {
-		idx     int // position in rows, to update in place
-		members int
-	}
-	seen := make(map[string]*acc)
-	var rows []landingRow
-	for _, a := range pub {
-		if g, ok := seen[a.Series]; a.Series != "" && ok {
-			// A second (or later) member promotes the row to a series: relabel to
-			// the series name, bump the count. The link/date stay on the newest
-			// member (the first one seen), and a mixed family drops the lock glyph.
-			rows[g.idx].label = a.Series
-			rows[g.idx].count = g.members + 1
-			rows[g.idx].locked = false
-			g.members++
-			continue
-		}
-		rows = append(rows, landingRow{
+// familyRows turns NewestPerFamily's result into landing rows: an artifact
+// with no series is a plain row, and a series of two or more members folds
+// into one reference labelled with the series name, counted, linking to its
+// newest member (the artifact given). A one-member series stays a plain row.
+// This is the landing analogue of the gallery's client-side series grouping
+// (slug-prefix inference is gone: one shared token was never a family signal).
+func familyRows(newest []store.Artifact, members map[string]int) []landingRow {
+	rows := make([]landingRow, 0, len(newest))
+	for _, a := range newest {
+		row := landingRow{
 			label:   a.Slug,
 			slug:    a.Slug,
 			count:   1,
 			created: a.CreatedAt,
 			locked:  a.HasPassword(),
-		})
-		if a.Series != "" {
-			seen[a.Series] = &acc{idx: len(rows) - 1, members: 1}
 		}
+		if n := members[a.Series]; a.Series != "" && n > 1 {
+			// A mixed family drops the lock glyph.
+			row.label, row.count, row.locked = a.Series, n, false
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }
@@ -1236,36 +1221,29 @@ func collapseSeries(pub []store.Artifact) []landingRow {
 // artifactTable renders the non-private artifact listing for the --browse case.
 // Private artifacts are excluded (their capability slug is the secret). Links
 // point at the CONTENT origin via contentBase (ADR 0003): the control-plane base
-// has no GET /{slug}, so linking there returned 405. store.List is newest-first;
-// a slug-series collapses to one row (collapseSeries) and the preview is capped
+// has no GET /{slug}, so linking there returned 405. Rows are newest-first; a
+// series collapses to one row (NewestPerFamily, familyRows) and the preview is capped
 // at landingTableCap with an "all N" link to /gallery. The table shows the slug
 // and the published date only — type/size clutter lives in the API, not here
 // (demiplane-0pw).
 func (s *Server) artifactTable(r *http.Request) string {
-	arts, err := s.store.List(store.DefaultOwner)
+	// One family more than the table shows tells whether more exist; nothing
+	// here grows with the number of artifacts.
+	newest, members, public, err := s.store.NewestPerFamily(store.DefaultOwner, landingTableCap+1)
 	if err != nil {
 		log.Printf("browse list failed: %s", logsafe.Err(err))
 		return ""
 	}
 	base := s.contentBase(r)
 
-	// Collect the public artifacts (newest-first order preserved from store.List).
-	var pub []store.Artifact
-	for _, a := range arts {
-		if a.Private {
-			continue
-		}
-		pub = append(pub, a)
-	}
-
 	var b strings.Builder
 	b.WriteString(`<h2>Published</h2>`)
-	if len(pub) == 0 {
+	if len(newest) == 0 {
 		b.WriteString(`<p><em>No public artifacts yet. Publish one above.</em></p>`)
 		return b.String()
 	}
 
-	rows := collapseSeries(pub)
+	rows := familyRows(newest, members)
 
 	b.WriteString(`<table><thead>`)
 	b.WriteString(`<tr><th>artifact</th><th>published</th></tr>`)
@@ -1289,7 +1267,7 @@ func (s *Server) artifactTable(r *http.Request) string {
 	}
 	b.WriteString(`</tbody></table>`)
 	if len(rows) > landingTableCap {
-		fmt.Fprintf(&b, `<p><a href="/gallery">All %s → /gallery</a></p>`, plural(len(pub), "artifact"))
+		fmt.Fprintf(&b, `<p><a href="/gallery">All %s → /gallery</a></p>`, plural(public, "artifact"))
 	} else {
 		b.WriteString(`<p><a href="/gallery">Browse the gallery →</a></p>`)
 	}

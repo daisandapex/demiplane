@@ -1010,22 +1010,22 @@ func TestBrowsePageExcludesPrivate(t *testing.T) {
 	}
 }
 
-// TestCollapseSeries is the unit for the landing table's series folding
-// (demiplane-0pw): an explicit ?series= family collapses to one reference on its
-// newest member; an artifact with no series stays a plain row even when its slug
-// shares a prefix with the family.
-func TestCollapseSeries(t *testing.T) {
+// TestFamilyRows is the unit for the landing table's series folding
+// (demiplane-0pw): a series of two or more collapses to one reference on its
+// newest member; an artifact with no series, or a series of one, stays a
+// plain row even when its slug shares a prefix with a family.
+func TestFamilyRows(t *testing.T) {
 	base := time.Now()
-	pub := []store.Artifact{
-		{Slug: "dispatch-08", Series: "dispatch", CreatedAt: base},                 // newest member
-		{Slug: "dispatch-01", Series: "dispatch", CreatedAt: base.Add(-time.Hour)}, // older member
-		{Slug: "design-lab", CreatedAt: base.Add(-2 * time.Hour)},                  // singleton
-		{Slug: "notes", CreatedAt: base.Add(-3 * time.Hour), PasswordHash: "x"},    // locked singleton
-		{Slug: "dispatch-note", CreatedAt: base.Add(-4 * time.Hour)},               // shared prefix, no series
+	newest := []store.Artifact{
+		{Slug: "dispatch-08", Series: "dispatch", CreatedAt: base},
+		{Slug: "design-lab", CreatedAt: base.Add(-2 * time.Hour)},
+		{Slug: "notes", CreatedAt: base.Add(-3 * time.Hour), PasswordHash: "x"},
+		{Slug: "dispatch-note", CreatedAt: base.Add(-4 * time.Hour)},
+		{Slug: "solo-1", Series: "solo", CreatedAt: base.Add(-5 * time.Hour), PasswordHash: "x"},
 	}
-	rows := collapseSeries(pub)
-	if len(rows) != 4 {
-		t.Fatalf("collapseSeries len = %d, want 4 (one series + three singletons)", len(rows))
+	rows := familyRows(newest, map[string]int{"dispatch": 2, "solo": 1})
+	if len(rows) != 5 {
+		t.Fatalf("familyRows len = %d, want 5", len(rows))
 	}
 	// The series folds to its name, counts its members, links to the newest.
 	if rows[0].label != "dispatch" || rows[0].count != 2 || rows[0].slug != "dispatch-08" {
@@ -1044,6 +1044,10 @@ func TestCollapseSeries(t *testing.T) {
 	// A shared slug prefix without ?series= never joins the family.
 	if rows[3].label != "dispatch-note" || rows[3].count != 1 {
 		t.Errorf("prefix without a series must stay a plain row: %+v", rows[3])
+	}
+	// A series of one is a plain row with its own lock.
+	if rows[4].label != "solo-1" || rows[4].count != 1 || !rows[4].locked {
+		t.Errorf("one-member series row = %+v, want solo-1 count=1 locked", rows[4])
 	}
 }
 
@@ -1068,7 +1072,7 @@ func TestLandingTableSlugOnlyAndCollapsed(t *testing.T) {
 		t.Errorf("landing table still carries a type/size column")
 	}
 	// The dispatch family is one reference with a (3) count, linking to a single
-	// member (its newest — collapseSeries' unit test pins that selection; here we
+	// member (its newest — NewestPerFamily's store test pins that selection; here we
 	// only require a single collapsed row, robust to same-second publish order).
 	if !strings.Contains(page, "dispatch") || !strings.Contains(page, "(3)") {
 		t.Errorf("dispatch series did not collapse to one (3) reference")

@@ -314,6 +314,19 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	); err != nil {
 		return fmt.Errorf("create expiry index: %w", err)
 	}
+	// Index List order, so a page (ListPage, NewestPerFamily) walks the index
+	// from the newest instead of sorting every row.
+	if _, err := s.db.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_artifacts_list ON artifacts(owner, created_at DESC, slug)`,
+	); err != nil {
+		return fmt.Errorf("create list index: %w", err)
+	}
+	// Index series membership for the per-series counts.
+	if _, err := s.db.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_artifacts_series ON artifacts(owner, series) WHERE series <> ''`,
+	); err != nil {
+		return fmt.Errorf("create series index: %w", err)
+	}
 	return nil
 }
 
@@ -1086,6 +1099,96 @@ func (s *Store) ListPage(owner string, after *ListCursor, limit int) ([]Artifact
 	out = out[:limit]
 	last := out[limit-1]
 	return out, &ListCursor{Created: last.CreatedAt.Unix(), Slug: last.Slug}, nil
+}
+
+// NewestPerFamily returns, in List order, up to limit of owner's public
+// artifacts with one per family: the newest member of each explicit series,
+// and every artifact without one. members holds, for each series returned,
+// how many public artifacts it has, and public is the number of owner's
+// public artifacts. Memory is bounded by limit, not by the number of
+// artifacts; the scan stops once limit families are found (a family's older
+// members are read and skipped on the way).
+func (s *Store) NewestPerFamily(owner string, limit int) (newest []Artifact, members map[string]int, public int, err error) {
+	now := time.Now().Unix()
+	rows, err := s.db.Query(
+		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec
+		   FROM artifacts
+		  WHERE owner = ? AND private = 0 AND (expires_at = 0 OR expires_at > ?)
+		  ORDER BY created_at DESC, slug ASC`,
+		owner, now,
+	)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("list families: %w", err)
+	}
+	seen := map[string]bool{}
+	for len(newest) < limit && rows.Next() {
+		var (
+			a       Artifact
+			created int64
+			expires int64
+			private int
+		)
+		if err := rows.Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec); err != nil {
+			rows.Close()
+			return nil, nil, 0, fmt.Errorf("scan artifact: %w", err)
+		}
+		if a.Series != "" {
+			if seen[a.Series] {
+				continue
+			}
+			seen[a.Series] = true
+		}
+		a.CreatedAt = time.Unix(created, 0).UTC()
+		a.Private = private != 0
+		if expires > 0 {
+			a.ExpiresAt = time.Unix(expires, 0).UTC()
+		}
+		newest = append(newest, a)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("iterate families: %w", err)
+	}
+
+	members = map[string]int{}
+	if len(seen) > 0 {
+		names := make([]any, 0, len(seen)+2)
+		names = append(names, owner, now)
+		for name := range seen {
+			names = append(names, name)
+		}
+		q := `SELECT series, COUNT(*) FROM artifacts
+		       WHERE owner = ? AND private = 0 AND (expires_at = 0 OR expires_at > ?)
+		         AND series IN (?` + strings.Repeat(",?", len(seen)-1) + `)
+		       GROUP BY series`
+		crows, err := s.db.Query(q, names...)
+		if err != nil {
+			return nil, nil, 0, fmt.Errorf("count series: %w", err)
+		}
+		for crows.Next() {
+			var name string
+			var n int
+			if err := crows.Scan(&name, &n); err != nil {
+				crows.Close()
+				return nil, nil, 0, fmt.Errorf("scan series count: %w", err)
+			}
+			members[name] = n
+		}
+		err = crows.Err()
+		crows.Close()
+		if err != nil {
+			return nil, nil, 0, fmt.Errorf("iterate series counts: %w", err)
+		}
+	}
+
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM artifacts WHERE owner = ? AND private = 0 AND (expires_at = 0 OR expires_at > ?)`,
+		owner, now,
+	).Scan(&public); err != nil {
+		return nil, nil, 0, fmt.Errorf("count public artifacts: %w", err)
+	}
+	return newest, members, public, nil
 }
 
 // Count returns the number of non-expired artifacts owned by owner.

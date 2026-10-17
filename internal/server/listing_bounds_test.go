@@ -188,3 +188,50 @@ func TestListingRejectsABadCursor(t *testing.T) {
 		}
 	}
 }
+
+// TestBrowseIndexMemoryDoesNotGrowWithArtifacts: the browse index at GET /
+// renders a capped table, so rendering it with 3000 artifacts must not
+// allocate much more than with 300.
+func TestBrowseIndexMemoryDoesNotGrowWithArtifacts(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	put := func(from, to int) {
+		for i := from; i < to; i++ {
+			opts := store.PutOptions{Slug: fmt.Sprintf("art-%05d", i)}
+			if i%3 == 0 {
+				opts.Series = fmt.Sprintf("fam-%d", i%7)
+			}
+			if _, err := st.Put(opts, strings.NewReader("x")); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	h := New(st, Config{Browse: true}).Handler()
+	measure := func() uint64 {
+		get := func() {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "art-") {
+				t.Fatalf("GET / = %d", w.Code)
+			}
+		}
+		get() // warm caches
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		get()
+		runtime.ReadMemStats(&after)
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	put(0, 300)
+	small := measure()
+	put(300, 3000)
+	large := measure()
+	t.Logf("GET / allocated %d bytes with 300 artifacts, %d with 3000", small, large)
+	if large > 2*small {
+		t.Errorf("GET / allocated %d bytes with 3000 artifacts, %d with 300: it grows with the instance", large, small)
+	}
+}

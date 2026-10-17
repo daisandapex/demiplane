@@ -724,3 +724,62 @@ func TestListPageWalksEveryArtifactOnce(t *testing.T) {
 		}
 	}
 }
+
+// TestNewestPerFamily: one artifact per family in List order (a series'
+// newest member, every artifact without a series), stopping at limit, with
+// whole-series member counts and the public total; private artifacts never
+// appear or count.
+func TestNewestPerFamily(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	put := func(slug, series string, age int64, private bool) {
+		t.Helper()
+		opts := PutOptions{Slug: slug, Series: series, Private: private}
+		if private {
+			opts.Slug = "" // private artifacts take a generated slug
+		}
+		a, err := st.Put(opts, strings.NewReader("x"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.db.Exec(`UPDATE artifacts SET created_at = ? WHERE slug = ?`, 1700000000-age, a.Slug); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("dispatch-08", "dispatch", 0, false)
+	put("dispatch-01", "dispatch", 10, false)
+	put("design-lab", "", 20, false)
+	put("dispatch-00", "dispatch", 25, false)
+	put("notes", "", 30, false)
+	put("solo-1", "solo", 40, false)
+	put("hidden", "", 5, true)
+
+	newest, members, public, err := st.NewestPerFamily(DefaultOwner, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var slugs []string
+	for _, a := range newest {
+		slugs = append(slugs, a.Slug)
+	}
+	if got, want := strings.Join(slugs, " "), "dispatch-08 design-lab notes solo-1"; got != want {
+		t.Errorf("families = %q, want %q", got, want)
+	}
+	if members["dispatch"] != 3 || members["solo"] != 1 || len(members) != 2 {
+		t.Errorf("members = %v, want dispatch 3, solo 1", members)
+	}
+	if public != 6 {
+		t.Errorf("public = %d, want 6", public)
+	}
+
+	newest, members, _, err = st.NewestPerFamily(DefaultOwner, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(newest) != 2 || newest[1].Slug != "design-lab" || len(members) != 1 {
+		t.Errorf("limit 2: %d families ending %v, members %v", len(newest), newest, members)
+	}
+}
