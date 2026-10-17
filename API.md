@@ -617,6 +617,9 @@ site's index URL on the content origin. A `?fmt=tar|zip` hint disambiguates the
 archive; otherwise the format is sniffed. Body size is always capped for a site
 publish (the archive is buffered for extraction). Read a site back at
 `GET /{site}/{path}` on the content origin; `GET /{site}/` serves its index.
+Sites are public and do not expire: a site upload that asks for `?private`,
+`?ttl`, `?password` or an `X-Demiplane-Password` header is refused with `400`
+before the archive is read.
 
 ```bash
 # publish a directory as a zip site

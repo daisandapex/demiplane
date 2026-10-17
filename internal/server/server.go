@@ -346,6 +346,13 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	// ingests a tar/zip/multipart archive as a path-structured site. site.go owns
 	// the whole path; nil = feature not wired into this build.
 	if q.Has("site") {
+		// Sites do not implement privacy, expiry or passwords. Refuse a request
+		// for any of them before the archive is read, rather than silently
+		// publishing it public and permanent.
+		if msg := unsupportedSiteOption(q, r.Header); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
 		if publishSite != nil {
 			publishSite(s, w, r)
 		} else {
@@ -560,6 +567,23 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
 	fmt.Fprintln(w, url)
+}
+
+// unsupportedSiteOption returns an error message when a ?site= upload asks for
+// a protection sites do not provide (?private, ?ttl, a view password in the
+// header or the query), or "" when it asks for none. ?private=false and an
+// empty ?ttl= request nothing and pass.
+func unsupportedSiteOption(q url.Values, h http.Header) string {
+	const tail = " is not supported for ?site= uploads; publish the files individually to use it"
+	switch {
+	case queryFlag(q, "private"):
+		return "?private" + tail
+	case q.Get("ttl") != "":
+		return "?ttl" + tail
+	case q.Has("password"), len(h.Values(PasswordHeader)) > 0:
+		return "a view password (" + PasswordHeader + ")" + tail
+	}
+	return ""
 }
 
 // handleGet serves an artifact's bytes with the stored content-type, inline or

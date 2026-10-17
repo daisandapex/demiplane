@@ -146,7 +146,11 @@ inherits the posture above and was reviewed adversarially before release.
   bytes** across all entries — enforced identically for zip **and** tar, so a
   compression- or sparse-tar bomb is rejected with `413` — plus a file-count cap.
   Served assets keep the flat-artifact posture (global `nosniff`; `script-src
-  'none'` CSP on SVG/XML).
+  'none'` CSP on SVG/XML). Sites have no privacy,
+  expiry or password support: a site upload that asks for `?private`, `?ttl`,
+  `?password` or an `X-Demiplane-Password` header is refused with `400` before
+  the archive is read, rather than published public and permanent. A site is
+  readable by anyone who can reach the content origin until it is replaced.
 
 ## Hardening notes
 

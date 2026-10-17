@@ -8,6 +8,9 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **Site uploads refuse options sites do not support.** `?site=` with
+  `?private`, `?ttl`, `?password` or `X-Demiplane-Password` is a `400` before
+  the archive is read; previously the options were ignored.
 - **`demiplane receive` refuses route names.** Route names are reserved when a
   route registers, not when the HTTP handlers are built, so SSH ingest can no
   longer create an artifact a route shadows (`gallery`, `connect`, `answer`
