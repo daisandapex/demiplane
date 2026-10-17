@@ -191,7 +191,7 @@ func runServe(args []string) error {
 	liveMaxTotal := fs.Int("live-max-total", 256, "live-reload streams in all; when full, a new client replaces the oldest stream of a client holding at least two more, else gets 503")
 	liveMaxPending := fs.Int("live-max-pending", 32, "live-reload requests waiting, in all, for an ended stream's slot (up to 11s each); past it 503")
 	liveMaxPendingPerClient := fs.Int("live-max-pending-per-client", 1, "live-reload requests waiting from one client for an ended stream's slot; past it 503")
-	renderConcurrency := fs.Int("render-concurrency", 0, "max markdown renders at once (0 = GOMAXPROCS, capped at 4); a render that waits 5s for a slot gets 503")
+	renderConcurrency := fs.Int("render-concurrency", 0, "max markdown renders at once (0 = GOMAXPROCS, capped at 4), each holding its document and page in memory until stored; a render that waits 5s for a slot gets 503")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

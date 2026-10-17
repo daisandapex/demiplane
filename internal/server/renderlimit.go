@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"runtime"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/render"
+	"github.com/daisandapex/demiplane/internal/store"
 )
 
 // renderlimit.go bounds markdown rendering on the server: each render runs
@@ -72,13 +74,9 @@ func (s *Server) acquireRender(ctx context.Context) (release func(), err error) 
 	}
 }
 
-// renderDoc renders src under a slot and the configured limits.
-func (s *Server) renderDoc(ctx context.Context, src []byte, opts render.Options) ([]byte, error) {
-	release, err := s.acquireRender(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer release()
+// renderInSlot renders src under the configured limits. The caller holds a
+// render slot (acquireRender).
+func (s *Server) renderInSlot(ctx context.Context, src []byte, opts render.Options) ([]byte, error) {
 	if renderHeld != nil {
 		renderHeld()
 	}
@@ -102,4 +100,53 @@ func writeRenderError(w http.ResponseWriter, err error) {
 		log.Printf("render failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
+}
+
+// spoolRenderInput receives a ?render=md publish body into a scratch file in
+// the store (charged to the quota while it exists), then takes a render slot
+// and reads the document into memory. On success it returns the document and
+// the slot's release, which the caller defers so the slot is held through the
+// store write. On failure it has answered the request and returns ok=false.
+func (s *Server) spoolRenderInput(w http.ResponseWriter, r *http.Request, body io.Reader) (data []byte, release func(), ok bool) {
+	tmp, err := s.store.NewScratch()
+	if err != nil {
+		log.Printf("render publish: scratch file: %s", logsafe.Err(err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil, nil, false
+	}
+	defer tmp.Close()
+	n, err := io.Copy(tmp, io.LimitReader(body, maxRenderBytes+1))
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		switch {
+		case errors.As(err, &maxErr):
+			// An over-limit body (when --max-upload is set): 413, not 500.
+			http.Error(w, "upload exceeds the configured size limit", http.StatusRequestEntityTooLarge)
+		case errors.Is(err, store.ErrQuota):
+			http.Error(w, quotaMessage, http.StatusInsufficientStorage)
+		case isBodyTimeout(err):
+			http.Error(w, bodyTimeoutMessage, http.StatusRequestTimeout)
+		default:
+			log.Printf("render read failed: %s", logsafe.Err(err))
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
+		return nil, nil, false
+	}
+	if n > maxRenderBytes {
+		http.Error(w, "markdown document too large to render", http.StatusRequestEntityTooLarge)
+		return nil, nil, false
+	}
+	release, err = s.acquireRender(r.Context())
+	if err != nil {
+		writeRenderError(w, err)
+		return nil, nil, false
+	}
+	data = make([]byte, n)
+	if _, err := tmp.ReadAt(data, 0); err != nil {
+		release()
+		log.Printf("render read failed: %s", logsafe.Err(err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil, nil, false
+	}
+	return data, release, true
 }

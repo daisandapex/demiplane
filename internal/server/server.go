@@ -645,8 +645,12 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Optional markdown→HTML render. This path buffers the (small) document
-	// rather than streaming, bounded by maxRenderBytes.
+	// Optional markdown→HTML render. The document (at most maxRenderBytes) is
+	// spooled to a scratch file in the store while it arrives, so a slow or
+	// stalled upload holds disk charged to the quota, not memory or a render
+	// slot. Once it is complete, a render slot is taken and held through the
+	// store write: the document and the page are in memory only while a slot
+	// is held, so --render-concurrency bounds them too.
 	//
 	// The buffered document is also RETAINED (sourceBody/renderSpec below): the
 	// baked HTML is a lossy, one-way projection of it, so keeping only the HTML
@@ -666,27 +670,11 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if renderRequested(q) {
-		data, rerr := io.ReadAll(io.LimitReader(body, maxRenderBytes+1))
-		if rerr != nil {
-			// An over-limit body (when --max-upload is set) surfaces here too —
-			// return 413, not a generic 500.
-			var maxErr *http.MaxBytesError
-			if errors.As(rerr, &maxErr) {
-				http.Error(w, "upload exceeds the configured size limit", http.StatusRequestEntityTooLarge)
-				return
-			}
-			if isBodyTimeout(rerr) {
-				http.Error(w, bodyTimeoutMessage, http.StatusRequestTimeout)
-				return
-			}
-			log.Printf("render read failed: %s", logsafe.Err(rerr))
-			http.Error(w, "internal error", http.StatusInternalServerError)
+		data, release, ok := s.spoolRenderInput(w, r, body)
+		if !ok {
 			return
 		}
-		if len(data) > maxRenderBytes {
-			http.Error(w, "markdown document too large to render", http.StatusRequestEntityTooLarge)
-			return
-		}
+		defer release()
 		// Colophon metadata (demiplane-rwj): the renderer self-measures the
 		// document's own byte length for "size" (that length IS the stored artifact
 		// size), so we only supply the publish time, the same-family siblings for
@@ -696,7 +684,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		// nav (a generated slug is not a stable link target). A List error is
 		// non-fatal — the colophon just shows the meta row with no series nav.
 		published := time.Now()
-		page, rerr := s.renderDoc(r.Context(), data, render.Options{
+		page, rerr := s.renderInSlot(r.Context(), data, render.Options{
 			Theme:       s.renderTheme,
 			CSS:         s.renderCSS,
 			Title:       named, // slug fallback; the body's first H1 wins when present
