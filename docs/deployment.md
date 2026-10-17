@@ -126,7 +126,8 @@ connections, so raise it or set it to `0`. View-password limits: `--password-con
 one off): `--password-rate-client-target` [`10:10`], `--password-rate-client` [`20:10`],
 `--password-rate-target` [`10:10`], `--password-rate-global` [`120:30`]. Live-reload stream
 caps (each at least 1): `--live-max-per-client-slug` [2], `--live-max-per-client` [16],
-`--live-max-per-slug` [16], `--live-max-total` [256]. See [SECURITY.md](../SECURITY.md#resource-limits). Content-type
+`--live-max-per-slug` [16], `--live-max-total` [256], and requests waiting for a freed
+stream slot: `--live-max-pending` [32], `--live-max-pending-per-client` [1]. See [SECURITY.md](../SECURITY.md#resource-limits). Content-type
 is inferred from the filename extension, then sniffed from the bytes; known web types
 serve **inline**, everything else as a download.
 

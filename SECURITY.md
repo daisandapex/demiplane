@@ -268,7 +268,10 @@ inherits the posture above and was reviewed adversarially before release.
   the oldest stream of a client holding at least two more streams than it
   does; otherwise it gets `503`. An ended stream keeps its slot until its
   connection closes (at most the 10s write timeout). So no client holds more
-  than its share while others wait. The stream sends periodic heartbeats and drops consumers on a
+  than its share while others wait. A request that must wait for an ended
+  stream's connection to close gives up its ordinary request slot first, so
+  waiting requests cannot starve the listener; at most 32 wait at once and one
+  per client, each for at most 11s. The stream sends periodic heartbeats and drops consumers on a
   write deadline or context cancel.
 - **Multi-file archive ingest (`POST /publish?site=`).** Tar, zip, and multipart
   bundles are accepted behind the publish token. Every entry path is
@@ -385,6 +388,7 @@ only in `-tags reply` builds.
 | View password | one client's failed attempts on one artifact / on any artifact; past it `429` without hashing | 10 / 20 a minute (bursts 10, 10) | `--password-rate-client-target`, `--password-rate-client` |
 | View password | all clients' failed attempts on one artifact / in all; once spent, clients that failed recently get `429` without hashing | 10 / 120 a minute (bursts 10, 30) | `--password-rate-target`, `--password-rate-global` |
 | Live reload | streams per client on one artifact / per client in all; past it `503` | 2 / 16 | `--live-max-per-client-slug`, `--live-max-per-client` |
+| Live reload | requests waiting for an ended stream's slot, in all / per client; they hold no request slot while waiting, wait at most 11s, and the excess gets `503` at once | 32 / 1 | `--live-max-pending`, `--live-max-pending-per-client` |
 | Live reload | streams per artifact / in all; when full, a new client replaces the oldest stream of a client holding at least two more streams, otherwise `503` | 16 / 256 | `--live-max-per-slug`, `--live-max-total` |
 | Request body | non-upload body must arrive within; uploads: grace and longest stall | 30s | `--body-timeout` |
 | Request body | upload average rate after the grace; slower gets `408` | 16 KiB/s | `--upload-min-rate` |
