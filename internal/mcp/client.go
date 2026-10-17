@@ -171,7 +171,9 @@ func (c *Client) auth(req *http.Request) {
 
 // PublishParams are the validated inputs to a publish call.
 type PublishParams struct {
-	Content  []byte
+	Content []byte
+	// Body, when set, is streamed as the request body instead of Content.
+	Body     io.Reader
 	Slug     string
 	Private  bool
 	TTL      string
@@ -220,7 +222,11 @@ func (c *Client) Publish(ctx context.Context, p PublishParams) (*PublishResult, 
 		u += "?" + q.Encode()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(p.Content))
+	var body io.Reader = bytes.NewReader(p.Content)
+	if p.Body != nil {
+		body = p.Body
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, body)
 	if err != nil {
 		return nil, err
 	}

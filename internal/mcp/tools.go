@@ -6,6 +6,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -141,16 +142,20 @@ func callPublish(ctx context.Context, c *Client, raw json.RawMessage) (*toolResu
 		return nil, &rpcError{Code: codeInvalidParams, Message: "provide exactly one of `content` or `path`"}
 	}
 
-	var body []byte
+	var (
+		body   []byte
+		stream io.Reader
+	)
 	filename := a.Filename
 	if hasContent {
 		body = []byte(*a.Content)
 	} else {
-		b, rerr := readPublishPath(c, a.Path)
+		f, rerr := openPublishPath(c, a.Path)
 		if rerr != nil {
 			return nil, rerr
 		}
-		body = b
+		defer f.Close()
+		stream = f
 		if filename == "" {
 			filename = baseName(a.Path)
 		}
@@ -170,6 +175,7 @@ func callPublish(ctx context.Context, c *Client, raw json.RawMessage) (*toolResu
 
 	res, err := c.Publish(ctx, PublishParams{
 		Content:  body,
+		Body:     stream,
 		Slug:     a.Slug,
 		Private:  a.Private,
 		TTL:      a.TTL,
@@ -178,14 +184,51 @@ func callPublish(ctx context.Context, c *Client, raw json.RawMessage) (*toolResu
 		Filename: filename,
 		Password: a.Password,
 	})
+	if errors.Is(err, errPublishPathTooLarge) {
+		return nil, &rpcError{Code: codeInvalidParams, Message: errPublishPathTooLarge.Error()}
+	}
 	if err != nil {
 		return nil, upstreamError(err)
 	}
 	return textResult(res.URL), nil
 }
 
-// readPublishPath reads a model-supplied `path` for the publish tool. Tool
-// arguments are attacker-influenceable (a prompt-injected model chooses this
+// maxPublishPathBytes caps a file published by `path`; it matches the
+// server's default upload cap. A var so tests can lower it.
+var maxPublishPathBytes int64 = 100 << 20
+
+var errPublishPathTooLarge = fmt.Errorf("path is larger than %d bytes", maxPublishPathBytes)
+
+// cappedFile streams an opened, checked file into the upload, at most
+// maxPublishPathBytes of it. A file that is (or grows) larger fails the read,
+// and so the upload, instead of being truncated.
+type cappedFile struct {
+	f    *os.File
+	left int64
+}
+
+func (c *cappedFile) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		var probe [1]byte
+		if n, _ := c.f.Read(probe[:]); n > 0 {
+			return 0, errPublishPathTooLarge
+		}
+		return 0, io.EOF
+	}
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	n, err := c.f.Read(p)
+	c.left -= int64(n)
+	return n, err
+}
+
+func (c *cappedFile) Close() error { return c.f.Close() }
+
+// openPublishPath opens a model-supplied `path` for the publish tool and
+// returns it as a capped stream: the bytes uploaded are the bytes checked,
+// read from the checked descriptor as the request is sent, never held whole.
+// Tool arguments are attacker-influenceable (a prompt-injected model chooses this
 // value, unlike the human-chosen CLI path), so this read is a potential
 // arbitrary-file-read-and-publish primitive. Every check below applies whether
 // the token came from a file or from the environment:
@@ -208,7 +251,7 @@ func callPublish(ctx context.Context, c *Client, raw json.RawMessage) (*toolResu
 //
 // All identity checks run on the opened descriptor, so the bytes read are the
 // bytes that were checked.
-func readPublishPath(c *Client, p string) ([]byte, *rpcError) {
+func openPublishPath(c *Client, p string) (*cappedFile, *rpcError) {
 	refuse := func(format string, args ...any) *rpcError {
 		return &rpcError{Code: codeInvalidParams, Message: fmt.Sprintf(format, args...)}
 	}
@@ -245,7 +288,12 @@ func readPublishPath(c *Client, p string) ([]byte, *rpcError) {
 	if err != nil {
 		return nil, refuse("read path: %v", err)
 	}
-	defer f.Close()
+	keep := false
+	defer func() {
+		if !keep {
+			f.Close()
+		}
+	}()
 	st, err := f.Stat()
 	if err != nil {
 		return nil, refuse("read path: %v", err)
@@ -259,11 +307,11 @@ func readPublishPath(c *Client, p string) ([]byte, *rpcError) {
 	if c.isTokenFile(st) {
 		return nil, refuse("refusing to publish the bearer token file")
 	}
-	b, err := io.ReadAll(f)
-	if err != nil {
-		return nil, refuse("read path: %v", err)
+	if st.Size() > maxPublishPathBytes {
+		return nil, refuse("%s", errPublishPathTooLarge.Error())
 	}
-	return b, nil
+	keep = true
+	return &cappedFile{f: f, left: maxPublishPathBytes}, nil
 }
 
 // isTokenFile reports whether fi is the token file recorded at startup or the
