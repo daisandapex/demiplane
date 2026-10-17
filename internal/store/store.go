@@ -104,6 +104,9 @@ type Store struct {
 	quota quotaState
 	// open counts readers of open store files (readers.go).
 	open openFiles
+	// deferDeletions leaves removed generations' files to the serving
+	// process (DeferDeletions).
+	deferDeletions bool
 	// formKey signs reply-form submission tokens (secret.go).
 	formKey []byte
 }

@@ -238,10 +238,25 @@ func queueDeletion(tx *sql.Tx, slug, blobGen, sourceGen string) error {
 	return nil
 }
 
+// DeferDeletions makes this store leave the files of a replaced, deleted or
+// expired generation in place, recorded as a pending deletion, for the
+// serving process's sweeper to remove. Call it at startup in a process that
+// shares the store with a running server (`demiplane receive`). Only the
+// server knows which files its downloads hold open, and a file it unlinks
+// while one does stays charged until the download ends (readers.go); a file
+// another process unlinked would leave the server's quota short of the disk
+// blocks still in use. The cost is that the old bytes stay on disk until the
+// server's next sweep (--sweep-interval, a minute by default), or until a
+// server next starts.
+func (s *Store) DeferDeletions() { s.deferDeletions = true }
+
 // finishDeletion unlinks a recorded generation and clears its record. A
 // failure is logged (redacted: the paths carry the slug) and left for the
 // sweeper to retry. The caller holds slug's lock.
 func (s *Store) finishDeletion(slug, blobGen, sourceGen string) {
+	if s.deferDeletions {
+		return // recorded; the serving process removes it (DeferDeletions)
+	}
 	if err := s.removeGenFiles(slug, blobGen, sourceGen); err != nil {
 		log.Printf("store: could not remove artifact files for %s, will retry: %s",
 			logsafe.Slug(slug), logsafe.Err(err, slug))
@@ -259,6 +274,9 @@ func (s *Store) finishDeletion(slug, blobGen, sourceGen string) {
 // row names again is never removed (generations are random, so this is a
 // guard, not an expected case); its record is dropped.
 func (s *Store) retryPendingDeletions() error {
+	if s.deferDeletions {
+		return nil
+	}
 	type pending struct{ slug, blobGen, sourceGen string }
 	rows, err := s.db.Query(`SELECT slug, blob_gen, source_gen FROM pending_deletions`)
 	if err != nil {

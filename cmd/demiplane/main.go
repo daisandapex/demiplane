@@ -706,6 +706,9 @@ func runReceive(args []string) error {
 		return err
 	}
 	defer st.Close()
+	// The running server removes what this replaces: it knows which old
+	// generations its downloads still hold.
+	st.DeferDeletions()
 	if c.storeQuota > 0 {
 		if err := st.SetQuota(c.storeQuota); err != nil {
 			return err
