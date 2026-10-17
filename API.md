@@ -686,7 +686,7 @@ token, like `GET /list`.
 | `429 Too Many Requests` | Too many failed view-password attempts or reply submissions (with `Retry-After`), or an artifact reached its reply limit. |
 | `501 Not Implemented` | A feature (for example `?site=`) is not compiled into this build. |
 | `503 Service Unavailable` | A module (for example reply storage) is temporarily unavailable, or the server is at a concurrency limit (requests in progress, password checks, renders, the reply hook pool); retry after `Retry-After`. |
-| `507 Insufficient Storage` | The write would pass `--store-quota`, or the aggregate reply limits are reached. |
+| `507 Insufficient Storage` | The write would pass `--store-quota`, the sites would hold more than 100,000 files and directories in all, or the aggregate reply limits are reached. |
 
 ## Reserved slugs
 

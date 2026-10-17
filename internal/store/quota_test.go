@@ -83,8 +83,9 @@ func assertAccounted(t *testing.T, s *Store) {
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM artifacts`).Scan(&rows); err != nil {
 		t.Fatal(err)
 	}
-	if want := diskBytes(t, s) + rows*metaAllowance; used != want {
-		t.Errorf("usage = %d, bytes on disk + %d row allowances = %d", used, rows, want)
+	entries := siteEntries(t, s)
+	if want := diskBytes(t, s) + (rows+entries)*metaAllowance; used != want {
+		t.Errorf("usage = %d, bytes on disk + %d row and %d site-entry allowances = %d", used, rows, entries, want)
 	}
 	if left := tempFiles(t, s); len(left) != 0 {
 		t.Errorf("temp files left behind: %v", left)
@@ -320,11 +321,12 @@ func TestQuotaCountsExistingStore(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	defer s2.Close()
-	if err := s2.SetQuota(1000 + 2*metaAllowance); err != nil {
+	// Allowances: the rows a and b, the site's directory and its file.
+	if err := s2.SetQuota(1000 + 4*metaAllowance); err != nil {
 		t.Fatalf("SetQuota: %v", err)
 	}
-	if used, _ := s2.Usage(); used != 800+metaAllowance {
-		t.Errorf("usage of an existing store = %d, want 800 plus one row allowance", used)
+	if used, _ := s2.Usage(); used != 800+3*metaAllowance {
+		t.Errorf("usage of an existing store = %d, want 800 plus one row and two site-entry allowances", used)
 	}
 	if _, err := s2.Put(PutOptions{Slug: "b"}, bytes.NewReader(payload(201))); !errors.Is(err, ErrQuota) {
 		t.Fatalf("Put past the existing usage: %v, want ErrQuota", err)
@@ -335,7 +337,9 @@ func TestQuotaCountsExistingStore(t *testing.T) {
 }
 
 func TestQuotaSiteWriterChargesAndReleases(t *testing.T) {
-	s := newQuotaStore(t, 1000)
+	// Room for a staged re-publish beside the live site: two trees of a
+	// directory and one 400-byte file.
+	s := newQuotaStore(t, 1000+4*metaAllowance)
 
 	// Abort releases the staged files.
 	sw, err := s.NewSiteWriter("site")
@@ -345,7 +349,7 @@ func TestQuotaSiteWriterChargesAndReleases(t *testing.T) {
 	if err := sw.AddFile("a.html", bytes.NewReader(payload(600))); err != nil {
 		t.Fatalf("AddFile: %v", err)
 	}
-	if err := sw.AddFile("b.html", bytes.NewReader(payload(600))); !errors.Is(err, ErrQuota) {
+	if err := sw.AddFile("b.html", bytes.NewReader(payload(metaAllowance+500))); !errors.Is(err, ErrQuota) {
 		t.Fatalf("AddFile past the quota: %v, want ErrQuota", err)
 	}
 	sw.Abort()
@@ -366,8 +370,8 @@ func TestQuotaSiteWriterChargesAndReleases(t *testing.T) {
 			t.Fatalf("Commit %d: %v", i, err)
 		}
 	}
-	if used, _ := s.Usage(); used != 400 {
-		t.Errorf("usage after site re-publishes = %d, want 400", used)
+	if used, _ := s.Usage(); used != 400+2*metaAllowance {
+		t.Errorf("usage after site re-publishes = %d, want %d", used, 400+2*metaAllowance)
 	}
 	if err := s.DeleteSite("site"); err != nil {
 		t.Fatalf("DeleteSite: %v", err)
@@ -610,4 +614,168 @@ func TestQuotaBoundsMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertAccounted(t, s)
+}
+
+// siteEntries counts every file and directory under sites/, temp entries
+// included: what the site trees occupy on disk.
+func siteEntries(t *testing.T, s *Store) int64 {
+	t.Helper()
+	var n int64
+	root := s.siteRoot()
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if p != root {
+			n++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk sites: %v", err)
+	}
+	return n
+}
+
+// publishSite stages files (path -> body) as site and commits it.
+func publishSite(s *Store, site string, files ...string) error {
+	sw, err := s.NewSiteWriter(site)
+	if err != nil {
+		return err
+	}
+	defer sw.Abort()
+	for _, f := range files {
+		if err := sw.AddFile(f, strings.NewReader("")); err != nil {
+			return err
+		}
+	}
+	_, err = sw.Commit()
+	return err
+}
+
+// TestQuotaChargesSiteEntries: every site file and directory counts one
+// allowance on top of its bytes, charged while it is staged, so one archive
+// cannot overshoot; replacing or deleting a site releases its entries, and a
+// recount or a restart measures them again.
+func TestQuotaChargesSiteEntries(t *testing.T) {
+	const limit = 16 * metaAllowance
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetQuota(limit); err != nil {
+		t.Fatal(err)
+	}
+	// 1 + 17 entries: refused while staging, nothing left behind.
+	var deep []string
+	for i := 0; i < 17; i++ {
+		deep = append(deep, fmt.Sprintf("f%d", i))
+	}
+	if err := publishSite(s, "big", deep...); !errors.Is(err, ErrQuota) {
+		t.Fatalf("site of 18 entries under a 16-entry quota: %v, want ErrQuota", err)
+	}
+	if used, _ := s.Usage(); used != 0 {
+		t.Fatalf("usage after a refused site = %d, want 0", used)
+	}
+	if n := siteEntries(t, s); n != 0 {
+		t.Fatalf("refused site left %d entries", n)
+	}
+	// Site dir + a + b + c.txt: four entries each, so four sites fill it.
+	for i := 0; i < 4; i++ {
+		if err := publishSite(s, fmt.Sprintf("s%d", i), "a/b/c.txt"); err != nil {
+			t.Fatalf("site %d: %v", i, err)
+		}
+	}
+	if err := publishSite(s, "s4", "x.txt"); !errors.Is(err, ErrQuota) {
+		t.Fatalf("site past the quota: %v, want ErrQuota", err)
+	}
+	assertAccounted(t, s)
+	if err := s.RecountUsage(); err != nil {
+		t.Fatal(err)
+	}
+	if used, _ := s.Usage(); used != limit {
+		t.Fatalf("usage after a recount = %d, want %d", used, limit)
+	}
+	s.Close()
+	if s, err = Open(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if err := s.SetQuota(limit); err != nil {
+		t.Fatal(err)
+	}
+	if used, _ := s.Usage(); used != limit {
+		t.Fatalf("usage after a restart = %d, want %d", used, limit)
+	}
+	// A replacement needs room for both trees while it stages, so free some
+	// first; afterwards only the new tree counts.
+	if err := s.DeleteSite("s3"); err != nil {
+		t.Fatal(err)
+	}
+	if used, _ := s.Usage(); used != 12*metaAllowance {
+		t.Fatalf("usage after a delete = %d, want %d", used, 12*metaAllowance)
+	}
+	if err := publishSite(s, "s0", "x.txt"); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	if used, _ := s.Usage(); used != 10*metaAllowance {
+		t.Fatalf("usage after a replace = %d, want %d", used, 10*metaAllowance)
+	}
+	// Staging a path twice does not charge its entries twice.
+	sw, err := s.NewSiteWriter("twice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := sw.AddFile("d/x.txt", strings.NewReader("abc")); err != nil {
+			t.Fatalf("stage %d: %v", i, err)
+		}
+	}
+	if _, err := sw.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if used, _ := s.Usage(); used != 13*metaAllowance+3 {
+		t.Fatalf("usage after restaging one path = %d, want %d", used, 13*metaAllowance+3)
+	}
+	assertAccounted(t, s)
+}
+
+// TestSiteEntryLimit: the store-wide site entry cap holds with no quota,
+// across a restart, and frees with a delete.
+func TestSiteEntryLimit(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetSiteEntryLimit(5)
+	if err := publishSite(s, "a", "d/x.txt"); err != nil {
+		t.Fatal(err)
+	}
+	err = publishSite(s, "b", "d/x.txt")
+	if !errors.Is(err, ErrSiteEntries) || !errors.Is(err, ErrQuota) {
+		t.Fatalf("site past the entry limit: %v, want ErrSiteEntries (an ErrQuota)", err)
+	}
+	if n := siteEntries(t, s); n != 3 {
+		t.Fatalf("%d site entries on disk, want 3", n)
+	}
+	s.Close()
+	if s, err = Open(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	s.SetSiteEntryLimit(5)
+	if err := publishSite(s, "b", "d/x.txt"); !errors.Is(err, ErrSiteEntries) {
+		t.Fatalf("after a restart: %v, want ErrSiteEntries", err)
+	}
+	if err := s.DeleteSite("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishSite(s, "b", "d/x.txt"); err != nil {
+		t.Fatalf("after a delete: %v", err)
+	}
 }

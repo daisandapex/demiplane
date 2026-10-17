@@ -133,6 +133,10 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 
 	sw, err := s.store.NewSiteWriter(site)
 	if err != nil {
+		if errors.Is(err, store.ErrQuota) {
+			http.Error(w, siteQuotaMessage(err), http.StatusInsufficientStorage)
+			return
+		}
 		if isClientError(err) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -157,7 +161,7 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 	count, err := sw.Commit()
 	if err != nil {
 		if errors.Is(err, store.ErrQuota) {
-			http.Error(w, quotaMessage, http.StatusInsufficientStorage)
+			http.Error(w, siteQuotaMessage(err), http.StatusInsufficientStorage)
 			return
 		}
 		if isClientError(err) {
@@ -183,6 +187,15 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, url)
 }
 
+// siteQuotaMessage is the 507 body for a site publish refused for capacity:
+// the byte quota, or the cap on site files and directories.
+func siteQuotaMessage(err error) string {
+	if errors.Is(err, store.ErrSiteEntries) {
+		return "the sites hold the maximum number of files and directories; delete a site"
+	}
+	return quotaMessage
+}
+
 // writeSiteExtractError maps an extraction failure to the right status: the
 // archive-shape caps to 413, a traversal / bad-path (InputError) to 400, and an
 // otherwise-malformed archive to 400.
@@ -193,7 +206,7 @@ func (s *Server) writeSiteExtractError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrDecompressBudget):
 		http.Error(w, "site archive expands beyond the size limit", http.StatusRequestEntityTooLarge)
 	case errors.Is(err, store.ErrQuota):
-		http.Error(w, quotaMessage, http.StatusInsufficientStorage)
+		http.Error(w, siteQuotaMessage(err), http.StatusInsufficientStorage)
 	case isClientError(err):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:

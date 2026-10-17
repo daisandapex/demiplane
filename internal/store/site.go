@@ -105,7 +105,31 @@ type SiteWriter struct {
 	finalDir string // <root>/sites/<site>
 	count    int
 	done     bool
-	charged  int64 // quota bytes charged to the staged files (quota.go)
+	charged  int64 // quota bytes charged to the staged entries (quota.go)
+	entries  int64 // site entries charged to the staged tree, its root included
+}
+
+// chargeEntry charges one new file or directory of the staged tree: one site
+// entry and its allowance (siteentry.go).
+func (w *SiteWriter) chargeEntry() error {
+	if err := w.store.chargeSiteEntries(1); err != nil {
+		return err
+	}
+	if err := w.store.charge(metaAllowance); err != nil {
+		w.store.releaseSiteEntries(1)
+		return err
+	}
+	w.charged += metaAllowance
+	w.entries++
+	return nil
+}
+
+// releaseEntry returns a chargeEntry whose entry was not created.
+func (w *SiteWriter) releaseEntry() {
+	w.store.releaseSiteEntries(1)
+	w.store.release(metaAllowance)
+	w.charged -= metaAllowance
+	w.entries--
 }
 
 // NewSiteWriter starts a transactional publish for the named site. The site name
@@ -122,16 +146,18 @@ func (s *Store) NewSiteWriter(site string) (*SiteWriter, error) {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("create sites dir: %w", err)
 	}
+	w := &SiteWriter{store: s, site: site, finalDir: filepath.Join(root, site)}
+	// The scratch dir becomes the site's own directory: its first entry.
+	if err := w.chargeEntry(); err != nil {
+		return nil, err
+	}
 	tmpDir, err := os.MkdirTemp(root, ".tmp-"+site+"-")
 	if err != nil {
+		w.releaseEntry()
 		return nil, fmt.Errorf("create site scratch dir: %w", err)
 	}
-	return &SiteWriter{
-		store:    s,
-		site:     site,
-		tmpDir:   tmpDir,
-		finalDir: filepath.Join(root, site),
-	}, nil
+	w.tmpDir = tmpDir
+	return w, nil
 }
 
 // AddFile streams one archive entry into the scratch tree at its (validated)
@@ -151,12 +177,36 @@ func (w *SiteWriter) AddFile(relpath string, r io.Reader) error {
 		// Unreachable after cleanSiteRelPath; kept as a hard invariant guard.
 		return inputErrorf("site entry %q escapes the site root", relpath)
 	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
-		return fmt.Errorf("create site dir: %w", err)
+	if err := w.mkdirs(clean); err != nil {
+		return err
+	}
+	// A path staged twice replaces the earlier file and keeps its entry.
+	var (
+		replaced int64
+		newEntry bool
+	)
+	switch fi, err := os.Lstat(dest); {
+	case err == nil && fi.Mode().IsRegular():
+		replaced = fi.Size()
+	case err == nil:
+		return inputErrorf("site entry %q is both a file and a directory", relpath)
+	case os.IsNotExist(err):
+		if err := w.chargeEntry(); err != nil {
+			return err
+		}
+		newEntry = true
+	default:
+		return fmt.Errorf("stat site file %q: %w", clean, err)
+	}
+	fail := func(err error) error {
+		if newEntry {
+			w.releaseEntry()
+		}
+		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(dest), ".w-*")
 	if err != nil {
-		return fmt.Errorf("create site temp file: %w", err)
+		return fail(fmt.Errorf("create site temp file: %w", err))
 	}
 	tmpName := tmp.Name()
 	// Decompressed bytes are charged as they are written, so an archive that
@@ -166,26 +216,49 @@ func (w *SiteWriter) AddFile(relpath string, r io.Reader) error {
 		tmp.Close()
 		os.Remove(tmpName)
 		w.store.release(cw.charged)
-		return fmt.Errorf("write site file %q: %w", clean, err)
+		return fail(fmt.Errorf("write site file %q: %w", clean, err))
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpName)
 		w.store.release(cw.charged)
-		return fmt.Errorf("close site file %q: %w", clean, err)
-	}
-	// A path staged twice replaces the earlier file; release its bytes.
-	var replaced int64
-	if fi, err := os.Lstat(dest); err == nil && fi.Mode().IsRegular() {
-		replaced = fi.Size()
+		return fail(fmt.Errorf("close site file %q: %w", clean, err))
 	}
 	if err := os.Rename(tmpName, dest); err != nil {
 		os.Remove(tmpName)
 		w.store.release(cw.charged)
-		return fmt.Errorf("commit site file %q: %w", clean, err)
+		return fail(fmt.Errorf("commit site file %q: %w", clean, err))
 	}
 	w.store.release(replaced)
 	w.charged += cw.charged - replaced
 	w.count++
+	return nil
+}
+
+// mkdirs creates the parent directories of the staged path clean, charging
+// each one it creates as a site entry before creating it.
+func (w *SiteWriter) mkdirs(clean string) error {
+	segs := strings.Split(clean, "/")
+	dir := w.tmpDir
+	for _, seg := range segs[:len(segs)-1] {
+		dir = filepath.Join(dir, seg)
+		fi, err := os.Lstat(dir)
+		if err == nil {
+			if !fi.IsDir() {
+				return inputErrorf("site entry %q is both a file and a directory", clean)
+			}
+			continue
+		}
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("stat site dir: %w", err)
+		}
+		if err := w.chargeEntry(); err != nil {
+			return err
+		}
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			w.releaseEntry()
+			return fmt.Errorf("create site dir: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -225,7 +298,7 @@ func (w *SiteWriter) Commit() (int, error) {
 		return 0, fmt.Errorf("commit site: %w", err)
 	}
 	w.done = true
-	w.store.endTransition(w.charged, 0)
+	w.store.endSiteTransition(w.charged, 0, w.entries, 0)
 	if backup != "" {
 		_ = w.store.removeLiveTree(backup)
 	}
@@ -241,7 +314,8 @@ func (w *SiteWriter) Abort() error {
 	w.done = true
 	err := os.RemoveAll(w.tmpDir)
 	w.store.release(w.charged)
-	w.charged = 0
+	w.store.releaseSiteEntries(w.entries)
+	w.charged, w.entries = 0, 0
 	return err
 }
 

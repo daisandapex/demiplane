@@ -29,11 +29,12 @@ import (
 // site replacement) releases the size it had on disk.
 //
 // What is counted: the apparent size of regular files under blobs/, sources/
-// and sites/, plus a fixed metadata allowance per artifact row
-// (metaAllowance), which stands in for the metadata database. Not counted:
-// the database's actual size, module data (replies, TLS material),
-// filesystem block overhead, and temp files abandoned by a crash (their
-// ".tmp-" names are skipped when usage is measured).
+// and sites/, plus a fixed allowance (metaAllowance) per artifact row, which
+// stands in for the metadata database, and per site file or directory, which
+// stands in for its inode and directory entry. Not counted: the database's
+// actual size, module data (replies, TLS material), filesystem block
+// overhead, and temp files abandoned by a crash (their ".tmp-" names are
+// skipped when usage is measured).
 //
 // Other processes: `demiplane receive` opens the same store in its own process.
 // Each process charges its own writes against usage measured when it set its
@@ -65,6 +66,10 @@ type quotaState struct {
 	// overlapped it, so a commit is never lost or counted twice.
 	active int
 	gen    uint64
+	// Site files and directories (siteentry.go), live and staged. Kept with
+	// or without a byte quota: they are capped by entryLimit.
+	entries, entriesInflight int64
+	entryLimit               int64
 }
 
 // SetQuota sets the aggregate storage quota in bytes and measures the bytes
@@ -77,12 +82,13 @@ func (s *Store) SetQuota(limit int64) error {
 		s.quota.mu.Unlock()
 		return nil
 	}
-	used, err := s.measureUsage()
+	used, entries, err := s.measureUsage()
 	if err != nil {
 		return err
 	}
 	s.quota.mu.Lock()
 	s.quota.limit, s.quota.committed, s.quota.inflight = limit, used, 0
+	s.quota.entries = entries
 	s.quota.mu.Unlock()
 	return nil
 }
@@ -124,7 +130,7 @@ func (s *Store) RecountUsage() error {
 		if busy {
 			continue
 		}
-		used, err := s.measureUsage()
+		used, entries, err := s.measureUsage()
 		if err != nil {
 			return err
 		}
@@ -134,7 +140,7 @@ func (s *Store) RecountUsage() error {
 		q.mu.Lock()
 		applied := q.limit > 0 && q.active == 0 && q.gen == start
 		if applied {
-			q.committed = used
+			q.committed, q.entries = used, entries
 		}
 		q.mu.Unlock()
 		if applied {
@@ -160,11 +166,25 @@ func (s *Store) beginTransition() {
 // file was deleted). The floor at zero covers removing a file another process
 // wrote after the last measurement.
 func (s *Store) endTransition(settled, removed int64) {
+	s.endSiteTransition(settled, removed, 0, 0)
+}
+
+// endSiteTransition is endTransition for a site tree, which also settles or
+// removes site entries (siteentry.go). Entries are kept with or without a
+// quota; bytes only with one.
+func (s *Store) endSiteTransition(settled, removed, settledEntries, removedEntries int64) {
 	q := &s.quota
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.active--
 	q.gen++
+	if settledEntries > 0 {
+		q.entriesInflight = max(q.entriesInflight-settledEntries, 0)
+		q.entries += settledEntries
+	}
+	if removedEntries > 0 {
+		q.entries = max(q.entries-removedEntries, 0)
+	}
 	if q.limit <= 0 {
 		return
 	}
@@ -196,21 +216,28 @@ func (s *Store) commitRename(from, to string, charged int64) error {
 // afterLiveRename runs between a file becoming live and its accounting.
 var afterUsageWalk, afterLiveRename func()
 
-// measureUsage sums the live regular files under the content directories.
-func (s *Store) measureUsage() (int64, error) {
+// measureUsage sums the live regular files under the content directories
+// and the allowances of the artifact rows and site entries, and returns the
+// site entry count with it.
+func (s *Store) measureUsage() (used, siteEntries int64, err error) {
 	var total int64
-	for _, dir := range []string{s.blobDir, s.sourceDir, s.siteRoot()} {
-		n, err := treeSize(dir)
+	for _, dir := range []string{s.blobDir, s.sourceDir} {
+		n, _, err := treeStats(dir)
 		if err != nil {
-			return 0, fmt.Errorf("measure store usage: %w", err)
+			return 0, 0, fmt.Errorf("measure store usage: %w", err)
 		}
 		total += n
 	}
+	n, entries, err := treeStats(s.siteRoot())
+	if err != nil {
+		return 0, 0, fmt.Errorf("measure store usage: %w", err)
+	}
+	total += n
 	var rows int64
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM artifacts`).Scan(&rows); err != nil {
-		return 0, fmt.Errorf("measure store usage: %w", err)
+		return 0, 0, fmt.Errorf("measure store usage: %w", err)
 	}
-	return total + rows*metaAllowance, nil
+	return total + (rows+entries)*metaAllowance, entries, nil
 }
 
 // validateMeta bounds the user-supplied metadata a publish stores in its row.
@@ -229,11 +256,13 @@ func validateMeta(opts PutOptions) error {
 	return nil
 }
 
-// treeSize sums the regular files under dir, skipping temp entries. A missing
-// dir, or an entry removed during the walk, counts as empty.
-func treeSize(dir string) (int64, error) {
-	var n int64
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+// treeStats sums the regular files under dir and counts its entries (files,
+// directories and anything else, dir itself excluded), skipping temp
+// entries. A missing dir, or an entry removed during the walk, counts as
+// empty.
+func treeStats(dir string) (size, entries int64, err error) {
+	var n, count int64
+	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				return nil
@@ -245,6 +274,9 @@ func treeSize(dir string) (int64, error) {
 				return filepath.SkipDir
 			}
 			return nil
+		}
+		if p != dir {
+			count++
 		}
 		if !d.Type().IsRegular() {
 			return nil
@@ -259,7 +291,7 @@ func treeSize(dir string) (int64, error) {
 		n += fi.Size()
 		return nil
 	})
-	return n, err
+	return n, count, err
 }
 
 // charge reserves n in-flight bytes, failing with ErrQuota when they do not fit.
@@ -326,22 +358,28 @@ func (s *Store) removeLiveFile(path string) (bool, error) {
 	return true, nil
 }
 
-// removeLiveTree removes a live directory tree and releases the size of the
-// files it held. On a partial failure only what is gone is released.
+// removeLiveTree removes a live site tree and releases the size of the files
+// it held and its entries, dir itself included, with their allowances. On a
+// partial failure only what is gone is released.
 func (s *Store) removeLiveTree(dir string) error {
 	s.beginTransition()
-	var removed int64
-	defer func() { s.endTransition(0, removed) }()
-	before, err := treeSize(dir)
+	var removed, removedEntries int64
+	defer func() { s.endSiteTransition(0, removed, 0, removedEntries) }()
+	before, beforeEntries, err := treeStats(dir)
 	if err != nil {
 		return err
 	}
+	beforeEntries++ // dir itself
 	rerr := os.RemoveAll(dir)
-	after := int64(0)
+	var after, afterEntries int64
 	if rerr != nil {
-		after, _ = treeSize(dir)
+		if _, err := os.Lstat(dir); err == nil {
+			after, afterEntries, _ = treeStats(dir)
+			afterEntries++
+		}
 	}
-	removed = before - after
+	removedEntries = beforeEntries - afterEntries
+	removed = before - after + removedEntries*metaAllowance
 	return rerr
 }
 

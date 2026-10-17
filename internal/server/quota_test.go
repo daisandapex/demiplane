@@ -5,6 +5,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -69,8 +70,9 @@ func assertStoreAccounted(t *testing.T, st *store.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := storeDiskBytes(t, st) + int64(len(arts))*store.MetaAllowance; used != want {
-		t.Errorf("usage = %d, bytes on disk + %d row allowances = %d", used, len(arts), want)
+	entries := siteEntryCount(t, st)
+	if want := storeDiskBytes(t, st) + (int64(len(arts))+entries)*store.MetaAllowance; used != want {
+		t.Errorf("usage = %d, bytes on disk + %d row and %d site-entry allowances = %d", used, len(arts), entries, want)
 	}
 	for _, dir := range []string{"blobs", "sources", "sites"} {
 		ents, _ := os.ReadDir(filepath.Join(st.Root(), dir))
@@ -159,8 +161,9 @@ func TestSitePublishQuotaReleasedOnFailureAndReplace(t *testing.T) {
 			t.Fatalf("site publish %d = %d %q", i, resp.StatusCode, rb)
 		}
 	}
-	if used, _ := st.Usage(); used != 2000 {
-		t.Errorf("usage after site re-publishes = %d, want 2000", used)
+	// The bytes plus two entry allowances: the site's directory and its file.
+	if used, _ := st.Usage(); used != 2000+2*store.MetaAllowance {
+		t.Errorf("usage after site re-publishes = %d, want %d", used, 2000+2*store.MetaAllowance)
 	}
 	assertStoreAccounted(t, st)
 }
@@ -206,4 +209,167 @@ func TestPublishMetadataBounded(t *testing.T) {
 		t.Fatalf("empty artifact past the quota = %d %q, want 507", code, b)
 	}
 	assertStoreAccounted(t, st)
+}
+
+// siteEntryCount counts the files and directories of the published sites.
+func siteEntryCount(t *testing.T, st *store.Store) int64 {
+	t.Helper()
+	root := filepath.Join(st.Root(), "sites")
+	var n int64
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if p != root {
+			n++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk sites: %v", err)
+	}
+	return n
+}
+
+// emptyFileArchive is n empty files, each under its own nested directories.
+func emptyFileArchive(t *testing.T, n int) []byte {
+	t.Helper()
+	var files []srcFile
+	for i := 0; i < n; i++ {
+		files = append(files, srcFile{fmt.Sprintf("p%03d/a/b/c/d/e/f/g/index.html", i), ""})
+	}
+	return makeTar(t, files)
+}
+
+// TestSitePublishEntriesCountAgainstQuota: a site's files and directories
+// count against the quota even when empty, so archives of empty files under
+// fresh site names cannot be published without limit, and the charge
+// survives a recount and a restart.
+func TestSitePublishEntriesCountAgainstQuota(t *testing.T) {
+	const limit = 64 << 10
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetQuota(limit); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(New(st, Config{}).Handler())
+
+	flood := emptyFileArchive(t, 100)
+	t.Logf("flood archive: %d bytes", len(flood))
+	refused := 0
+	for i := 0; i < 10; i++ {
+		resp, rb := postSite(t, ts.URL, fmt.Sprintf("flood%d", i), "fmt=tar", "application/x-tar", flood)
+		switch resp.StatusCode {
+		case http.StatusInsufficientStorage:
+			refused++
+		case http.StatusCreated:
+		default:
+			t.Fatalf("flood publish %d = %d %q", i, resp.StatusCode, rb)
+		}
+	}
+	used, _ := st.Usage()
+	t.Logf("after 10 flood publishes: %d refused, usage %d, %d site entries on disk", refused, used, siteEntryCount(t, st))
+	if refused != 10 {
+		t.Fatalf("%d of 10 archives of 100 empty files refused under a %d-byte quota, want all", refused, limit)
+	}
+	if n := siteEntryCount(t, st); n != 0 {
+		t.Fatalf("refused publishes left %d site entries", n)
+	}
+
+	// One empty file one directory down: the site, its directory and the
+	// file, three allowances.
+	small := makeTar(t, []srcFile{{"a/index.html", ""}})
+	const per = 3 * store.MetaAllowance
+	ok := 0
+	for i := 0; i < 10; i++ {
+		resp, rb := postSite(t, ts.URL, fmt.Sprintf("small%d", i), "fmt=tar", "application/x-tar", small)
+		if resp.StatusCode == http.StatusInsufficientStorage {
+			break
+		}
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("small publish %d = %d %q", i, resp.StatusCode, rb)
+		}
+		ok++
+	}
+	if ok != limit/per {
+		t.Fatalf("%d small sites fit, want %d", ok, limit/per)
+	}
+	assertStoreAccounted(t, st)
+	if err := st.RecountUsage(); err != nil {
+		t.Fatal(err)
+	}
+	if used, _ := st.Usage(); used != int64(ok)*per {
+		t.Fatalf("usage after a recount = %d, want %d", used, int64(ok)*per)
+	}
+	if resp, rb := postSite(t, ts.URL, "after-recount", "fmt=tar", "application/x-tar", small); resp.StatusCode != http.StatusInsufficientStorage {
+		t.Fatalf("publish after a recount = %d %q, want 507", resp.StatusCode, rb)
+	}
+
+	ts.Close()
+	st.Close()
+	st, err = store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	if err := st.SetQuota(limit); err != nil {
+		t.Fatal(err)
+	}
+	if used, _ := st.Usage(); used != int64(ok)*per {
+		t.Fatalf("usage after a restart = %d, want %d", used, int64(ok)*per)
+	}
+	ts = httptest.NewServer(New(st, Config{}).Handler())
+	t.Cleanup(ts.Close)
+	if resp, rb := postSite(t, ts.URL, "after-restart", "fmt=tar", "application/x-tar", small); resp.StatusCode != http.StatusInsufficientStorage {
+		t.Fatalf("publish after a restart = %d %q, want 507", resp.StatusCode, rb)
+	}
+
+	// Deleting a site frees its entries. A replacement stages beside the
+	// tree it replaces, and afterwards only the new, flatter tree counts.
+	if err := st.DeleteSite("small1"); err != nil {
+		t.Fatal(err)
+	}
+	if used, _ := st.Usage(); used != int64(ok-1)*per {
+		t.Fatalf("usage after a delete = %d, want %d", used, int64(ok-1)*per)
+	}
+	flat := makeTar(t, []srcFile{{"index.html", ""}})
+	if resp, rb := postSite(t, ts.URL, "small0", "fmt=tar", "application/x-tar", flat); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("replace = %d %q", resp.StatusCode, rb)
+	}
+	want := int64(ok-1)*per - store.MetaAllowance
+	if used, _ := st.Usage(); used != want {
+		t.Fatalf("usage after a replace = %d, want %d", used, want)
+	}
+	assertStoreAccounted(t, st)
+}
+
+// TestSitePublishEntryLimit507: past the store-wide cap on site files and
+// directories a site publish is refused with 507, quota or not.
+func TestSitePublishEntryLimit507(t *testing.T) {
+	ts, st := newQuotaServer(t, 0, Config{})
+	st.SetSiteEntryLimit(10)
+	small := makeTar(t, []srcFile{{"a/index.html", ""}})
+	ok := 0
+	for i := 0; i < 10; i++ {
+		resp, rb := postSite(t, ts.URL, fmt.Sprintf("s%d", i), "fmt=tar", "application/x-tar", small)
+		if resp.StatusCode == http.StatusInsufficientStorage {
+			break
+		}
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("publish %d = %d %q", i, resp.StatusCode, rb)
+		}
+		ok++
+	}
+	if ok != 3 {
+		t.Fatalf("%d three-entry sites fit a 10-entry limit, want 3", ok)
+	}
+	if n := siteEntryCount(t, st); n != 9 {
+		t.Fatalf("%d site entries on disk, want 9", n)
+	}
 }
