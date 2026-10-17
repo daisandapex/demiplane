@@ -8,6 +8,23 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **Resource limits on unauthenticated work.** View-password checks are
+  rate-limited per artifact, per client and globally, run at bounded
+  concurrency, and remember a verified password for 10 minutes. Request bodies
+  have deadlines (uploads a minimum rate), responses have write deadlines,
+  and requests and connections in progress are capped per listener and per
+  client. Markdown rendering bounds table width, table cells and output size,
+  runs in linear time, stops when the client goes away, and runs at bounded
+  concurrency. An optional aggregate storage quota (`--store-quota`) counts
+  uploads in flight, archive scratch and extracted bytes. Limits, defaults and
+  flags: [SECURITY.md](SECURITY.md#resource-limits).
+- **Replies are admitted, not just accepted.** Replies need a publish that
+  enabled them, the artifact's view password when it has one, and room in
+  per-client, per-artifact and global rate limits and in per-artifact and
+  aggregate storage limits, checked atomically. The content listener refuses
+  cross-origin browser writes. Reply hooks run on a bounded pool, in their own
+  process group, with output capped while it streams.
+
 - **MCP `publish` paths are confined to a publish root.** The tool's `path`
   argument must resolve inside `--publish-root` / `DEMIPLANE_PUBLISH_ROOT`
   (default: the working directory of `demiplane mcp`) and is opened through that
@@ -25,6 +42,28 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Changed
 
+- **Upgrade note: replies are opt-in per artifact (`-tags reply`).**
+  `/reply/{slug}` and `/answer/{slug}` now answer `404` unless the artifact's
+  latest publish used `?reply=form` (new: the reply form, page unchanged) or
+  `?reply=question`. Pages published with an inline reply box before this
+  release keep accepting answers (migrated from their retained render spec);
+  for any other page you collect replies on, republish it with `?reply=form`.
+  A republish without `?reply` turns replies off. Replying to a
+  password-protected page now needs its password.
+- **Upgrade note: replies older than 90 days are deleted** by default. Set
+  `reply_retention = 0` to keep them, or another duration such as `365d`.
+- **Upgrade note: a reply hook's process group is killed when its shell
+  exits** (or after `reply_hook_timeout`, default 5m). A hook that leaves a
+  plain background job running must detach it with `systemd-run` or
+  `setsid`. A full hook pool refuses new replies with `503` instead of
+  queueing without bound (`reply_hook_workers`, `reply_hook_queue`).
+- **Upgrade note: new limits can refuse requests that used to succeed.** A
+  `?render=md` document over a render limit gets `413`; a slow body `408`; a
+  busy server `503`; throttled password attempts or reply submissions `429`;
+  a full store or reply store `507`. Behind a reverse proxy all clients share
+  its address, so raise or disable the per-client limits
+  (`--max-conns-per-client`, `--max-requests-per-client`) and enforce them at
+  the proxy.
 - **Upgrade note: `demiplane mcp` refuses `path` outside its publish root.** An
   MCP client that publishes files from outside the directory it starts
   `demiplane mcp` in (a scratch or temp directory, another repository) now gets

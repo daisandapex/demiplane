@@ -68,7 +68,8 @@ operator set `--max-upload`.
 | `private=true` | Mint a high-entropy, unguessable capability slug. Cannot be combined with `slug` (a named slug is guessable). |
 | `ttl=<dur>` | Auto-expire: `30m`, `2h`, `7d` (days), or any Go duration. After it lapses the slug returns 404. |
 | `render=md` | Render a markdown body to a styled HTML page on publish (house theme, sticky title header, optional light/dark toggle). |
-| `reply=question` | Bake a first-class inline reply box into the rendered page. Requires `render=md` and a named `slug`; not valid with `private`. Needs the `reply` build tag. |
+| `reply=question` | Bake a first-class inline reply box into the rendered page and accept replies. Requires `render=md` and a named `slug`; not valid with `private`. Needs the `reply` build tag. |
+| `reply=form` | Accept replies through the reply module's form at `/reply/{slug}`, without changing the page. Not valid with `private`. Without either `reply` value, a publish turns replies off for the slug. |
 | `next=<slug>` | Forward flow: names the page that follows this one's answer. Requires `reply`. Must differ from `slug`; need not exist yet. |
 | `filename=<name>` | Content-type hint for raw-body uploads (the extension informs the served type). |
 | `site=<name>` | Ingest a tar or zip body as a path-structured multi-file site (see Sites). Needs the site feature wired in. |
@@ -500,15 +501,21 @@ split across the two planes:
 
 | Method + path | Plane | Auth | Purpose |
 |---|---|---|---|
-| `GET /reply/{slug}` | Control | open (mesh) | JS-free reply form for an existing artifact. |
-| `POST /reply/{slug}` | Control | open (mesh) | Submit a reply (form or JSON body). |
-| `POST /answer/{slug}` | Content | open (mesh) | Same-origin submit target for a page's baked `?reply` box. |
+| `GET /reply/{slug}` | Control | viewer | JS-free reply form for an artifact that accepts replies. |
+| `POST /reply/{slug}` | Control | viewer | Submit a reply (form or JSON body). |
+| `POST /answer/{slug}` | Content | viewer | Same-origin submit target for a page's baked `?reply` box. Cross-origin browser posts get `403` (an opaque-origin post from a sandboxed page is admitted unless its Referer names another origin). |
 | `GET /answer/{slug}/next` | Content | open (mesh) | Forward-flow wait endpoint (`?to=<next>`); 302 to the next slug once it exists. |
 | `GET /replies` | Control | bearer | List replies as JSON. Filters `?slug=`, `?status=pending|read|all` (default `pending`). |
 | `POST /replies/{id}/ack` | Control | bearer | Mark a reply read. `204`, or `404` for an unknown id. |
 
-Auth is asymmetric on purpose: submitting a reply is a viewer action (open at the
-mesh), while listing and acking are publisher actions (bearer). A reply record is:
+Auth is asymmetric on purpose: submitting a reply is a viewer action, while
+listing and acking are publisher actions (bearer). "Viewer" means what viewing
+the artifact needs: network reachability, plus HTTP Basic with the view password
+when it has one. Replies are accepted only for artifacts published with
+`reply=form` or `reply=question`; other artifacts answer `404` on these routes.
+Submissions are rate-limited per client, per artifact and in all, and the
+stored replies are capped per artifact and in all (limits in
+[SECURITY.md](SECURITY.md#resource-limits)). A reply record is:
 
 ```json
 { "id": 42, "slug": "q-01", "kind": "comment", "body": "42", "created_at": "2026-07-15T10:05:00Z", "status": "pending" }
@@ -645,13 +652,16 @@ and it never lists private capability slugs.
 | `304 Not Modified` | Conditional `GET /{slug}` whose `If-None-Match` or `If-Modified-Since` still matches. |
 | `302 Found` | Forward-flow redirect once a `?next` slug exists. |
 | `400 Bad Request` | Invalid or reserved slug, `private` + named slug, password in the URL query, bad `ttl`, or a malformed reply/site. |
-| `401 Unauthorized` | Missing or invalid bearer token (write/list/delete/reply admin), or a wrong view password (read). |
+| `401 Unauthorized` | Missing or invalid bearer token (write/list/delete/reply admin), or a missing or wrong view password (read, reply). |
+| `403 Forbidden` | A cross-origin browser write (another site posting through a visitor's browser). |
 | `404 Not Found` | No such artifact or reply, or it expired. |
 | `405 Method Not Allowed` | Wrong method for a known path (for example `POST /list`). |
-| `413 Payload Too Large` | Upload exceeds `--max-upload`, or a reply/site exceeds its cap. |
-| `429 Too Many Requests` | An artifact reached its reply limit. |
+| `408 Request Timeout` | The request body arrived too slowly (`--body-timeout`, `--upload-min-rate`). |
+| `413 Payload Too Large` | Upload exceeds `--max-upload`, a reply/site exceeds its cap, or a `?render=md` document exceeds a render limit (table width, table cells, `--render-max-output`). |
+| `429 Too Many Requests` | Too many failed view-password attempts or reply submissions (with `Retry-After`), or an artifact reached its reply limit. |
 | `501 Not Implemented` | A feature (for example `?site=`) is not compiled into this build. |
-| `503 Service Unavailable` | A module (for example reply storage) is temporarily unavailable. |
+| `503 Service Unavailable` | A module (for example reply storage) is temporarily unavailable, or the server is at a concurrency limit (requests in progress, password checks, renders, the reply hook pool); retry after `Retry-After`. |
+| `507 Insufficient Storage` | The write would pass `--store-quota`, or the aggregate reply limits are reached. |
 
 ## Reserved slugs
 

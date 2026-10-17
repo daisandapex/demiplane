@@ -198,6 +198,11 @@ fall back to the measure and scroll horizontally inside their own container
 - **Not-found**: the content plane serves a themed 404 (chrome + "this document
   doesn't exist or has expired" + a link to the index) instead of a plaintext
   dead-end, since a stale or expired link is a reader's first impression.
+- **Render limits**: tables over 128 columns, documents past 1,000,000 table
+  body cells, and pages that would render past `--render-max-output`
+  (default 32 MiB) are refused at publish with `413`, not truncated, so a
+  published page is never a silently partial render. Heading ids keep their
+  `-1`, `-2` suffix scheme; they are now assigned in linear time.
 - **Print** (`@media print`): a rendered artifact survives Cmd+P as a well-set
   page. The print sheet forces a page-friendly light palette regardless of the
   on-screen theme (dark and the pinned developer palettes waste toner on paper),

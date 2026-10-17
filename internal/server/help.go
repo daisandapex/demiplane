@@ -150,7 +150,9 @@ func (s *Server) handleHelpPage(w http.ResponseWriter, r *http.Request) {
 		`same-origin and you read the answers back at <code>GET /replies</code> (bearer ` +
 		`auth). A recorded reply can fire a server-side hook ` +
 		`(<code>reply_hook_exec</code> / <code>reply_hook_url</code>) so an agent reacts ` +
-		`with no polling. The forward-flow <code>?next=</code> parameter carries a reader ` +
+		`with no polling. <code>?reply=form</code> accepts replies through the module's ` +
+		`own form at <code>/reply/{slug}</code> instead; a page accepts replies only when ` +
+		`its latest publish asked for them. The forward-flow <code>?next=</code> parameter carries a reader ` +
 		`to the next page once it is published. Full endpoint detail lives in the ` +
 		`<a href="/docs/api#replies">API reference</a>.</p>`)
 
