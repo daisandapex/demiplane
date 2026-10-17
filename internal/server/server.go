@@ -564,6 +564,10 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "upload exceeds the configured size limit", http.StatusRequestEntityTooLarge)
 			return
 		}
+		if errors.Is(err, store.ErrQuota) {
+			http.Error(w, quotaMessage, http.StatusInsufficientStorage)
+			return
+		}
 		if isClientError(err) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -778,6 +782,9 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"artifacts": items, "count": len(items)})
 }
+
+// quotaMessage is the 507 body when a write would pass the store quota.
+const quotaMessage = "storage quota exceeded; delete artifacts or raise --store-quota"
 
 // maxRenderBytes bounds how much markdown the render path will buffer.
 const maxRenderBytes = 8 << 20 // 8 MiB

@@ -35,3 +35,22 @@ func TestReceiveDefaultMaxUploadBounded(t *testing.T) {
 		t.Errorf("--max-upload=0 = %d, want 0 (unbounded opt-out)", c0.maxUpload)
 	}
 }
+
+// TestStoreQuotaDefaultUnlimited pins the documented default: no aggregate
+// quota unless the operator sets one.
+func TestStoreQuotaDefaultUnlimited(t *testing.T) {
+	fs, c := newReceiveFlagSet()
+	if err := fs.Parse(nil); err != nil {
+		t.Fatalf("parse defaults: %v", err)
+	}
+	if c.storeQuota != 0 {
+		t.Errorf("default --store-quota = %d, want 0 (unlimited)", c.storeQuota)
+	}
+	fs2, c2 := newReceiveFlagSet()
+	if err := fs2.Parse([]string{"--store-quota=1048576"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if c2.storeQuota != 1<<20 {
+		t.Errorf("--store-quota = %d, want 1048576", c2.storeQuota)
+	}
+}

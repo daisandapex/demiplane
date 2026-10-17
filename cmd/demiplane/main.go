@@ -150,6 +150,7 @@ func runServe(args []string) error {
 	sweep := fs.Duration("sweep-interval", time.Minute, "how often to reap past-TTL artifacts")
 	browse := fs.Bool("browse", false, "serve an HTML index of non-private artifacts at GET /")
 	maxUpload := fs.Int64("max-upload", defaultMaxUpload, "max publish body size in bytes (default 100 MiB; 0 = unlimited)")
+	storeQuota := fs.Int64("store-quota", 0, storeQuotaUsage)
 	writeTimeout := fs.Duration("write-timeout", 0, "HTTP write timeout (0 = none; keep 0 if serving large files)")
 	idleTimeout := fs.Duration("idle-timeout", 120*time.Second, "HTTP idle (keep-alive) timeout")
 	themeName := fs.String("theme", "", "theme for the whole instance (chrome + ?render=md pages): light (default), dark, or a pinned palette catppuccin|dracula|one-dark")
@@ -171,6 +172,9 @@ func runServe(args []string) error {
 	}
 	if *renderConcurrency < 0 {
 		return fmt.Errorf("--render-concurrency must not be negative")
+	}
+	if *storeQuota < 0 {
+		return fmt.Errorf("--store-quota must be >= 0 (0 = unlimited)")
 	}
 	if *themeName != "" && !theme.Valid(*themeName) {
 		return fmt.Errorf("--theme %q: unknown theme (choose one of: %s)", *themeName, strings.Join(theme.Names, ", "))
@@ -239,6 +243,9 @@ func runServe(args []string) error {
 		return err
 	}
 	defer st.Close()
+	if err := applyStoreQuota(st, *storeQuota); err != nil {
+		return err
+	}
 
 	srv := server.New(st, server.Config{
 		BaseURL:           *baseURL,
@@ -452,10 +459,13 @@ func runSweeper(ctx context.Context, st *store.Store, interval time.Duration) {
 		n, err := st.SweepExpired(time.Now())
 		if err != nil {
 			log.Printf("ttl sweep error: %v", err)
-			return
-		}
-		if n > 0 {
+		} else if n > 0 {
 			log.Printf("ttl sweep: reaped %d expired artifact(s)", n)
+		}
+		// Pick up bytes another process (SSH receive) committed to the same
+		// store. A no-op without --store-quota.
+		if err := st.RecountUsage(); err != nil {
+			log.Printf("store quota recount error: %v", err)
 		}
 	}
 	sweep()
@@ -500,14 +510,15 @@ func tokenAdvice(token string) string {
 // DEMIPLANE_PASSWORD env var so it never lands in the process argument list.
 // receiveFlags holds the parsed `receive` command flags.
 type receiveFlags struct {
-	dir       string
-	baseURL   string
-	slug      string
-	filename  string
-	private   bool
-	ttl       string
-	untar     bool
-	maxUpload int64
+	dir        string
+	baseURL    string
+	slug       string
+	filename   string
+	private    bool
+	ttl        string
+	untar      bool
+	maxUpload  int64
+	storeQuota int64
 }
 
 // newReceiveFlagSet registers the `receive` flags onto a fresh FlagSet bound to
@@ -525,7 +536,24 @@ func newReceiveFlagSet() (*flag.FlagSet, *receiveFlags) {
 	fs.StringVar(&c.ttl, "ttl", "", "auto-expire after a duration, e.g. 30m, 2h, 7d")
 	fs.BoolVar(&c.untar, "untar", false, "read a tar stream from stdin and publish each file (directory sync)")
 	fs.Int64Var(&c.maxUpload, "max-upload", defaultMaxUpload, "cap total stdin bytes (default 100 MiB; 0 = unlimited)")
+	fs.Int64Var(&c.storeQuota, "store-quota", 0, storeQuotaUsage)
 	return fs, c
+}
+
+// storeQuotaUsage documents --store-quota, shared by serve and receive.
+const storeQuotaUsage = "aggregate store size cap in bytes across artifacts, retained sources and sites, including in-flight uploads (0 = unlimited, the default)"
+
+// applyStoreQuota sets the aggregate store quota and logs the measured usage.
+func applyStoreQuota(st *store.Store, limit int64) error {
+	if limit <= 0 {
+		return nil
+	}
+	if err := st.SetQuota(limit); err != nil {
+		return err
+	}
+	used, _ := st.Usage()
+	log.Printf("store quota: %d of %d bytes in use", used, limit)
+	return nil
 }
 
 func runReceive(args []string) error {
@@ -541,11 +569,20 @@ func runReceive(args []string) error {
 		return err
 	}
 
+	if c.storeQuota < 0 {
+		return fmt.Errorf("--store-quota must be >= 0 (0 = unlimited)")
+	}
+
 	st, err := store.Open(c.dir)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
+	if c.storeQuota > 0 {
+		if err := st.SetQuota(c.storeQuota); err != nil {
+			return err
+		}
+	}
 
 	opts := transport.ReceiveOptions{
 		PutOptions: store.PutOptions{

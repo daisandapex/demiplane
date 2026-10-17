@@ -133,6 +133,10 @@ func (s *Server) handleRerender(w http.ResponseWriter, r *http.Request) {
 			writeRenderError(w, err)
 			return
 		}
+		if errors.Is(err, store.ErrQuota) {
+			http.Error(w, quotaMessage, http.StatusInsufficientStorage)
+			return
+		}
 		log.Printf("rerender %q failed: %v", slug, err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -173,6 +177,10 @@ func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			if isRenderRefusal(err) {
 				failed[slug] = err.Error()
+				continue
+			}
+			if errors.Is(err, store.ErrQuota) {
+				failed[slug] = quotaMessage
 				continue
 			}
 			log.Printf("rerender %q failed: %v", slug, err)
