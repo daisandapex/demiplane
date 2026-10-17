@@ -174,6 +174,41 @@ func (k *Keyed) Refund(key string) {
 	}
 }
 
+// Empty reports whether key's bucket has no whole token, without taking one,
+// and if so how long until it will. A key never charged is full.
+func (k *Keyed) Empty(key string) (empty bool, wait time.Duration) {
+	if k == nil || k.rate.Unlimited() {
+		return false, 0
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	b, ok := k.buckets[key]
+	if !ok {
+		return false, 0
+	}
+	k.refill(b, k.now())
+	if b.tokens >= 1 {
+		return false, 0
+	}
+	return true, time.Duration((1 - b.tokens) * float64(k.rate.Every))
+}
+
+// Spent reports whether key has been charged and its bucket has not yet
+// refilled to the burst: the key has used some of its budget recently.
+func (k *Keyed) Spent(key string) bool {
+	if k == nil || k.rate.Unlimited() {
+		return false
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	b, ok := k.buckets[key]
+	if !ok {
+		return false
+	}
+	k.refill(b, k.now())
+	return b.tokens < float64(k.rate.Burst)
+}
+
 // Len reports how many keys are tracked (tests).
 func (k *Keyed) Len() int {
 	k.mu.Lock()

@@ -180,6 +180,11 @@ func runServe(args []string) error {
 	header := fs.Bool("header", true, "render the sticky title header (+ theme toggle) on ?render=md pages")
 	metaHeader := fs.Bool("meta-header", true, "render a frontmatter-driven meta-header (localized date + fields) on ?render=md pages")
 	renderMaxOutput := fs.Int("render-max-output", render.DefaultLimits.MaxOutputBytes, "max bytes of one rendered ?render=md page; a larger render is refused with 413")
+	passwordConcurrency := fs.Int("password-concurrency", 0, "view-password KDF runs at once; more wait up to 5s, then 503 (0 = half the cores, 1 to 4)")
+	passwordRateClientTarget := fs.String("password-rate-client-target", "10:10", "failed view-password attempts a minute by one client on one artifact, N or N:BURST; past it 429 without hashing (0 = off)")
+	passwordRateClient := fs.String("password-rate-client", "20:10", "failed view-password attempts a minute by one client on any artifact, N or N:BURST (0 = off)")
+	passwordRateTarget := fs.String("password-rate-target", "10:10", "failed view-password attempts a minute by all clients on one artifact; once spent, clients that failed recently there get 429 (0 = off)")
+	passwordRateGlobal := fs.String("password-rate-global", "120:30", "failed view-password attempts a minute in all; once spent, clients that failed recently get 429 (0 = off)")
 	renderConcurrency := fs.Int("render-concurrency", 0, "max markdown renders at once (0 = GOMAXPROCS, capped at 4); a render that waits 5s for a slot gets 503")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -194,6 +199,24 @@ func runServe(args []string) error {
 	proxies, err := limit.ParseProxies(*trustedProxy)
 	if err != nil {
 		return err
+	}
+	if *passwordConcurrency < 0 {
+		return fmt.Errorf("--password-concurrency must not be negative")
+	}
+	pwLimits := server.PasswordLimits{Concurrency: *passwordConcurrency}
+	for _, f := range []struct {
+		name string
+		v    string
+		dst  *limit.Rate
+	}{
+		{"password-rate-client-target", *passwordRateClientTarget, &pwLimits.PerClientTarget},
+		{"password-rate-client", *passwordRateClient, &pwLimits.PerClient},
+		{"password-rate-target", *passwordRateTarget, &pwLimits.PerTarget},
+		{"password-rate-global", *passwordRateGlobal, &pwLimits.Global},
+	} {
+		if *f.dst, err = parseRateFlag(f.name, f.v); err != nil {
+			return err
+		}
 	}
 	if *renderMaxOutput <= 0 {
 		return fmt.Errorf("--render-max-output must be positive")
@@ -298,6 +321,7 @@ func runServe(args []string) error {
 		UnsafeNoSandbox:   *unsafeNoSandbox,
 		RenderMaxOutput:   *renderMaxOutput,
 		RenderConcurrency: *renderConcurrency,
+		Password:          pwLimits,
 		Requests: server.RequestLimits{
 			BodyTimeout:          offIfZero(*bodyTimeout),
 			UploadMinRate:        offIfZero(*uploadMinRate),

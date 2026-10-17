@@ -22,14 +22,23 @@ import (
 // is kept. That cost makes every wrong guess a CPU charge any viewer can levy,
 // so the gate in front of the KDF does three things:
 //
-//  1. Verified credentials are remembered for a short while (keyed by an HMAC
-//     of the stored hash and the password under a per-process key), so a
-//     browser re-sending Basic credentials on every page load costs one KDF,
-//     not one per request.
-//  2. A KDF run is an attempt charged to three token buckets: the target
-//     artifact, the client, and the whole instance. An empty bucket answers
-//     429 without hashing. A correct password is refunded, so only failures
-//     spend the budget.
+//  1. Verified credentials are remembered (keyed by an HMAC of the stored
+//     hash and the password under a per-process key) until they go unused
+//     for verifiedTTL, so a browser re-sending Basic credentials on every
+//     page load costs one KDF, not one per request, and an active viewer
+//     never has to win a check during a flood. A new password changes the
+//     hash and so the key.
+//  2. Only failures spend rate budget. Each client has a budget of its own
+//     and one per artifact; a KDF run reserves a token from both, refunded
+//     when the password is correct, and a client whose budget is empty gets
+//     429 without hashing. The artifact and the instance have failure
+//     budgets too, charged by every client's failures. When one is empty it
+//     refuses, without hashing, only clients that have failed recently (on
+//     that artifact, or anywhere for the instance budget); a client with no
+//     recent failures is always verified, so nobody else's guesses can lock
+//     a legitimate viewer out. The cost is that guessing spread over many
+//     addresses, each new, is bounded by the KDF itself (3. below and the
+//     work factor), not by a rate.
 //  3. At most PasswordConcurrency KDF runs execute at once; the rest wait
 //     briefly and then get 503, so a flood cannot take every core from
 //     unrelated requests.
@@ -37,15 +46,17 @@ import (
 // Defaults for the password gate. The per-target rate is the online-guessing
 // bound for one artifact; the global rate bounds total KDF work.
 var (
-	defaultPasswordTargetRate = limit.PerMinute(10, 10)
-	defaultPasswordClientRate = limit.PerMinute(20, 10)
-	defaultPasswordGlobalRate = limit.PerMinute(120, 30)
+	defaultPasswordClientTargetRate = limit.PerMinute(10, 10)
+	defaultPasswordClientRate       = limit.PerMinute(20, 10)
+	defaultPasswordTargetRate       = limit.PerMinute(10, 10)
+	defaultPasswordGlobalRate       = limit.PerMinute(120, 30)
 )
 
 const (
 	// passwordKDFWait is how long a check waits for a free KDF slot.
 	passwordKDFWait = 5 * time.Second
-	// verifiedTTL is how long a verified credential skips the KDF.
+	// verifiedTTL is how long a verified credential skips the KDF after its
+	// last use.
 	verifiedTTL = 10 * time.Minute
 	// verifiedMax bounds the verified-credential cache.
 	verifiedMax = 4096
@@ -66,10 +77,11 @@ func defaultPasswordConcurrency() int {
 // PasswordLimits configures the view-password gate. Zero fields take the
 // defaults above; a Rate with Every < 0 disables that bucket.
 type PasswordLimits struct {
-	Concurrency int
-	PerTarget   limit.Rate
-	PerClient   limit.Rate
-	Global      limit.Rate
+	Concurrency     int
+	PerClientTarget limit.Rate // one client's failures on one artifact
+	PerClient       limit.Rate // one client's failures on any artifact
+	PerTarget       limit.Rate // every client's failures on one artifact
+	Global          limit.Rate // every client's failures on any artifact
 }
 
 // verifyPassword is the KDF check. A variable so tests can observe how many
@@ -77,14 +89,16 @@ type PasswordLimits struct {
 var verifyPassword = store.PasswordMatches
 
 type viewGate struct {
-	kdf    limit.Gate
-	target *limit.Keyed
-	client *limit.Keyed
-	global *limit.Keyed
+	kdf          limit.Gate
+	clientTarget *limit.Keyed
+	target       *limit.Keyed
+	client       *limit.Keyed
+	global       *limit.Keyed
 
 	key []byte
 	mu  sync.Mutex
 	ok  map[[32]byte]time.Time
+	now func() time.Time // time source; a field so tests can move it
 }
 
 func pickRate(r, def limit.Rate) limit.Rate {
@@ -103,12 +117,14 @@ func newViewGate(cfg PasswordLimits, key []byte) *viewGate {
 		n = defaultPasswordConcurrency()
 	}
 	return &viewGate{
-		kdf:    limit.NewGate(n),
-		target: limit.NewKeyed(pickRate(cfg.PerTarget, defaultPasswordTargetRate), 0),
-		client: limit.NewKeyed(pickRate(cfg.PerClient, defaultPasswordClientRate), 0),
-		global: limit.NewKeyed(pickRate(cfg.Global, defaultPasswordGlobalRate), 1),
-		key:    key,
-		ok:     map[[32]byte]time.Time{},
+		kdf:          limit.NewGate(n),
+		clientTarget: limit.NewKeyed(pickRate(cfg.PerClientTarget, defaultPasswordClientTargetRate), 0),
+		target:       limit.NewKeyed(pickRate(cfg.PerTarget, defaultPasswordTargetRate), 0),
+		client:       limit.NewKeyed(pickRate(cfg.PerClient, defaultPasswordClientRate), 0),
+		global:       limit.NewKeyed(pickRate(cfg.Global, defaultPasswordGlobalRate), 1),
+		key:          key,
+		ok:           map[[32]byte]time.Time{},
+		now:          time.Now,
 	}
 }
 
@@ -133,6 +149,7 @@ func (g *viewGate) remembered(k [32]byte, now time.Time) bool {
 		delete(g.ok, k)
 		return false
 	}
+	g.ok[k] = now.Add(verifiedTTL) // sliding: each use extends it
 	return true
 }
 
@@ -157,8 +174,8 @@ func (g *viewGate) remember(k [32]byte, now time.Time) {
 
 // check verifies the request's Basic password against the stored hash. The
 // result says whether to serve, ask for a password, or push back; wait is the
-// Retry-After hint for the push-back results. The per-target bucket is keyed
-// by the hash, which every publish of an artifact replaces.
+// Retry-After hint for the push-back results. Artifact budgets are keyed by
+// the hash, which every publish of an artifact replaces.
 func (g *viewGate) check(ctx context.Context, r *http.Request, hash string) (res module.ViewAccess, wait time.Duration) {
 	if hash == "" {
 		return module.ViewOK, 0
@@ -167,29 +184,41 @@ func (g *viewGate) check(ctx context.Context, r *http.Request, hash string) (res
 	if !ok {
 		return module.ViewNeedPassword, 0
 	}
-	now := time.Now()
+	now := g.now()
 	ck := g.credKey(hash, pass)
 	if g.remembered(ck, now) {
 		return module.ViewOK, 0
 	}
-	charges := []limit.Charge{
-		{L: g.global, Key: ""},
-		{L: g.client, Key: limit.ClientKey(r)},
-		{L: g.target, Key: hash},
+	client := limit.ClientKey(r)
+	clientTarget := client + "\x00" + hash
+	// Shared failure budgets refuse only clients that have failed recently.
+	if empty, w := g.target.Empty(hash); empty && g.clientTarget.Spent(clientTarget) {
+		return module.ViewThrottled, w
 	}
-	if allowed, w := limit.AllowAll(charges...); !allowed {
+	if empty, w := g.global.Empty(""); empty && (g.client.Spent(client) || g.clientTarget.Spent(clientTarget)) {
+		return module.ViewThrottled, w
+	}
+	// The client's own budgets are reserved before hashing, so its concurrent
+	// attempts cannot overshoot them, and refunded if the password is right.
+	own := []limit.Charge{
+		{L: g.client, Key: client},
+		{L: g.clientTarget, Key: clientTarget},
+	}
+	if allowed, w := limit.AllowAll(own...); !allowed {
 		return module.ViewThrottled, w
 	}
 	if !g.kdf.Acquire(ctx, passwordKDFWait) {
-		limit.RefundAll(charges...)
+		limit.RefundAll(own...)
 		return module.ViewBusy, time.Second
 	}
 	match := verifyPassword(hash, pass)
 	g.kdf.Release()
 	if !match {
+		g.target.Allow(hash)
+		g.global.Allow("")
 		return module.ViewNeedPassword, 0
 	}
-	limit.RefundAll(charges...)
+	limit.RefundAll(own...)
 	g.remember(ck, now)
 	return module.ViewOK, 0
 }
