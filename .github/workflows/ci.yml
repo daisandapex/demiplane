@@ -100,10 +100,18 @@ jobs:
       - name: build (e2e)
         run: go build -tags "e2e reply tls" ./...
 
+      # The browser tests (e2e/browser_test.go) check the content sandbox in a
+      # real Chromium. Debian's package is distro-signed; requiring a browser
+      # turns "no browser found" into a failure instead of a silent skip.
+      - name: install chromium
+        run: apt-get update && apt-get install -y --no-install-recommends chromium
+
       # The suite spawns subprocesses and binds ephemeral loopback ports, so it
       # is slower and flakier-by-nature than the unit legs. Bound it rather than
       # letting a hung child burn the job's full 6-hour default.
       - name: test (e2e, race)
+        env:
+          DEMIPLANE_E2E_REQUIRE_BROWSER: "1"
         run: go test -race -tags "e2e reply tls" -timeout 10m ./e2e/...
 
   # scripts/pre-push-leak-audit.sh is the guard this project asks contributors

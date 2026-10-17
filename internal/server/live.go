@@ -257,6 +257,8 @@ func serveLiveView(s *Server, w http.ResponseWriter, r *http.Request) bool {
 			"script-src 'nonce-"+nonce+"'; style-src 'nonce-"+nonce+"'; "+
 			"base-uri 'none'; "+frameAncestorsSelf)
 	hdr.Set("Referrer-Policy", "no-referrer")
+	// The shell names the slug, which for a private artifact is the secret.
+	hdr.Set("Cache-Control", "private, no-store")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, liveWrapperHTML(slug, nonce))
 	return true

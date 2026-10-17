@@ -65,7 +65,9 @@ run the old single-port topology, pass `--unsafe-same-origin`. See
 mesh/LAN IP or `0.0.0.0` to expose), `--content-bind <host:port>` (artifact content origin;
 default = host of `--bind` with port +1, i.e. `:8081`), `--content-base-url <url>`
 (advertise the content origin for proxy/TLS deployments), `--unsafe-same-origin` (serve both
-on one origin — legacy footgun), `--store <dir>` (**required**), `--base-url <url>`
+on one origin — legacy footgun), `--unsafe-no-sandbox` (serve HTML/SVG/XML without the
+per-document sandbox, so every page can read every artifact a viewer can open; trusted content
+only, see [DESIGN.md](../DESIGN.md#content-isolation)), `--store <dir>` (**required**), `--base-url <url>`
 (optional; advertise a canonical URL instead of deriving it from the request `Host`),
 `--token-file <path>` (optional; bearer token for write/list — `DEMIPLANE_TOKEN` is the
 env-var alternative), `--sweep-interval <dur>` (optional; how often to reap past-TTL

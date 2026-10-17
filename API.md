@@ -217,10 +217,16 @@ func main() {
 Fetch an artifact's bytes as-is, with the stored content-type, on the content
 origin. Always open, except that a password-gated artifact requires HTTP Basic
 credentials (username ignored, password is the password). Range requests and
-conditional GETs are supported. Responses carry `Cache-Control: no-cache`, a
-`Last-Modified` that advances on every re-publish and every `POST /rerender`, and
-an `ETag` that changes on every write of the bytes, so a cached copy is
-revalidated and replaced after either. Two query add-ons:
+conditional GETs are supported. Public artifacts carry `Cache-Control: no-cache`;
+private and password-protected ones (and their `401`) carry
+`Cache-Control: private, no-store` and `Referrer-Policy: no-referrer`. Every
+response has a `Last-Modified` that advances on every re-publish and every
+`POST /rerender`, and an `ETag` that changes on every write of the bytes, so a
+cached copy is revalidated and replaced after either. HTML, SVG and XML are
+served in a CSP sandbox, so each page runs in an opaque origin of its own and
+cannot read other artifacts, use storage, or register a service worker (see
+[SECURITY.md](SECURITY.md#content-isolation-between-artifacts) and
+[DESIGN.md](DESIGN.md#content-isolation)). Two query add-ons:
 
 - `?live` wraps the artifact in a first-party live-reload view that refreshes the
   moment the slug is re-published. It never alters the stored bytes.
@@ -619,7 +625,10 @@ publish (the archive is buffered for extraction). Read a site back at
 `GET /{site}/{path}` on the content origin; `GET /{site}/` serves its index.
 Sites are public and do not expire: a site upload that asks for `?private`,
 `?ttl`, `?password` or an `X-Demiplane-Password` header is refused with `400`
-before the archive is read.
+before the archive is read. Site pages run in the same sandbox as other HTML;
+their own scripts (classic and module), stylesheets, images and fonts load, but
+`fetch` of their own data files does not (see
+[DESIGN.md](DESIGN.md#content-isolation)).
 
 ```bash
 # publish a directory as a zip site

@@ -503,8 +503,8 @@ func TestSiteAssetSVGGetsNoScriptCSP(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("svg status=%d", resp.StatusCode)
 	}
-	if csp := resp.Header.Get("Content-Security-Policy"); csp != "script-src 'none'; frame-ancestors 'self'" {
-		t.Errorf("svg CSP=%q, want script-src 'none'; frame-ancestors 'self'", csp)
+	if csp := resp.Header.Get("Content-Security-Policy"); csp != "sandbox; script-src 'none'; worker-src 'none'; frame-ancestors 'self'" {
+		t.Errorf("svg CSP=%q, want the sandboxed no-script policy", csp)
 	}
 	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "image/svg+xml") {
 		t.Errorf("svg content-type=%q", resp.Header.Get("Content-Type"))

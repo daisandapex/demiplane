@@ -143,6 +143,7 @@ func runServe(args []string) error {
 	contentBind := fs.String("content-bind", "", "address for the separate artifact (content) origin that serves GET /{slug}; empty = host of --bind with port+1")
 	contentBaseURL := fs.String("content-base-url", "", "advertised origin for artifact bodies (proxy/TLS deployments); empty = derived from --content-bind")
 	unsafeSameOrigin := fs.Bool("unsafe-same-origin", false, "serve artifacts and the control plane on ONE origin (legacy; re-enables the stored-XSS footgun ADR 0003 closes)")
+	unsafeNoSandbox := fs.Bool("unsafe-no-sandbox", false, "serve HTML/SVG/XML artifacts without the per-document sandbox, so any published page can read every other artifact a viewer can open (trusted content only)")
 	dir := fs.String("store", "", "directory for content + metadata (required)")
 	baseURL := fs.String("base-url", "", "advertised control-plane base URL; if empty, derived from request Host")
 	tokenFile := fs.String("token-file", "", "file holding the bearer token for publish/delete/list; overrides DEMIPLANE_TOKEN")
@@ -244,7 +245,12 @@ func runServe(args []string) error {
 		RenderFooter:     chrome.footer,
 		RenderFooterLink: chrome.footerLink,
 		RenderMetaHeader: chrome.metaHeader,
+		UnsafeNoSandbox:  *unsafeNoSandbox,
 	})
+	if *unsafeNoSandbox {
+		log.Print("WARNING: --unsafe-no-sandbox serves published pages in one shared origin: " +
+			"any page can read every other artifact a viewer can open, using the viewer's credentials")
+	}
 
 	// Native TLS (optional module, `-tags tls`; ADR 0004). nil moduleTLS =
 	// module not compiled in; nil tlsConf = compiled in but `tls = on` not set.

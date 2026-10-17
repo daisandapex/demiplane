@@ -8,6 +8,16 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **Published pages are isolated from each other.** HTML, SVG and XML are
+  served in a CSP sandbox without `allow-same-origin`, so each page runs in an
+  opaque origin and cannot read other artifacts (with or without the viewer's
+  cached credentials) or register a service worker. Service-worker script
+  fetches are refused on both planes. Public module scripts, `crossorigin`
+  stylesheets and fonts stay loadable from sandboxed pages.
+- **Private and password-protected responses are not cached or referred.**
+  They, their `401` and every `?live` wrapper carry `Cache-Control: private,
+  no-store` and `Referrer-Policy: no-referrer`. Each password-protected
+  artifact has its own Basic realm.
 - **Site uploads refuse options sites do not support.** `?site=` with
   `?private`, `?ttl`, `?password` or `X-Demiplane-Password` is a `400` before
   the archive is read; previously the options were ignored.
@@ -34,7 +44,14 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Changed
 
+- **Upgrade note: published pages run sandboxed.** A page can no longer use
+  `localStorage`, `sessionStorage`, IndexedDB or cookies, `fetch` its own data
+  files, frame other pages on the instance, or run workers. Inline, classic and
+  module scripts, stylesheets, images and fonts still load. An instance that
+  hosts only trusted content can restore the shared origin with
+  `serve --unsafe-no-sandbox`. See DESIGN.md, "Content isolation".
 - **Upgrade note: `/gallery` needs the token unless `--browse` is set.**
+- **New flag: `serve --unsafe-no-sandbox`.**
 - **Upgrade note: `demiplane mcp` refuses `path` outside its publish root.** An
   MCP client that publishes files from outside the directory it starts
   `demiplane mcp` in (a scratch or temp directory, another repository) now gets

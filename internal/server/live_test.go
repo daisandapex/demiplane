@@ -333,13 +333,13 @@ func TestNonLiveViewIsByteIdentical(t *testing.T) {
 	if string(body) != content {
 		t.Errorf("non-live body mutated:\n got %q\nwant %q", body, content)
 	}
-	// A non-live view must not carry the wrapper's CSP or any reload script —
-	// only the baseline anti-clickjacking directive every response gets.
+	// A non-live view must not carry the wrapper's CSP or any reload script:
+	// only the sandboxed document policy every HTML artifact gets.
 	if strings.Contains(string(body), "_events") {
 		t.Errorf("non-live body contains reload wiring: %q", body)
 	}
-	if csp := resp.Header.Get("Content-Security-Policy"); csp != "frame-ancestors 'self'" {
-		t.Errorf("non-live HTML view CSP = %q, want the baseline frame-ancestors 'self' only", csp)
+	if csp := resp.Header.Get("Content-Security-Policy"); csp != (&Server{sandbox: true}).htmlPolicy() {
+		t.Errorf("non-live HTML view CSP = %q, want the sandboxed document policy", csp)
 	}
 }
 
