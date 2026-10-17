@@ -129,8 +129,12 @@ All notable changes to demiplane are documented here. The format follows
   host appears in every advertised URL, so an unbounded one multiplied the
   size of each listing.
 - **Listings are paged.** `GET /list` and `/gallery` return 200 artifacts at
-  a time and `GET /replies` 100 replies, newest first, and the browse index
-  reads only what it shows.
+  a time and `GET /replies` 100 replies, newest first. Listing queries
+  (`/list`, `/gallery`, the browse index at `GET /`, series navigation) read
+  a bounded number of index rows however many artifacts the instance holds:
+  they seek on indexes over public artifacts, the browse index scans at most
+  1,000 artifacts and counts a series only to 100, and the queries end with
+  the request.
 - **Site archives are checked before they are parsed.** A zip's central
   directory is validated against its end record (at most 4,096 entries and
   2 MiB) and read through a limit, archive/tar reads a tar through a 64 KiB
@@ -271,6 +275,9 @@ All notable changes to demiplane are documented here. The format follows
   too.
 - **Upgrade note: `GET /replies` is paged** the same way: at most 100
   replies a response, with `next` to pass back as `?after=`.
+- **The browse index shows a large series as `(100+)`** and no longer
+  states the total number of artifacts; its footer reads "More in the
+  gallery".
 - **Upgrade note: `GET /list` is paged.** A response holds at most 200
   artifacts; a client that reads one response as the whole list must follow
   `next` (`?after=<next>`) until it is absent. `count` now counts the
