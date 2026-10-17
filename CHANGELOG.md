@@ -173,6 +173,9 @@ All notable changes to demiplane are documented here. The format follows
   created after the server last measured its usage no longer lowers the
   server's count below what the store holds; the rest is accounted at its
   next recount.
+- **The MCP publish tool streams files published by `path`,** capped at
+  100 MiB, instead of reading them whole into memory; a larger file is
+  refused, not truncated.
 - **Multipart publish headers are limited to 16 KiB.** At most 16 KiB may
   precede a multipart publish's file part body (preamble, earlier form
   fields and the part's headers); more is refused with `431`.
