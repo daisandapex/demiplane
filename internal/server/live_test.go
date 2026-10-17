@@ -167,7 +167,8 @@ func TestSSEReloadIsSlugScoped(t *testing.T) {
 }
 
 func TestSSEPerSlugSubscriberCap(t *testing.T) {
-	ts := newTestServer(t, "")
+	// One client may fill the slug here, so the per-slug cap is what binds.
+	ts := newConfiguredServer(t, Config{Live: LiveLimits{PerClientSlug: liveMaxPerSlug}})
 	slug := liveSlug(t, publish(t, ts, "?slug=capped", "x"))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -207,7 +208,8 @@ func TestSSEPerSlugSubscriberCap(t *testing.T) {
 }
 
 func TestSSEUnsubscribeFreesSlot(t *testing.T) {
-	ts := newTestServer(t, "")
+	// One client may fill the slug here, so the per-slug cap is what binds.
+	ts := newConfiguredServer(t, Config{Live: LiveLimits{PerClientSlug: liveMaxPerSlug}})
 	slug := liveSlug(t, publish(t, ts, "?slug=freeing", "x"))
 
 	cl := sseClient(t)
@@ -381,12 +383,12 @@ func TestSSEHeartbeatConfigUnderIdleDefault(t *testing.T) {
 func TestLiveHubNotifyIsNonBlocking(t *testing.T) {
 	// Notify must never block on a full/absent consumer: a subscriber that never
 	// drains its channel still leaves Notify returning promptly.
-	h := newLiveHub()
-	ch, ok := h.subscribe("s", "c")
+	h := newLiveHub(LiveLimits{})
+	sub, ok := h.subscribe("s", "c")
 	if !ok {
 		t.Fatal("subscribe failed")
 	}
-	_ = ch // deliberately never drained
+	_ = sub // its channel is deliberately never drained
 
 	done := make(chan struct{})
 	go func() {
@@ -400,30 +402,30 @@ func TestLiveHubNotifyIsNonBlocking(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Notify blocked on a non-draining subscriber")
 	}
-	h.unsubscribe("s", "c", ch)
+	h.unsubscribe(sub)
 }
 
 func TestLiveHubConcurrentSubscribeNotify(t *testing.T) {
 	// Race-detector exercise: concurrent subscribe/unsubscribe/notify.
-	h := newLiveHub()
+	h := newLiveHub(LiveLimits{})
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
-				ch, ok := h.subscribe("hot", "c")
+				sub, ok := h.subscribe("hot", "c")
 				if !ok {
 					continue
 				}
 				h.Notify("hot")
-				h.unsubscribe("hot", "c", ch)
+				h.unsubscribe(sub)
 			}
 		}()
 	}
 	wg.Wait()
-	if h.total != 0 || len(h.perClient) != 0 {
-		t.Fatalf("hub leaked %d subscribers (%d client entries)", h.total, len(h.perClient))
+	if h.total != 0 || len(h.byClient) != 0 || len(h.subs) != 0 {
+		t.Fatalf("hub leaked %d subscribers (%d client entries)", h.total, len(h.byClient))
 	}
 }
 

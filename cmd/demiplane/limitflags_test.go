@@ -4,6 +4,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -28,6 +29,32 @@ func TestParseRateFlag(t *testing.T) {
 	for _, bad := range []string{"", "-1", "ten", "10:0", "10:-2", "10:x", "0:5", "1.5"} {
 		if _, err := parseRateFlag("x", bad); err == nil {
 			t.Errorf("parseRateFlag(%q) accepted", bad)
+		}
+	}
+}
+
+// TestServeRejectsBadLimitFlags: invalid password and live-reload limit
+// flags stop serve at startup, before the store is opened.
+func TestServeRejectsBadLimitFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"--password-concurrency", "-1"},
+		{"--password-rate-client", "-5"},
+		{"--password-rate-target", "10:0"},
+		{"--password-rate-global", "lots"},
+		{"--password-rate-client-target", "0:3"},
+		{"--live-max-per-slug", "0"},
+		{"--live-max-per-client", "-1"},
+		{"--live-max-per-client-slug", "0"},
+		{"--live-max-total", "0"},
+	} {
+		dir := t.TempDir() + "/store"
+		err := runServe(append([]string{"--store", dir}, args...))
+		if err == nil {
+			t.Errorf("serve %v started", args)
+			continue
+		}
+		if _, statErr := os.Stat(dir); statErr == nil {
+			t.Errorf("serve %v opened the store before refusing: %v", args, err)
 		}
 	}
 }

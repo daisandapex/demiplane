@@ -186,7 +186,7 @@ func TestSSEPerClientCap(t *testing.T) {
 		t.Errorf("stream past the per-client cap = %d, want 503", got)
 	}
 
-	h := newLiveHub()
+	h := newLiveHub(LiveLimits{})
 	for i := 0; i < liveMaxPerClient; i++ {
 		if _, ok := h.subscribe(fmt.Sprintf("x%d", i), "client-a"); !ok {
 			t.Fatalf("client-a subscription %d refused", i)
@@ -259,15 +259,15 @@ func TestLiveWrapperTakesArtifactPassword(t *testing.T) {
 
 // TestSSERecheckGoesThroughPasswordGate: when a republish re-salts the hash,
 // open streams re-verify through the view-password gate (its KDF seam, its
-// verified-credential cache), not a direct hash comparison. Three streams
-// sharing a password cost one KDF run for the republish, not three, and all
-// of them keep receiving events.
+// verified-credential cache), not a direct hash comparison. Two streams
+// sharing a password (the per-client cap on one slug) cost one KDF run for
+// the republish, not two, and both keep receiving events.
 func TestSSERecheckGoesThroughPasswordGate(t *testing.T) {
 	ts := newTestServer(t, "")
 	publishPassword(t, ts, "?slug=gated", "pw-g", "v1")
 	calls, _ := countKDF(t, 0)
 
-	const streams = 3
+	const streams = liveMaxPerClientSlug
 	var all []<-chan string
 	for i := 0; i < streams; i++ {
 		all = append(all, openSSEAuth(t, ts.URL, "gated", "pw-g"))

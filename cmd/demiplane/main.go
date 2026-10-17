@@ -185,6 +185,10 @@ func runServe(args []string) error {
 	passwordRateClient := fs.String("password-rate-client", "20:10", "failed view-password attempts a minute by one client on any artifact, N or N:BURST (0 = off)")
 	passwordRateTarget := fs.String("password-rate-target", "10:10", "failed view-password attempts a minute by all clients on one artifact; once spent, clients that failed recently there get 429 (0 = off)")
 	passwordRateGlobal := fs.String("password-rate-global", "120:30", "failed view-password attempts a minute in all; once spent, clients that failed recently get 429 (0 = off)")
+	liveMaxPerSlug := fs.Int("live-max-per-slug", 16, "live-reload streams watching one artifact; when full, a new client replaces the oldest stream of the client holding the most")
+	liveMaxPerClient := fs.Int("live-max-per-client", 16, "live-reload streams from one client on all artifacts; past it 503")
+	liveMaxPerClientSlug := fs.Int("live-max-per-client-slug", 2, "live-reload streams from one client on one artifact; past it 503")
+	liveMaxTotal := fs.Int("live-max-total", 256, "live-reload streams in all; when full, a new client replaces the oldest stream of the client holding the most")
 	renderConcurrency := fs.Int("render-concurrency", 0, "max markdown renders at once (0 = GOMAXPROCS, capped at 4); a render that waits 5s for a slot gets 503")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -199,6 +203,9 @@ func runServe(args []string) error {
 	proxies, err := limit.ParseProxies(*trustedProxy)
 	if err != nil {
 		return err
+	}
+	if *liveMaxPerSlug < 1 || *liveMaxPerClient < 1 || *liveMaxPerClientSlug < 1 || *liveMaxTotal < 1 {
+		return fmt.Errorf("--live-max-per-slug, --live-max-per-client, --live-max-per-client-slug and --live-max-total must be at least 1")
 	}
 	if *passwordConcurrency < 0 {
 		return fmt.Errorf("--password-concurrency must not be negative")
@@ -322,6 +329,12 @@ func runServe(args []string) error {
 		RenderMaxOutput:   *renderMaxOutput,
 		RenderConcurrency: *renderConcurrency,
 		Password:          pwLimits,
+		Live: server.LiveLimits{
+			PerSlug:       *liveMaxPerSlug,
+			PerClient:     *liveMaxPerClient,
+			PerClientSlug: *liveMaxPerClientSlug,
+			Total:         *liveMaxTotal,
+		},
 		Requests: server.RequestLimits{
 			BodyTimeout:          offIfZero(*bodyTimeout),
 			UploadMinRate:        offIfZero(*uploadMinRate),

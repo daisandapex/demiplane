@@ -53,8 +53,11 @@ type Config struct {
 	// TrustedProxies are the reverse proxies whose X-Forwarded-For names the
 	// client for per-client limits (limit.Proxies). Empty = the TCP peer.
 	TrustedProxies limit.Proxies
-	Browse         bool  // serve an HTML index of non-private artifacts at GET /
-	MaxUpload      int64 // max publish body bytes; 0 = unlimited (the CLI defaults it to 100 MiB)
+	// Live caps live-reload streams (live.go). The zero value uses the
+	// defaults.
+	Live      LiveLimits
+	Browse    bool  // serve an HTML index of non-private artifacts at GET /
+	MaxUpload int64 // max publish body bytes; 0 = unlimited (the CLI defaults it to 100 MiB)
 	// RenderTheme names the built-in theme for ?render=md pages (see
 	// internal/theme: "light"/"dark"); empty = the default house style.
 	RenderTheme string
@@ -99,6 +102,7 @@ type Server struct {
 	contentPort      string
 	hostRules        []hostRule    // accepted-host policy; nil = any Host
 	proxies          limit.Proxies // trusted reverse proxies for client identity
+	liveLimits       LiveLimits    // live-reload stream caps (live.go)
 	authToken        string
 	browse           bool
 	maxUpload        int64
@@ -138,6 +142,7 @@ func New(st *store.Store, cfg Config) *Server {
 		contentPort:      cfg.ContentPort,
 		hostRules:        buildHostRules(cfg.AllowedHosts, cfg.BaseURL, cfg.ContentBaseURL),
 		proxies:          cfg.TrustedProxies,
+		liveLimits:       cfg.Live,
 		authToken:        cfg.AuthToken,
 		browse:           cfg.Browse,
 		maxUpload:        cfg.MaxUpload,
