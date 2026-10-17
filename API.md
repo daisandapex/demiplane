@@ -316,9 +316,11 @@ func main() {
 
 ## GET /list
 
-The owner's artifacts as JSON, newest first. Auth: bearer. Always returns JSON
-(no `Accept` needed). Private capability slugs are included for the owner; the
-response never carries a password value, only whether a gate exists.
+The owner's non-private artifacts as JSON, newest first. Auth: bearer. Always
+returns JSON (no `Accept` needed). Private artifacts are never listed, not even
+for the owner: a capability slug is the secret, so keep the URL the publish
+response returned. The response never carries a password value, only whether a
+gate exists.
 
 A response holds at most 200 artifacts. When more follow, it carries `next`, a
 cursor; pass it back as `?after=<next>` for the following page. The last page
