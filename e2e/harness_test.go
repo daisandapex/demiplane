@@ -106,6 +106,9 @@ type serverOpts struct {
 	// ContentPort fixes the content listener's port (0 = an ephemeral one), for
 	// a test that needs the same origin across server restarts.
 	ContentPort int
+	// Config, when non-empty, is written as the server's config file
+	// ($XDG_CONFIG_HOME/demiplane/config).
+	Config string
 }
 
 // testServer wraps a real `demiplane serve` subprocess bound to two ephemeral
@@ -159,6 +162,14 @@ func startServerWithStoreDir(t *testing.T, storeDir string, opts serverOpts) *te
 	contentURL := "http://127.0.0.1:" + strconv.Itoa(contentPort)
 
 	xdg := t.TempDir() // hermetic config: never read a developer's real ~/.config/demiplane
+	if opts.Config != "" {
+		if err := os.MkdirAll(filepath.Join(xdg, "demiplane"), 0o700); err != nil {
+			t.Fatalf("config dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(xdg, "demiplane", "config"), []byte(opts.Config), 0o600); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+	}
 
 	args := []string{
 		"serve",

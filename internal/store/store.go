@@ -94,6 +94,8 @@ type Store struct {
 	locks slugLocks
 	// quota is the optional aggregate storage accounting (quota.go).
 	quota quotaState
+	// formKey signs reply-form submission tokens (secret.go).
+	formKey []byte
 }
 
 // Open opens (creating if needed) a store rooted at dir. The store root, its
@@ -144,6 +146,10 @@ func Open(dir string) (*Store, error) {
 	}
 	s := &Store{root: dir, blobDir: blobDir, sourceDir: sourceDir, db: db}
 	if err := s.migrate(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if s.formKey, err = s.loadSecret(formKeyName); err != nil {
 		db.Close()
 		return nil, err
 	}

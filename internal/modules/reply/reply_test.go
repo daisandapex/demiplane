@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/formtoken"
 	"github.com/daisandapex/demiplane/internal/limit"
 	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/store"
@@ -42,6 +43,15 @@ func (h *fakeHost) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 func (h *fakeHost) RequestBase(*http.Request) string     { return "http://test" }
 func (h *fakeHost) BaseURL() string                      { return "" }
 func (h *fakeHost) ModuleDataDir(string) (string, error) { return h.dataDir, nil }
+
+// ReplyFormToken and CheckReplyFormToken use the store's key, accepting any
+// token issued since the artifact was published.
+func (h *fakeHost) ReplyFormToken(slug string) string {
+	return formtoken.Mint(h.st.FormKey(), slug, time.Now())
+}
+func (h *fakeHost) CheckReplyFormToken(art store.Artifact, tok string) bool {
+	return formtoken.Check(h.st.FormKey(), art.Slug, tok, art.CreatedAt)
+}
 
 // CheckView is the plain password check, without core's limits.
 func (h *fakeHost) CheckView(r *http.Request, art store.Artifact) (module.ViewAccess, time.Duration) {

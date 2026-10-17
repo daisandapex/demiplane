@@ -48,7 +48,7 @@ func PasswordChallenge(slug string) string {
 
 // Host is the capability surface core hands to a module at startup. It is an
 // interface (not the concrete *server.Server) so a module can reach only these
-// six methods; the entire blast radius of any module is reviewing its use of
+// eight methods; the entire blast radius of any module is reviewing its use of
 // this surface. Implemented by *server.Server.
 type Host interface {
 	// Store is the shared artifact content store.
@@ -70,6 +70,12 @@ type Host interface {
 	// credentials, with core's rate and concurrency limits. The duration is a
 	// Retry-After hint for ViewThrottled and ViewBusy.
 	CheckView(r *http.Request, art store.Artifact) (ViewAccess, time.Duration)
+	// ReplyFormToken mints the submission token a reply form for slug carries
+	// (internal/formtoken), issued now.
+	ReplyFormToken(slug string) string
+	// CheckReplyFormToken reports whether tok is a submission token for art's
+	// slug issued by a form of art's current publish.
+	CheckReplyFormToken(art store.Artifact, tok string) bool
 }
 
 // Module is the base every module implements. Name must be a short, stable,

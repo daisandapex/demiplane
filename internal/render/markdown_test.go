@@ -190,6 +190,18 @@ func TestMarkdownReplyBoxNext(t *testing.T) {
 	}
 }
 
+// TestMarkdownReplyBoxToken verifies the submission token rides the baked
+// form as an attribute-escaped hidden field, and is absent without one.
+func TestMarkdownReplyBoxToken(t *testing.T) {
+	on := string(Markdown([]byte("# Lesson"), Options{ReplySlug: "lesson-01", ReplyToken: `123.ab"c<`}))
+	if !strings.Contains(on, `<input type="hidden" name="token" value="123.ab&#34;c&lt;">`) {
+		t.Errorf("reply box missing the escaped token field:\n%s", on)
+	}
+	if off := string(Markdown([]byte("# Lesson"), Options{ReplySlug: "lesson-01"})); strings.Contains(off, `name="token"`) {
+		t.Errorf("token field emitted without Options.ReplyToken:\n%s", off)
+	}
+}
+
 func TestMarkdownDropsDangerousLinkSchemes(t *testing.T) {
 	for _, src := range []string{
 		"[click](javascript:alert(1))",

@@ -514,11 +514,13 @@ split across the two planes:
 | Method + path | Plane | Auth | Purpose |
 |---|---|---|---|
 | `GET /reply/{slug}` | Control | viewer | JS-free reply form for an artifact that accepts replies. |
-| `POST /reply/{slug}` | Control | viewer | Submit a reply (form or JSON body). |
-| `POST /answer/{slug}` | Content | viewer | Same-origin submit target for a page's baked `?reply` box. Cross-origin browser posts get `403` (an opaque-origin post from a sandboxed page is admitted unless its Referer names another origin). |
+| `POST /reply/{slug}` | Control | viewer | Submit a reply (form or JSON body). A browser post must carry the form's `token` field (see below). |
+| `POST /answer/{slug}` | Content | viewer | Same-origin submit target for a page's baked `?reply` box. Cross-origin browser posts get `403` (an opaque-origin post from a sandboxed page is admitted unless its Referer names another origin). A browser post must carry the box's `token` field (see below). |
 | `GET /answer/{slug}/next` | Content | open (mesh) | Forward-flow wait endpoint (`?to=<next>`); 302 to the next slug once it exists. |
 | `GET /replies` | Control | bearer | List replies as JSON. Filters `?slug=`, `?status=pending|read|all` (default `pending`). |
 | `POST /replies/{id}/ack` | Control | bearer | Mark a reply read. `204`, or `404` for an unknown id. |
+
+**Submission tokens.** Every reply form demiplane serves (the baked `?reply=question` box and `GET /reply/{slug}`) carries a hidden `token` field bound to that artifact and its current publish. A submission sent by a browser (one carrying `Origin` or `Sec-Fetch-Site`) is refused with `403` unless it carries a valid token for exactly the slug it posts to; a token from before the artifact's latest publish is refused too. Clients that are not browsers (curl, agents) send neither header and need no token. A page baked before tokens existed has none: rebake it (`POST /rerender`) or republish it.
 
 Auth is asymmetric on purpose: submitting a reply is a viewer action, while
 listing and acking are publisher actions (bearer). "Viewer" means what viewing

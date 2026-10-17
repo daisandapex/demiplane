@@ -39,6 +39,9 @@ Core hands every module a `module.Host` — the entire surface a module may touc
 | `RequestBase(r) string` | advertised base URL for a request |
 | `BaseURL() string` | the configured `--base-url` (`""` if unset) |
 | `ModuleDataDir(name) (string, error)` | an isolated `<store>/modules/<name>` dir for your own persistence |
+| `CheckView(r, art) (ViewAccess, time.Duration)` | core's rate-limited view-password check for an artifact |
+| `ReplyFormToken(slug) string` | a submission token for a reply form for `slug` |
+| `CheckReplyFormToken(art, tok) bool` | whether `tok` is a valid token for `art`'s current publish |
 
 A module never imports `internal/server`; the interface is the whole contract.
 

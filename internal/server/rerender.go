@@ -271,6 +271,7 @@ func (s *Server) renderRetained(r *http.Request, slug string, rec store.SourceRe
 		FooterLink:  s.renderFooterLink,
 		MetaHeader:  s.renderMetaHeader,
 		ReplySlug:   spec.ReplySlug,
+		ReplyToken:  s.replyTokenFor(spec.ReplySlug, published),
 		ReplyNext:   spec.ReplyNext,
 		Colophon:    true,
 		Slug:        spec.NamedSlug,

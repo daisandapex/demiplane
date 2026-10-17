@@ -6,11 +6,14 @@
 package e2e
 
 import (
+	"encoding/base64"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -311,32 +314,142 @@ window.addEventListener('load',function(){setTimeout(function(){
 	}
 }
 
-// TestBrowser_SandboxedFormStillRecordsReply checks that a sandboxed page can
-// still submit the reply box: the form post arrives with an opaque Origin, and
-// the answer must still be recorded.
+// replyTokenRe finds the submission token in a page's reply box.
+var replyTokenRe = regexp.MustCompile(`name="token" value="([^"]+)"`)
+
+// pageReplyToken fetches a reply-enabled page as a viewer would (with its
+// password, if any) and returns the token its reply box carries.
+func pageReplyToken(t *testing.T, srv *testServer, slug, password string) string {
+	t.Helper()
+	h := map[string]string{}
+	if password != "" {
+		h["Authorization"] = "Basic " + base64.StdEncoding.EncodeToString([]byte("u:"+password))
+	}
+	res := srv.do(t, http.MethodGet, srv.ContentURL+"/"+slug, nil, h)
+	m := replyTokenRe.FindSubmatch(res.Body)
+	if res.Status != http.StatusOK || m == nil {
+		t.Fatalf("%s: status %d, no reply token in the page", slug, res.Status)
+	}
+	return html.UnescapeString(string(m[1]))
+}
+
+// autoSubmitPage is a page whose sandboxed form posts body (and token, when
+// set) to action as soon as it loads, after telling the collector it is
+// about to.
+func autoSubmitPage(collectorURL, action, token, body string) string {
+	var tok string
+	if token != "" {
+		tok = `<input type="hidden" name="token" value="` + html.EscapeString(token) + `">`
+	}
+	return `<!doctype html><html><head><meta name="referrer" content="no-referrer"></head><body>` +
+		`<form id="f" method="post" action="` + html.EscapeString(action) + `">` + tok +
+		`<textarea name="body">` + html.EscapeString(body) + `</textarea></form><script>` +
+		`new Image().src=` + jsString(collectorURL+"/r?d=submitting") + `;` +
+		`setTimeout(function(){document.getElementById('f').submit();},300);</script></body></html>`
+}
+
+// TestBrowser_SandboxedFormStillRecordsReply: a reply form running in the
+// content sandbox (so posting with "Origin: null") is recorded when it carries
+// the target page's own submission token, which is what the page's baked reply
+// box sends.
 func TestBrowser_SandboxedFormStillRecordsReply(t *testing.T) {
 	chrome := requireChrome(t)
 	srv := startServer(t, serverOpts{Token: "browser-token"})
+	col := newCollector(t)
 
 	pub := srv.do(t, http.MethodPost, srv.ControlURL+"/publish?slug=lesson-b&render=md&reply=question",
 		strings.NewReader("# Q\n\nWhy?\n"), srv.authHeader())
 	if pub.Status != http.StatusCreated {
 		t.Fatalf("publish lesson: status=%d body=%s", pub.Status, pub.Body)
 	}
-	form := `<!doctype html><html><body><form id="f" method="post" action="/answer/lesson-b">` +
-		`<textarea name="body">sandboxed-answer-31d</textarea></form>` +
-		`<script>document.getElementById('f').submit();</script></body></html>`
-	publishAs(t, srv, "quiz", "quiz.html", "", form)
+	token := pageReplyToken(t, srv, "lesson-b", "")
+	publishAs(t, srv, "quiz", "quiz.html", "", autoSubmitPage(col.srv.URL, "/answer/lesson-b", token, "sandboxed-answer-31d"))
 
 	startChrome(t, chrome, srv.ContentURL+"/quiz")
-	deadline := time.Now().Add(30 * time.Second)
+	col.wait(t, 30*time.Second)
+	waitReply(t, srv, "sandboxed-answer-31d", 30*time.Second)
+}
+
+// waitReply waits until a reply containing marker is listed.
+func waitReply(t *testing.T, srv *testServer, marker string, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
 	for {
 		list := srv.do(t, http.MethodGet, srv.ControlURL+"/replies", nil, srv.authHeader())
-		if strings.Contains(string(list.Body), "sandboxed-answer-31d") {
+		if strings.Contains(string(list.Body), marker) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("answer from the sandboxed form was not recorded: %s", list.Body)
+			t.Fatalf("reply %q was not recorded: %s", marker, list.Body)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// TestBrowser_ForgedReplyFromAnotherArtifactIsRefused: a viewer who holds the
+// password of a reply-enabled page opens another artifact on the same content
+// origin, whose sandboxed form posts to the first page's answer route. The
+// browser attaches the viewer's cached credentials, and the post arrives with
+// "Origin: null" and no Referer like a real answer; it carries a genuine
+// token, but one for a different page. No reply may be stored and no hook may
+// fire. The same browser setup with the victim's own token is recorded, so the
+// refusal is the token check and not missing credentials.
+func TestBrowser_ForgedReplyFromAnotherArtifactIsRefused(t *testing.T) {
+	chrome := requireChrome(t)
+	hookLog := filepath.Join(t.TempDir(), "hook.log")
+	srv := startServer(t, serverOpts{Token: "browser-token",
+		Config: "reply_hook_exec = cat >> " + hookLog + "\n"})
+	col := newCollector(t)
+
+	const pw = "pw-victim-62"
+	for _, p := range []struct{ slug, password string }{{"victim", pw}, {"decoy", ""}} {
+		h := srv.authHeader()
+		if p.password != "" {
+			h = mergeHeaders(h, map[string]string{"X-Demiplane-Password": p.password})
+		}
+		res := srv.do(t, http.MethodPost, srv.ControlURL+"/publish?slug="+p.slug+"&render=md&reply=question",
+			strings.NewReader("# Question\n\nWhat is it?\n"), h)
+		if res.Status != http.StatusCreated {
+			t.Fatalf("publish %s: status=%d body=%s", p.slug, res.Status, res.Body)
+		}
+	}
+	decoyToken := pageReplyToken(t, srv, "decoy", "")
+	victimToken := pageReplyToken(t, srv, "victim", pw)
+	action := srv.ContentURL + "/answer/victim"
+
+	// Both pages are protected with the victim's password and opened through a
+	// URL carrying it, so the browser holds and sends the viewer's credentials.
+	publishAs(t, srv, "hostile-f", "hostile.html", pw, autoSubmitPage(col.srv.URL, action, decoyToken, "forged-answer-5e2"))
+	publishAs(t, srv, "honest-f", "honest.html", pw, autoSubmitPage(col.srv.URL, action, victimToken, "honest-answer-8b4"))
+	withCreds := strings.Replace(srv.ContentURL, "http://", "http://u:"+pw+"@", 1)
+
+	startChrome(t, chrome, withCreds+"/hostile-f")
+	if got := col.wait(t, 30*time.Second); got != "submitting" {
+		t.Fatalf("hostile page report = %q", got)
+	}
+	startChrome(t, chrome, withCreds+"/honest-f")
+	if got := col.wait(t, 30*time.Second); got != "submitting" {
+		t.Fatalf("honest page report = %q", got)
+	}
+	waitReply(t, srv, "honest-answer-8b4", 30*time.Second)
+	// The forged post was sent first; give the server the same chance to have
+	// recorded it, then require that it did not.
+	time.Sleep(time.Second)
+	list := srv.do(t, http.MethodGet, srv.ControlURL+"/replies", nil, srv.authHeader())
+	if strings.Contains(string(list.Body), "forged-answer-5e2") {
+		t.Errorf("a post from another artifact was recorded as the victim's reply: %s", list.Body)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		logged, _ := os.ReadFile(hookLog)
+		if strings.Contains(string(logged), "forged-answer-5e2") {
+			t.Fatalf("the hook fired for the forged post: %s", logged)
+		}
+		if strings.Contains(string(logged), "honest-answer-8b4") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the hook never fired for the honest post, so the hook check proves nothing: %q", logged)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}

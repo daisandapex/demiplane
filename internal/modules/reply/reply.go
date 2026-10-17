@@ -176,7 +176,7 @@ func (m *Module) handleForm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, ref.msg, ref.status)
 		return
 	}
-	writeHTML(w, http.StatusOK, formPage(slug, ""))
+	writeHTML(w, http.StatusOK, formPage(slug, "", m.host.ReplyFormToken(slug)))
 }
 
 // handleSubmit stores a reply. Open to any viewer of a reply-enabled artifact
@@ -188,7 +188,7 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := r.PathValue("slug")
-	_, ref, err := m.target(r, slug)
+	art, ref, err := m.target(r, slug)
 	switch {
 	case errors.Is(err, errNoReplies):
 		http.NotFound(w, r)
@@ -211,7 +211,7 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	bodyDeadline(w)
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 
-	kind, body, isJSON, err := parseSubmission(r)
+	kind, body, token, isJSON, err := parseSubmission(r)
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
@@ -219,6 +219,10 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if bad := m.checkFormToken(r, art, token); bad != formTokenOK {
+		http.Error(w, bad.message(), http.StatusForbidden)
 		return
 	}
 	if !validKinds[kind] {
@@ -251,7 +255,7 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Browser form post → re-render the form with a confirmation.
-	writeHTML(w, http.StatusCreated, formPage(slug, kind))
+	writeHTML(w, http.StatusCreated, formPage(slug, kind, m.host.ReplyFormToken(slug)))
 }
 
 // handleContentSubmit records a single free-text answer submitted from a page's
@@ -273,7 +277,7 @@ func (m *Module) handleContentSubmit(w http.ResponseWriter, r *http.Request) {
 			"The server could not reach reply storage, so your answer was not recorded. Please try again shortly.", "")
 		return
 	}
-	_, ref, err := m.target(r, slug)
+	art, ref, err := m.target(r, slug)
 	switch {
 	case errors.Is(err, errNoReplies):
 		// Unknown, private, expired, or not taking answers: no page here to answer.
@@ -305,6 +309,11 @@ func (m *Module) handleContentSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 		m.writeAnswer(w, slug, http.StatusBadRequest, false,
 			"Your submission could not be read, so nothing was recorded. Please try again.", "")
+		return
+	}
+
+	if bad := m.checkFormToken(r, art, r.PostFormValue("token")); bad != formTokenOK {
+		m.writeAnswer(w, slug, http.StatusForbidden, false, bad.answerText(), "")
 		return
 	}
 
@@ -436,26 +445,28 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 
 // parseSubmission extracts (kind, body) from a JSON body or a form post. The
 // bool reports whether the request was JSON (drives the response format).
-func parseSubmission(r *http.Request) (kind, body string, isJSON bool, err error) {
+func parseSubmission(r *http.Request) (kind, body, token string, isJSON bool, err error) {
 	ct := r.Header.Get("Content-Type")
 	if i := strings.IndexByte(ct, ';'); i >= 0 {
 		ct = ct[:i]
 	}
 	if strings.TrimSpace(ct) == "application/json" {
 		var in struct {
-			Kind string `json:"kind"`
-			Body string `json:"body"`
+			Kind  string `json:"kind"`
+			Body  string `json:"body"`
+			Token string `json:"token"`
 		}
 		if derr := json.NewDecoder(r.Body).Decode(&in); derr != nil {
-			return "", "", true, errors.New("invalid JSON body")
+			return "", "", "", true, errors.New("invalid JSON body")
 		}
-		return strings.ToLower(strings.TrimSpace(in.Kind)), in.Body, true, nil
+		return strings.ToLower(strings.TrimSpace(in.Kind)), in.Body, in.Token, true, nil
 	}
 	if perr := r.ParseForm(); perr != nil {
 		// MaxBytesReader surfaces here for an oversized form body.
-		return "", "", false, perr
+		return "", "", "", false, perr
 	}
-	return strings.ToLower(strings.TrimSpace(r.PostFormValue("kind"))), r.PostFormValue("body"), false, nil
+	return strings.ToLower(strings.TrimSpace(r.PostFormValue("kind"))), r.PostFormValue("body"),
+		r.PostFormValue("token"), false, nil
 }
 
 func wantsJSON(r *http.Request) bool {
@@ -583,10 +594,11 @@ You can leave it open, or go back and review while you wait.</p>
 </body></html>`
 }
 
-// formPage renders the self-contained reply form for slug. When confirmKind is
-// non-empty it shows a confirmation banner for that just-submitted kind. The
-// slug is HTML-escaped defensively (it is already URL-safe by construction).
-func formPage(slug, confirmKind string) string {
+// formPage renders the self-contained reply form for slug, carrying the
+// submission token. When confirmKind is non-empty it shows a confirmation
+// banner for that just-submitted kind. The slug is HTML-escaped defensively
+// (it is already URL-safe by construction).
+func formPage(slug, confirmKind, token string) string {
 	esc := html.EscapeString(slug)
 	var banner string
 	if confirmKind != "" {
@@ -611,6 +623,7 @@ a{color:#0a58ca}
 <h1>Reply</h1>
 <p class="sub">Responding to <code>` + esc + `</code></p>
 <form method="post" action="/reply/` + esc + `">
+  <input type="hidden" name="token" value="` + html.EscapeString(token) + `">
   <textarea name="body" placeholder="Optional note…"></textarea>
   <div class="row">
     <button type="submit" name="kind" value="approve">Approve</button>

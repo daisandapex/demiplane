@@ -233,8 +233,10 @@ func (s *Server) ContentHandler() http.Handler {
 	// site from posting to them through a visitor's browser. It admits an
 	// opaque origin (a sandboxed page, as demiplane serves artifacts) unless
 	// the Referer names another origin, and it cannot tell apart two pages on
-	// this origin, so it is defence in depth: reply admission rests on the
-	// per-artifact opt-in, the view password and the reply limits.
+	// this origin. What ties a browser submission to its target page is the
+	// target-bound submission token every reply form carries (replytoken.go,
+	// internal/formtoken), on top of the per-artifact opt-in, the view
+	// password and the reply limits.
 	return s.wrapListener(s.guardContentWrites(mux))
 }
 
@@ -322,8 +324,9 @@ func (s *Server) guardCrossOriginWrites(next http.Handler) http.Handler {
 // control plane's. A write from an opaque origin ("Origin: null", as a
 // sandboxed artifact page sends) is admitted unless its Referer names an
 // origin other than the content origin. Browsers do not let a page forge
-// Referer, though a page can omit it; see ContentHandler for why this is
-// defence in depth only.
+// Referer, though a page can omit it, so the guard cannot tell one page on
+// the content origin from another; the reply module's submission token does
+// that (see ContentHandler).
 func (s *Server) guardContentWrites(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		self, _ := normalizeOrigin(s.contentBase(r))
@@ -686,6 +689,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 			FooterLink:  s.renderFooterLink,
 			MetaHeader:  s.renderMetaHeader,
 			ReplySlug:   replySlugFor(replyBox, named),
+			ReplyToken:  s.replyTokenFor(replySlugFor(replyBox, named), published),
 			ReplyNext:   next, // validated above; "" unless a reply box is baked
 			Colophon:    true,
 			Slug:        named,

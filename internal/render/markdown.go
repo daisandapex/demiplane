@@ -65,6 +65,11 @@ type Options struct {
 	// comment-kind reply, fitting Q&A/teaching use. It must be a URL-safe slug (it
 	// always is by construction) and is attribute-escaped defensively.
 	ReplySlug string
+	// ReplyToken is the submission token the reply box carries as a hidden
+	// field (internal/formtoken); the reply module refuses a browser
+	// submission without a valid one for ReplySlug. Only meaningful with
+	// ReplySlug.
+	ReplyToken string
 	// Colophon, when true, appends the editorial colophon at the foot of the
 	// document (demiplane-rwj items 1+2): an optional series prev/next nav row and
 	// a meta row (published date · size · link to the instance gallery). Enabled
@@ -273,7 +278,7 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 	b.WriteString(metaHTML)
 	b.WriteString(bodyHTML)
 	if opts.ReplySlug != "" {
-		b.WriteString(replyBox(opts.ReplySlug, opts.ReplyNext))
+		b.WriteString(replyBox(opts.ReplySlug, opts.ReplyNext, opts.ReplyToken))
 	}
 	if opts.Colophon {
 		b.WriteString(colophon(opts))
@@ -519,11 +524,17 @@ func footerInner(link string) string {
 //     server-rendered confirmation can flow the student to the follow-up lesson.
 //     Hidden fields are client-tamperable, so the submit handler re-validates it;
 //     it only ever produces a same-origin, slug-shaped link.
-func replyBox(slug, next string) string {
+//   - token (Options.ReplyToken) rides along as a hidden field: it binds the
+//     submission to this page, and the reply module refuses a browser
+//     submission without it.
+func replyBox(slug, next, token string) string {
 	action := "/answer/" + html.EscapeString(slug)
 	var nextField string
+	if token != "" {
+		nextField = `<input type="hidden" name="token" value="` + html.EscapeString(token) + `">` + "\n"
+	}
 	if next != "" {
-		nextField = `<input type="hidden" name="next" value="` + html.EscapeString(next) + `">` + "\n"
+		nextField += `<input type="hidden" name="next" value="` + html.EscapeString(next) + `">` + "\n"
 	}
 	return `<section class="dp-reply" aria-labelledby="dp-reply-h">
 <h2 id="dp-reply-h">Your answer</h2>

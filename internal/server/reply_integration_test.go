@@ -195,8 +195,8 @@ func TestForwardFlowEndToEnd(t *testing.T) {
 
 // TestContentPlaneRejectsCrossOriginAnswers: the content listener's write
 // guard refuses browser posts from another origin (including the control
-// origin, which is same-site) and records nothing; a same-origin post and a
-// non-browser client still record.
+// origin, which is same-site) and records nothing, even with a valid
+// submission token; a same-origin post and a non-browser client still record.
 func TestContentPlaneRejectsCrossOriginAnswers(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {
@@ -206,11 +206,13 @@ func TestContentPlaneRejectsCrossOriginAnswers(t *testing.T) {
 	if _, err := st.Put(store.PutOptions{Slug: "lesson", Replies: true}, strings.NewReader("<html>x</html>")); err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(New(st, Config{}).ContentHandler())
+	srv := New(st, Config{})
+	ts := httptest.NewServer(srv.ContentHandler())
 	t.Cleanup(ts.Close)
+	token := srv.ReplyFormToken("lesson")
 	post := func(hdr map[string]string) int {
 		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/answer/lesson",
-			strings.NewReader(url.Values{"body": {"answer"}}.Encode()))
+			strings.NewReader(url.Values{"body": {"answer"}, "token": {token}}.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		for k, v := range hdr {
 			req.Header.Set(k, v)
@@ -335,5 +337,106 @@ func TestAnswerNeedsThePagePassword(t *testing.T) {
 	}
 	if code := answer("letmein"); code != http.StatusCreated {
 		t.Fatalf("answer with the password = %d, want 201", code)
+	}
+}
+
+// replyTokenOf extracts the reply box's submission token from a page.
+func replyTokenOf(t *testing.T, page string) string {
+	t.Helper()
+	const marker = `name="token" value="`
+	i := strings.Index(page, marker)
+	if i < 0 {
+		t.Fatalf("page has no reply token: %s", page)
+	}
+	rest := page[i+len(marker):]
+	return rest[:strings.IndexByte(rest, '"')]
+}
+
+// TestBakedReplyTokenLifecycle: the reply box baked into a ?reply=question page
+// carries a token its answer route accepts from a sandboxed (opaque-origin)
+// post; a rebake bakes the same token; a republish (here adding a password)
+// invalidates the previous publish's token; and a post from another origin is
+// refused by the content guard whatever token it carries.
+func TestBakedReplyTokenLifecycle(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	ts := httptest.NewServer(New(st, Config{}).Handler())
+	t.Cleanup(ts.Close)
+
+	publish := func(password string) {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/publish?slug=quiz&render=md&reply=question",
+			strings.NewReader("# Q\n\nWhy?\n"))
+		if password != "" {
+			req.Header.Set(PasswordHeader, password)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || resp.StatusCode != http.StatusCreated {
+			t.Fatalf("publish: %v %v", err, resp)
+		}
+		resp.Body.Close()
+	}
+	page := func(password string) string {
+		req, _ := http.NewRequest(http.MethodGet, ts.URL+"/quiz", nil)
+		if password != "" {
+			req.SetBasicAuth("u", password)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+	answer := func(token, password string, hdr map[string]string) int {
+		v := url.Values{"body": {"an answer"}, "token": {token}}
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/answer/quiz", strings.NewReader(v.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		for k, val := range hdr {
+			req.Header.Set(k, val)
+		}
+		if password != "" {
+			req.SetBasicAuth("u", password)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	sandboxed := map[string]string{"Origin": "null", "Sec-Fetch-Site": "cross-site"}
+
+	publish("")
+	first := replyTokenOf(t, page(""))
+	if code := answer(first, "", sandboxed); code != http.StatusCreated {
+		t.Fatalf("sandboxed answer with the page's token: %d", code)
+	}
+	if code := answer(first, "", map[string]string{"Origin": "http://evil.example", "Sec-Fetch-Site": "cross-site"}); code != http.StatusForbidden {
+		t.Errorf("answer from another origin with a valid token: %d, want 403", code)
+	}
+
+	resp, err := http.Post(ts.URL+"/rerender/quiz", "", nil)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("rerender: %v %v", err, resp)
+	}
+	resp.Body.Close()
+	if again := replyTokenOf(t, page("")); again != first {
+		t.Errorf("a rebake changed the token: %q -> %q", first, again)
+	}
+
+	publish("pw-2")
+	second := replyTokenOf(t, page("pw-2"))
+	if second == first {
+		t.Fatal("a republish kept the previous token")
+	}
+	if code := answer(first, "pw-2", sandboxed); code != http.StatusForbidden {
+		t.Errorf("the previous publish's token after a republish: %d, want 403", code)
+	}
+	if code := answer(second, "pw-2", sandboxed); code != http.StatusCreated {
+		t.Errorf("the current token: %d, want 201", code)
 	}
 }

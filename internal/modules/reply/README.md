@@ -56,6 +56,9 @@ curl -X POST -H 'Content-Type: application/json' \
 ```
 
 - `kind` ∈ `approve | defer | comment` (a `comment` requires non-empty `body`).
+- A browser post must include the `token` field the `GET /reply/{slug}` form
+  carries (or `"token"` in JSON); without it the post is a `403`. Non-browser
+  clients (no `Origin` or `Sec-Fetch-Site` header) need no token.
 - `201` + the stored reply as JSON (or the HTML confirmation for a form post).
 - `404` unknown slug or replies not enabled · `401` view password missing or
   wrong · `400` bad kind / empty comment · `413` body over 8 KiB · `429` a rate
@@ -83,7 +86,11 @@ single free-text answer as a **`comment`**-kind reply and returns a
 durably stored, or an explicit "Not recorded" page
 (`400`/`401`/`404`/`413`/`429`/`503`/`507`) on any failure. The content listener
 refuses cross-origin browser posts (`403`), except from an opaque origin (a
-sandboxed page) whose Referer is absent or on the content origin. Mounted via the optional `module.ContentRouteModule` seam so it
+sandboxed page) whose Referer is absent or on the content origin. A browser post
+(one carrying `Origin` or `Sec-Fetch-Site`) must also carry the box's hidden
+`token`, which is bound to the artifact and its current publish; without a
+valid one the answer is refused with `403` and not recorded. Non-browser
+clients need no token. Mounted via the optional `module.ContentRouteModule` seam so it
 lives on the same origin that serves the page. `404` for an unknown/private slug.
 
 ## Inline reply box on a rendered page (Q&A / teaching)
