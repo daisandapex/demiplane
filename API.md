@@ -659,8 +659,10 @@ site's index URL on the content origin. A `?fmt=tar|zip` hint disambiguates the
 archive; otherwise the format is sniffed. Body size is always capped for a site
 publish (the archive is buffered for extraction). An archive may hold at most
 4,096 entries, counting directories, links and other skipped entries as well
-as files; a zip's central directory may be at most 2 MiB and a tar's PAX or
-GNU long-name header at most 64 KiB (`413` otherwise). Entry paths use `/`
+as files; a zip's central directory may be at most 2 MiB, and the headers in
+front of any one tar entry (its PAX, global PAX and GNU long-name or long-link
+headers with their data, and its own header) at most 64 KiB (`413`
+otherwise). Entry paths use `/`
 only: a name containing a backslash, `..`, a dotfile segment or an absolute
 path is refused with `400`, and symlinks and other non-regular entries are
 skipped. Two archives are parsed at a time; a publish that waits more than five
@@ -710,7 +712,7 @@ filtering, sorting and grouping apply to the page shown.
 | `404 Not Found` | No such artifact or reply, or it expired. |
 | `405 Method Not Allowed` | Wrong method for a known path (for example `POST /list`). |
 | `408 Request Timeout` | The request body arrived too slowly (`--body-timeout`, `--upload-min-rate`). |
-| `413 Payload Too Large` | Upload exceeds `--max-upload`, a reply/site exceeds its cap (a site archive: 4,096 entries of any kind, a 2 MiB zip central directory, a 64 KiB tar PAX or long-name header, the decompressed-bytes budget), or a `?render=md` document exceeds a render limit (table width, table cells, `--render-max-output`). |
+| `413 Payload Too Large` | Upload exceeds `--max-upload`, a reply/site exceeds its cap (a site archive: 4,096 entries of any kind, a 2 MiB zip central directory, 64 KiB of tar headers in front of one entry, the decompressed-bytes budget), or a `?render=md` document exceeds a render limit (table width, table cells, `--render-max-output`). |
 | `421 Misdirected Request` | `--allowed-hosts` is set and the `Host` is not one it (or a base URL) names. |
 | `429 Too Many Requests` | Too many failed view-password attempts or reply submissions (with `Retry-After`), or an artifact reached its reply limit. |
 | `501 Not Implemented` | A feature (for example `?site=`) is not compiled into this build. |

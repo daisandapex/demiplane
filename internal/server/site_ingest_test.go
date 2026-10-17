@@ -10,6 +10,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -285,5 +287,150 @@ func TestSitePublishBusyIs503(t *testing.T) {
 	<-srv.siteSem
 	if resp, rb := postSite(t, ts.URL, "busy", "fmt=tar", "application/x-tar", makeTar(t, threeFileSite())); resp.StatusCode != http.StatusCreated {
 		t.Errorf("publish with a free slot: %d (%s), want 201", resp.StatusCode, rb)
+	}
+}
+
+// TestSiteTarHeaderOnlyEntryCannotHideHeaders: a directory (or other
+// header-only) entry declaring a nonzero size has no data to archive/tar,
+// which reads the next header straight after it. An oversized PAX header
+// placed there is still refused.
+func TestSiteTarHeaderOnlyEntryCannotHideHeaders(t *testing.T) {
+	ts := newTestServer(t, "")
+	for _, typ := range []byte{'5', '2', '1', '3', '4', '6'} {
+		var inner bytes.Buffer
+		big := paxRecord("comment", string(bytes.Repeat([]byte("c"), 70000)))
+		inner.Write(rawTarHeader("PaxHeaders/index.html", 'x', int64(len(big))))
+		inner.WriteString(big)
+		tarPad(&inner)
+
+		var b bytes.Buffer
+		b.Write(rawTarHeader("d/", typ, int64(inner.Len())))
+		b.Write(inner.Bytes())
+		b.Write(rawTarHeader("index.html", '0', 9))
+		b.WriteString("<p>hi</p>")
+		tarPad(&b)
+		b.Write(make([]byte, 1024))
+		resp, rb := postSite(t, ts.URL, "hidden-"+string(rune('a'+typ-'1')), "fmt=tar", "application/x-tar", b.Bytes())
+		if resp.StatusCode != http.StatusRequestEntityTooLarge {
+			t.Errorf("type %q entry with a nonzero size hiding a %d-byte PAX header: status %d (%s), want 413",
+				typ, len(big), resp.StatusCode, rb)
+		}
+	}
+}
+
+// tarStep is one header archive/tar returned, with the archive offset it
+// had reached.
+type tarStep struct {
+	name string
+	typ  byte
+	size int64
+	off  int64
+	err  string
+}
+
+// walkTar lists the headers archive/tar returns for archive, reading through
+// the header budget when budgeted.
+func walkTar(archive []byte, budgeted bool) []tarStep {
+	f := bytes.NewReader(archive)
+	var steps []tarStep
+	var tr *tar.Reader
+	var hr *tarHeaderReader
+	if budgeted {
+		hr = &tarHeaderReader{f: f}
+		tr = tar.NewReader(hr)
+	} else {
+		tr = tar.NewReader(f)
+	}
+	for len(steps) < 1000 {
+		var hdr *tar.Header
+		var err error
+		if budgeted {
+			hdr, err = hr.next(tr)
+		} else {
+			hdr, err = tr.Next()
+		}
+		off, _ := f.Seek(0, io.SeekCurrent)
+		if err != nil {
+			steps = append(steps, tarStep{err: err.Error(), off: off})
+			return steps
+		}
+		steps = append(steps, tarStep{name: hdr.Name, typ: hdr.Typeflag, size: hdr.Size, off: off})
+	}
+	return steps
+}
+
+// randomTar builds an archive of assorted entries, including header-only
+// types with nonzero sizes, legacy type-0 entries with and without a trailing
+// slash, PAX size and path overrides, GNU long names and global headers.
+func randomTar(rng *rand.Rand) []byte {
+	var b bytes.Buffer
+	n := 1 + rng.Intn(8)
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("e%d", i)
+		size := int64(rng.Intn(3) * rng.Intn(1500))
+		data := bytes.Repeat([]byte{byte('a' + i)}, int(size))
+		switch rng.Intn(6) {
+		case 0: // PAX header, maybe overriding size and path
+			var recs string
+			if rng.Intn(2) == 0 {
+				size = int64(rng.Intn(1200))
+				data = bytes.Repeat([]byte{'p'}, int(size))
+				recs += paxRecord("size", fmt.Sprint(size))
+			}
+			if rng.Intn(2) == 0 {
+				name += "/"
+				recs += paxRecord("path", name)
+			}
+			recs += paxRecord("comment", strings.Repeat("c", rng.Intn(3000)))
+			b.Write(rawTarHeader("PaxHeaders/"+name, 'x', int64(len(recs))))
+			b.WriteString(recs)
+			tarPad(&b)
+		case 1: // GNU long name
+			long := strings.Repeat("l", 100+rng.Intn(300))
+			if rng.Intn(2) == 0 {
+				long += "/"
+			}
+			b.Write(rawTarHeader("././@LongLink", 'L', int64(len(long)+1)))
+			b.WriteString(long + "\x00")
+			tarPad(&b)
+		case 2: // global header
+			g := paxRecord("comment", "global")
+			b.Write(rawTarHeader("pax_global_header", 'g', int64(len(g))))
+			b.WriteString(g)
+			tarPad(&b)
+		}
+		types := []byte{'0', '5', '2', '1', '3', '4', '6', 0, 0}
+		typ := types[rng.Intn(len(types))]
+		if typ == '0' && rng.Intn(3) == 0 {
+			// Data well over the header budget, which archive/tar skips
+			// rather than reads, so it must not count.
+			size = 100000 + int64(rng.Intn(50000))
+			data = bytes.Repeat([]byte{'d'}, int(size))
+		}
+		if typ == 0 && rng.Intn(2) == 0 {
+			name += "/"
+		}
+		b.Write(rawTarHeader(name, typ, size))
+		// Header-only types get their declared bytes anyway, as a hostile
+		// archive would; archive/tar reads them as the next header.
+		b.Write(data)
+		tarPad(&b)
+	}
+	b.Write(make([]byte, 1024))
+	return b.Bytes()
+}
+
+// TestTarHeaderBudgetMatchesArchiveTar: for a few hundred generated archives
+// under the budget, reading through tarHeaderReader returns exactly the
+// headers, offsets and errors archive/tar returns on its own, so the budget
+// never changes how an archive is read.
+func TestTarHeaderBudgetMatchesArchiveTar(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	for i := 0; i < 400; i++ {
+		archive := randomTar(rng)
+		plain, budgeted := walkTar(archive, false), walkTar(archive, true)
+		if fmt.Sprint(plain) != fmt.Sprint(budgeted) {
+			t.Fatalf("archive %d: archive/tar read\n%v\nbut through the budget\n%v", i, plain, budgeted)
+		}
 	}
 }

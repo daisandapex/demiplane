@@ -4,13 +4,12 @@
 package server
 
 import (
-	"bytes"
+	"archive/tar"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"time"
 )
 
@@ -19,9 +18,9 @@ import (
 // describe millions of tiny entries, and archive/zip reads a zip's whole
 // central directory into memory before any per-file check runs; archive/tar
 // accepts PAX and GNU long-name headers of up to 1 MiB each and expands PAX
-// records into a map. So the archive's structure is checked first, with
-// parsing whose cost is bounded by the caps below, and only a few archives
-// are parsed at once.
+// records into a map. So a zip's directory is checked first and its read
+// limited, archive/tar's header reads are limited per entry, and only a few
+// archives are parsed at once.
 
 const (
 	// maxSiteEntries caps the entries one site archive may hold, counting
@@ -31,12 +30,10 @@ const (
 	// entries with paths of a few hundred bytes. archive/zip holds about five
 	// times the directory's size in memory while it reads it.
 	maxZipDirBytes = 2 << 20
-	// maxTarHeaders caps a tar's header records, special ones (PAX, GNU long
-	// names) included: a PAX header and a long name for every entry fit.
-	maxTarHeaders = 3 * maxSiteEntries
-	// maxTarSpecialBytes caps the data of one PAX, global PAX or GNU
-	// long-name/long-link header (archive/tar's own cap is 1 MiB).
-	maxTarSpecialBytes = 64 << 10
+	// maxTarHeaderBytes caps what archive/tar reads to reach one entry: its
+	// header and any PAX, global PAX and GNU long-name/long-link headers in
+	// front of it, with their data (archive/tar's own cap is 1 MiB for each).
+	maxTarHeaderBytes = 64 << 10
 	// siteParseSlots is how many site archives are parsed and extracted at
 	// once; more wait up to sitePublishWait and are then refused with 503.
 	siteParseSlots = 2
@@ -49,8 +46,9 @@ var sitePublishWait = 5 * time.Second
 // errSiteBusy is the parse-slot refusal, answered 503.
 var errSiteBusy = errors.New("site publishing is at capacity; retry shortly")
 
-// errTarHeaderTooLarge refuses a tar special header over maxTarSpecialBytes.
-var errTarHeaderTooLarge = fmt.Errorf("site archive has a header larger than %d bytes", maxTarSpecialBytes)
+// errTarHeaderTooLarge refuses a tar entry whose headers exceed
+// maxTarHeaderBytes.
+var errTarHeaderTooLarge = fmt.Errorf("site archive has an entry with more than %d bytes of headers", maxTarHeaderBytes)
 
 // acquireSiteParse takes a parse slot, waiting up to sitePublishWait.
 func (s *Server) acquireSiteParse(ctx context.Context) (release func(), err error) {
@@ -175,126 +173,53 @@ const zipOpenReadLimit = maxZipDirBytes + 66*1024 + 1024 + 128 + 2*4096
 
 // --- tar -------------------------------------------------------------------
 
-// checkTarHeaders walks a tar's header records without decoding entries: it
-// counts every header, special ones included, against maxTarHeaders and
-// refuses a PAX, global PAX or GNU long-name/long-link header whose data is
-// over maxTarSpecialBytes. It follows the records archive/tar consumes (a PAX
-// "size" record overriding the next entry's size, old GNU sparse extension
-// blocks) and stops at the first zero block or anything it cannot read,
-// which archive/tar then rejects.
-func checkTarHeaders(ra io.ReaderAt, size int64) error {
-	var (
-		blk     [512]byte
-		off     int64
-		headers int
-		paxSize int64 = -1
-		zeroBlk [512]byte
-	)
-	for off+512 <= size {
-		if _, err := ra.ReadAt(blk[:], off); err != nil {
-			return nil
-		}
-		if blk == zeroBlk {
-			return nil
-		}
-		headers++
-		if headers > maxTarHeaders {
-			return errTooManyFiles
-		}
-		n, ok := tarNumeric(blk[124:136])
-		if !ok || n < 0 {
-			return nil
-		}
-		off += 512
-		switch typ := blk[156]; typ {
-		case 'x', 'g', 'L', 'K':
-			if n > maxTarSpecialBytes {
-				return errTarHeaderTooLarge
-			}
-			if typ == 'x' {
-				data := make([]byte, n)
-				if _, err := ra.ReadAt(data, off); err != nil {
-					return nil
-				}
-				paxSize = paxRecordSize(data)
-			}
-			off += (n + 511) &^ 511
-			continue
-		case 'S':
-			// Old GNU sparse: extension blocks follow while the flag is set.
-			for ext := blk[482] != 0; ext; {
-				if _, err := ra.ReadAt(blk[:], off); err != nil {
-					return nil
-				}
-				off += 512
-				headers++
-				if headers > maxTarHeaders {
-					return errTooManyFiles
-				}
-				ext = blk[504] != 0
-			}
-		}
-		if paxSize >= 0 {
-			n = paxSize
-		}
-		paxSize = -1
-		off += (n + 511) &^ 511
-	}
-	return nil
+// tarHeaderReader is the scratch file as archive/tar reads it during
+// extraction. archive/tar alone decides what is a header and what is data,
+// so nothing here re-implements its format rules (header-only types, legacy
+// directories, PAX overrides, sparse maps). Instead, while armed, around
+// each tar.Reader.Next, it allows at most maxTarHeaderBytes to be read:
+// everything archive/tar reads to reach the next entry, which is the
+// previous entry's padding, any PAX, global PAX and GNU long-name/long-link
+// headers with their data, a sparse map, and the entry's own header. The
+// previous entry's unread data is not read but skipped, because archive/tar
+// seeks past it when its reader can seek, so it does not count. Disarmed,
+// the entry data AddFile reads passes through unlimited (the decompressed
+// budget bounds it).
+type tarHeaderReader struct {
+	f       io.ReadSeeker
+	armed   bool
+	left    int64
+	tripped bool
 }
 
-// tarNumeric parses a tar numeric field as archive/tar does: base-256 when
-// the high bit is set, else octal with surrounding spaces and NULs ignored.
-func tarNumeric(b []byte) (int64, bool) {
-	if len(b) > 0 && b[0]&0x80 != 0 {
-		if b[0]&0x40 != 0 {
-			return 0, false // negative
-		}
-		var v uint64
-		for i, c := range b {
-			if i == 0 {
-				c &= 0x7f
-			}
-			if v>>56 != 0 {
-				return 0, false
-			}
-			v = v<<8 | uint64(c)
-		}
-		if v > 1<<62 {
-			return 0, false
-		}
-		return int64(v), true
+func (t *tarHeaderReader) Read(p []byte) (int, error) {
+	if !t.armed {
+		return t.f.Read(p)
 	}
-	b = bytes.Trim(b, " \x00")
-	if len(b) == 0 {
-		return 0, true
+	if t.left <= 0 {
+		t.tripped = true
+		return 0, errTarHeaderTooLarge
 	}
-	v, err := strconv.ParseUint(string(b), 8, 62)
-	if err != nil {
-		return 0, false
+	if int64(len(p)) > t.left {
+		p = p[:t.left]
 	}
-	return int64(v), true
+	n, err := t.f.Read(p)
+	t.left -= int64(n)
+	return n, err
 }
 
-// paxRecordSize returns the "size" record of a PAX header's data, or -1.
-func paxRecordSize(data []byte) int64 {
-	size := int64(-1)
-	for len(data) > 0 {
-		sp := bytes.IndexByte(data, ' ')
-		if sp <= 0 {
-			break
-		}
-		n, err := strconv.Atoi(string(data[:sp]))
-		if err != nil || n <= sp+1 || n > len(data) {
-			break
-		}
-		kv := data[sp+1 : n-1]
-		if k, v, ok := bytes.Cut(kv, []byte("=")); ok && string(k) == "size" {
-			if s, err := strconv.ParseInt(string(v), 10, 64); err == nil && s >= 0 {
-				size = s
-			}
-		}
-		data = data[n:]
+func (t *tarHeaderReader) Seek(off int64, whence int) (int64, error) {
+	return t.f.Seek(off, whence)
+}
+
+// next is tr.Next with the header budget applied. A budget overrun is
+// errTarHeaderTooLarge whatever archive/tar made of the failed read.
+func (t *tarHeaderReader) next(tr *tar.Reader) (*tar.Header, error) {
+	t.armed, t.left = true, maxTarHeaderBytes
+	hdr, err := tr.Next()
+	t.armed = false
+	if t.tripped {
+		return nil, errTarHeaderTooLarge
 	}
-	return size
+	return hdr, err
 }

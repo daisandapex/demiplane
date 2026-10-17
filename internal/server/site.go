@@ -167,7 +167,7 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 	case "zip":
 		err = extractZip(sw, tmp, size)
 	default: // "tar"
-		err = extractTar(sw, tmp, size)
+		err = extractTar(sw, tmp)
 	}
 	if err != nil {
 		s.writeSiteExtractError(w, err)
@@ -260,12 +260,6 @@ func detectArchiveFormat(fmtParam, contentType string, ra io.ReadSeeker) string 
 	return "tar"
 }
 
-// tarSource is the scratch file a tar is read from.
-type tarSource interface {
-	io.ReaderAt
-	io.ReadSeeker
-}
-
 // extractTar streams every regular file from a tar into the site writer.
 // Non-regular entries (dirs, symlinks, hardlinks, devices) are skipped, so a
 // symlink entry can never plant a link in the served tree. The uploaded archive
@@ -275,20 +269,22 @@ type tarSource interface {
 // same total-bytes budget the zip path uses is enforced here — otherwise a ~10KB
 // sparse tar would write GBs to the sites scratch dir, defeating the
 // whole-archive size cap. Every entry, skipped or not, counts toward
-// maxSiteEntries, and the headers are checked first (checkTarHeaders).
-func extractTar(sw *store.SiteWriter, ra tarSource, size int64) error {
-	if err := checkTarHeaders(ra, size); err != nil {
-		return err
-	}
+// maxSiteEntries, and what archive/tar reads to reach each entry is limited
+// (tarHeaderReader).
+func extractTar(sw *store.SiteWriter, ra io.ReadSeeker) error {
 	if _, err := ra.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind archive: %w", err)
 	}
-	tr := tar.NewReader(ra)
+	hr := &tarHeaderReader{f: ra}
+	tr := tar.NewReader(hr)
 	budget := siteDecompressBudget
 	for entries := 0; ; entries++ {
-		hdr, err := tr.Next()
+		hdr, err := hr.next(tr)
 		if err == io.EOF {
 			break
+		}
+		if errors.Is(err, errTarHeaderTooLarge) {
+			return errTarHeaderTooLarge
 		}
 		if err != nil {
 			return fmt.Errorf("read tar: %w", err)
