@@ -4,9 +4,11 @@
 package reply
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -258,13 +260,8 @@ func TestReplyRetentionFreesRoom(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Counters were loaded at open, before the seeds; reload them as a
-	// restart would.
 	m.rs.mu.Lock()
-	if err := m.rs.recount(); err != nil {
-		t.Fatal(err)
-	}
-	m.rs.lastSweep = time.Time{}
+	m.rs.lastSweep = time.Time{} // due for a retention pass
 	m.rs.mu.Unlock()
 	if code, _ := submit(t, ts, "content", "on", ""); code != http.StatusCreated {
 		t.Fatalf("submission after expired replies = %d, want 201 (retention should free room)", code)
@@ -298,5 +295,93 @@ func TestRefusedSubmissionCreatesNoHookJob(t *testing.T) {
 	case rep := <-fired:
 		t.Fatalf("a refused submission fired a hook: %+v", rep)
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// TestReplyTotalsHoldAcrossStores opens the reply database twice, as two
+// processes would, and fills it through both: the aggregate limit holds
+// across them.
+func TestReplyTotalsHoldAcrossStores(t *testing.T) {
+	dir := t.TempDir()
+	a, err := openReplyStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.close()
+	b, err := openReplyStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.close()
+	l := openLimits()
+	l.Total = 10
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	stored := 0
+	for i := 0; i < 30; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rs := a
+			if i%2 == 1 {
+				rs = b
+			}
+			if _, err := rs.addLimited("s"+strconv.Itoa(i), "comment", "x", time.Now(), l); err == nil {
+				mu.Lock()
+				stored++
+				mu.Unlock()
+			} else if !errors.Is(err, errReplyStoreFull) {
+				t.Error(err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	var n int
+	if err := a.db.QueryRow(`SELECT COUNT(*) FROM replies`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 10 || n != 10 {
+		t.Fatalf("stored %d (table has %d) through two stores with a total of 10", stored, n)
+	}
+	var sn, sb int
+	if err := a.db.QueryRow(`SELECT n, bytes FROM reply_stats`).Scan(&sn, &sb); err != nil {
+		t.Fatal(err)
+	}
+	if sn != 10 || sb != 10 {
+		t.Fatalf("totals row says %d replies, %d bytes; want 10 and 10", sn, sb)
+	}
+}
+
+// TestReplyTotalsSeededFromExistingRows: a database from before the totals
+// table starts with totals that match its rows.
+func TestReplyTotalsSeededFromExistingRows(t *testing.T) {
+	dir := t.TempDir()
+	rs, err := openReplyStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := rs.add("s", "comment", "hello", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, q := range []string{`DROP TRIGGER replies_stats_insert`, `DROP TRIGGER replies_stats_delete`,
+		`DROP TRIGGER replies_stats_update`, `DROP TABLE reply_stats`} {
+		if _, err := rs.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rs.close()
+	rs, err = openReplyStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rs.close()
+	var n, b int
+	if err := rs.db.QueryRow(`SELECT n, bytes FROM reply_stats`).Scan(&n, &b); err != nil {
+		t.Fatal(err)
+	}
+	if n != 3 || b != 15 {
+		t.Fatalf("seeded totals %d replies, %d bytes; want 3 and 15", n, b)
 	}
 }

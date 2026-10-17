@@ -32,13 +32,9 @@ type Reply struct {
 type replyStore struct {
 	db *sql.DB
 
-	// mu serializes limited inserts and guards the aggregate counters below,
-	// so a count and the insert it admits cannot interleave with another
-	// submission's (the IMMEDIATE transaction does the same across
-	// processes).
+	// mu serializes limited inserts in this process and guards lastSweep;
+	// the IMMEDIATE transaction serializes them across connections.
 	mu        sync.Mutex
-	rows      int       // replies stored
-	bytes     int64     // reply text stored
 	lastSweep time.Time // last retention pass
 }
 
@@ -66,22 +62,7 @@ func openReplyStore(dir string) (*replyStore, error) {
 		db.Close()
 		return nil, err
 	}
-	if err := rs.recount(); err != nil {
-		db.Close()
-		return nil, err
-	}
 	return rs, nil
-}
-
-// recount reloads the aggregate counters from the table. Caller holds rs.mu
-// or has exclusive use of rs.
-func (rs *replyStore) recount() error {
-	if err := rs.db.QueryRow(
-		`SELECT COUNT(*), COALESCE(SUM(LENGTH(CAST(body AS BLOB))), 0) FROM replies`,
-	).Scan(&rs.rows, &rs.bytes); err != nil {
-		return fmt.Errorf("count replies: %w", err)
-	}
-	return nil
 }
 
 func (rs *replyStore) migrate() error {
@@ -99,6 +80,37 @@ CREATE INDEX IF NOT EXISTS idx_replies_status ON replies(status);
 CREATE INDEX IF NOT EXISTS idx_replies_created ON replies(created_at);`
 	if _, err := rs.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate replies schema: %w", err)
+	}
+	// Aggregate totals for the storage limits, kept in the database by
+	// triggers so they change in the same transaction as the rows they count.
+	// Created once, seeded from the rows already there.
+	const stats = `
+CREATE TABLE IF NOT EXISTS reply_stats (
+    id    INTEGER PRIMARY KEY CHECK (id = 1),
+    n     INTEGER NOT NULL,
+    bytes INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO reply_stats (id, n, bytes)
+    SELECT 1, COUNT(*), COALESCE(SUM(LENGTH(CAST(body AS BLOB))), 0) FROM replies;
+CREATE TRIGGER IF NOT EXISTS replies_stats_insert AFTER INSERT ON replies BEGIN
+    UPDATE reply_stats SET n = n + 1, bytes = bytes + LENGTH(CAST(NEW.body AS BLOB)) WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS replies_stats_delete AFTER DELETE ON replies BEGIN
+    UPDATE reply_stats SET n = n - 1, bytes = bytes - LENGTH(CAST(OLD.body AS BLOB)) WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS replies_stats_update AFTER UPDATE OF body ON replies BEGIN
+    UPDATE reply_stats SET bytes = bytes - LENGTH(CAST(OLD.body AS BLOB)) + LENGTH(CAST(NEW.body AS BLOB)) WHERE id = 1;
+END;`
+	tx, err := rs.db.Begin()
+	if err != nil {
+		return fmt.Errorf("migrate reply stats: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(stats); err != nil {
+		return fmt.Errorf("migrate reply stats: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("migrate reply stats: %w", err)
 	}
 	return nil
 }
@@ -123,8 +135,9 @@ func (rs *replyStore) add(slug, kind, body string, now time.Time) (Reply, error)
 
 // addLimited inserts a reply if lim allows it: fewer than lim.PerArtifact
 // replies for slug, and room under lim.Total and lim.TotalBytes. The checks
-// and the insert run in one IMMEDIATE transaction while rs.mu is held, so
-// concurrent submissions cannot all pass a check that only one of them fits.
+// and the insert run in one IMMEDIATE transaction, so concurrent submissions,
+// from this process or another one sharing the database, cannot all pass a
+// check that only one of them fits.
 // Replies older than lim.Retention are deleted first, at most once per
 // retentionEvery.
 func (rs *replyStore) addLimited(slug, kind, body string, now time.Time, lim Limits) (Reply, error) {
@@ -136,15 +149,21 @@ func (rs *replyStore) addLimited(slug, kind, body string, now time.Time, lim Lim
 			log.Printf("reply: retention pass failed: %v", err)
 		}
 	}
-	size := int64(len(body))
-	if rs.rows >= lim.Total || rs.bytes+size > lim.TotalBytes {
-		return Reply{}, errReplyStoreFull
-	}
 	tx, err := rs.db.Begin()
 	if err != nil {
 		return Reply{}, fmt.Errorf("insert reply: %w", err)
 	}
 	defer tx.Rollback()
+	var (
+		total      int
+		totalBytes int64
+	)
+	if err := tx.QueryRow(`SELECT n, bytes FROM reply_stats WHERE id = 1`).Scan(&total, &totalBytes); err != nil {
+		return Reply{}, fmt.Errorf("read reply totals: %w", err)
+	}
+	if total >= lim.Total || totalBytes+int64(len(body)) > lim.TotalBytes {
+		return Reply{}, errReplyStoreFull
+	}
 	var n int
 	if err := tx.QueryRow(`SELECT COUNT(*) FROM replies WHERE slug = ?`, slug).Scan(&n); err != nil {
 		return Reply{}, fmt.Errorf("count replies: %w", err)
@@ -166,19 +185,17 @@ func (rs *replyStore) addLimited(slug, kind, body string, now time.Time, lim Lim
 	if err := tx.Commit(); err != nil {
 		return Reply{}, fmt.Errorf("insert reply: %w", err)
 	}
-	rs.rows++
-	rs.bytes += size
 	return Reply{ID: id, Slug: slug, Kind: kind, Body: body, CreatedAt: now.UTC(), Status: "pending"}, nil
 }
 
-// sweepLocked deletes replies created before now-retention and reloads the
-// counters. Caller holds rs.mu.
+// sweepLocked deletes replies created before now-retention (the triggers
+// update the totals). Caller holds rs.mu.
 func (rs *replyStore) sweepLocked(now time.Time, retention time.Duration) error {
 	rs.lastSweep = now
 	if _, err := rs.db.Exec(`DELETE FROM replies WHERE created_at < ?`, now.Add(-retention).Unix()); err != nil {
 		return fmt.Errorf("delete old replies: %w", err)
 	}
-	return rs.recount()
+	return nil
 }
 
 // count returns how many replies exist for slug (for the per-artifact cap).
