@@ -66,8 +66,10 @@ curl -X POST -H 'Content-Type: application/json' \
   is full (with `Retry-After`) · `507` the aggregate reply limits are reached.
 
 ### `GET /replies` — list *(auth)*
-JSON, newest first. Filters: `?slug=<slug>`, `?status=pending|read|all`
-(default `pending`).
+JSON, newest first, at most 100 replies a response. Filters: `?slug=<slug>`,
+`?status=pending|read|all` (default `pending`). While more remain, the
+response carries `next`, a cursor to pass back as `?after=<next>`; `count` is
+the number of replies in the response. A malformed cursor is a `400`.
 
 ```sh
 curl -H "Authorization: Bearer $TOKEN" \

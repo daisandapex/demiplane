@@ -411,7 +411,18 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "status must be one of: pending, read, all", http.StatusBadRequest)
 		return
 	}
-	replies, err := m.rs.list(q.Get("slug"), status)
+	var after *listCursor
+	if v := q.Get("after"); v != "" {
+		c, err := parseListCursor(v)
+		if err != nil {
+			http.Error(w, "after must be a cursor from a previous response's next", http.StatusBadRequest)
+			return
+		}
+		after = &c
+	}
+	// One page at a time: a response holds at most listPageSize replies (each
+	// at most the reply text cap), whatever the store holds.
+	replies, next, err := m.rs.list(q.Get("slug"), status, after, listPageSize)
 	if err != nil {
 		log.Printf("reply: list failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -420,7 +431,11 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 	if replies == nil {
 		replies = []Reply{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"replies": replies, "count": len(replies)})
+	resp := map[string]any{"replies": replies, "count": len(replies)}
+	if next != nil {
+		resp["next"] = next.String()
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleAck marks a reply read (auth). 204 on success, 404 for an unknown id.

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -86,7 +88,12 @@ CREATE TABLE IF NOT EXISTS replies (
 );
 CREATE INDEX IF NOT EXISTS idx_replies_slug   ON replies(slug);
 CREATE INDEX IF NOT EXISTS idx_replies_status ON replies(status);
-CREATE INDEX IF NOT EXISTS idx_replies_created ON replies(created_at);`
+CREATE INDEX IF NOT EXISTS idx_replies_created ON replies(created_at);
+-- Keyset paging of GET /replies, newest first, with each filter.
+CREATE INDEX IF NOT EXISTS idx_replies_page        ON replies(created_at, id);
+CREATE INDEX IF NOT EXISTS idx_replies_page_status ON replies(status, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_replies_page_slug   ON replies(slug, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_replies_page_slug_status ON replies(slug, status, created_at, id);`
 	if _, err := rs.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate replies schema: %w", err)
 	}
@@ -290,9 +297,34 @@ func (rs *replyStore) count(slug string) (int, error) {
 	return n, nil
 }
 
-// list returns replies, newest first, optionally filtered by slug and by status.
-// status "" or "all" returns every status; otherwise an exact match.
-func (rs *replyStore) list(slug, status string) ([]Reply, error) {
+// listCursor is the position after which a page of replies starts: the
+// created_at and id of the last reply of the previous page.
+type listCursor struct {
+	created int64
+	id      int64
+}
+
+func (c listCursor) String() string {
+	return strconv.FormatInt(c.created, 10) + "." + strconv.FormatInt(c.id, 10)
+}
+
+// parseListCursor parses a cursor "<unix>.<id>" as GET /replies hands out.
+func parseListCursor(s string) (listCursor, error) {
+	a, b, ok := strings.Cut(s, ".")
+	created, err1 := strconv.ParseInt(a, 10, 64)
+	id, err2 := strconv.ParseInt(b, 10, 64)
+	if !ok || err1 != nil || err2 != nil || len(s) > 41 {
+		return listCursor{}, errors.New("invalid cursor")
+	}
+	return listCursor{created: created, id: id}, nil
+}
+
+// list returns one page of replies, newest first, optionally filtered by
+// slug and by status (status "" or "all" returns every status; otherwise an
+// exact match), starting after the cursor when there is one. It reads at
+// most limit+1 rows along an index and returns the cursor of the next page,
+// or nil when this is the last.
+func (rs *replyStore) list(slug, status string, after *listCursor, limit int) ([]Reply, *listCursor, error) {
 	q := `SELECT id, slug, kind, body, created_at, status FROM replies`
 	var (
 		conds []string
@@ -306,6 +338,10 @@ func (rs *replyStore) list(slug, status string) ([]Reply, error) {
 		conds = append(conds, "status = ?")
 		args = append(args, status)
 	}
+	if after != nil {
+		conds = append(conds, "(created_at, id) < (?, ?)")
+		args = append(args, after.created, after.id)
+	}
 	for i, c := range conds {
 		if i == 0 {
 			q += " WHERE "
@@ -314,11 +350,12 @@ func (rs *replyStore) list(slug, status string) ([]Reply, error) {
 		}
 		q += c
 	}
-	q += " ORDER BY created_at DESC, id DESC"
+	q += " ORDER BY created_at DESC, id DESC LIMIT ?"
+	args = append(args, limit+1)
 
 	rows, err := rs.db.Query(q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list replies: %w", err)
+		return nil, nil, fmt.Errorf("list replies: %w", err)
 	}
 	defer rows.Close()
 
@@ -329,15 +366,20 @@ func (rs *replyStore) list(slug, status string) ([]Reply, error) {
 			created int64
 		)
 		if err := rows.Scan(&r.ID, &r.Slug, &r.Kind, &r.Body, &created, &r.Status); err != nil {
-			return nil, fmt.Errorf("scan reply: %w", err)
+			return nil, nil, fmt.Errorf("scan reply: %w", err)
 		}
 		r.CreatedAt = time.Unix(created, 0).UTC()
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate replies: %w", err)
+		return nil, nil, fmt.Errorf("iterate replies: %w", err)
 	}
-	return out, nil
+	if len(out) <= limit {
+		return out, nil, nil
+	}
+	out = out[:limit]
+	last := out[limit-1]
+	return out, &listCursor{created: last.CreatedAt.Unix(), id: last.ID}, nil
 }
 
 // errNoReply is returned by ack when the id is unknown.
@@ -358,3 +400,6 @@ func (rs *replyStore) ack(id int64) error {
 	}
 	return nil
 }
+
+// listPageSize is the most replies one GET /replies response carries.
+const listPageSize = 100

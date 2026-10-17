@@ -313,7 +313,7 @@ func TestContentSubmitRecordsAnswer(t *testing.T) {
 		t.Errorf("confirmation should echo the stored answer:\n%s", s)
 	}
 	// Persisted as a comment-kind reply.
-	rs, err := m.rs.list("report", "all")
+	rs, _, err := m.rs.list("report", "all", nil, 1<<20)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}

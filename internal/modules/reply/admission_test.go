@@ -274,7 +274,7 @@ func seedOldReplies(t *testing.T, m *Module, n int, age time.Duration) {
 
 func countBody(t *testing.T, m *Module, body string) int {
 	t.Helper()
-	reps, err := m.rs.list("", "all")
+	reps, _, err := m.rs.list("", "all", nil, 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
