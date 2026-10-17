@@ -4,6 +4,8 @@
 package store
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,5 +97,35 @@ func TestOpenCreatesPrivateDB(t *testing.T) {
 		if got := fi.Mode().Perm(); got != 0o600 {
 			t.Errorf("%s perms = %04o, want 0600", name, got)
 		}
+	}
+}
+
+// TestPermRepairLogEscapesControls: the permission-repair log line names the
+// store path, which may contain any byte; a newline or ESC in it must not
+// forge a log line or reach a terminal raw.
+func TestPermRepairLogEscapesControls(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "store\nFORGED line \x1b[31m")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	log.SetOutput(prev)
+	got := buf.String()
+	if !strings.Contains(got, "set mode of") {
+		t.Fatalf("no permission repair was logged:\n%q", got)
+	}
+	if strings.ContainsRune(got, 0x1b) || strings.Contains(got, "\nFORGED") {
+		t.Errorf("control characters reached the log raw:\n%q", got)
 	}
 }

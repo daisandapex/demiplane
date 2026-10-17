@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no cgo)
 )
 
@@ -176,7 +177,7 @@ func tightenStorePerms(dir string) error {
 		if err := os.Chmod(p, e.mode); err != nil {
 			return fmt.Errorf("set mode of %s: %w", p, err)
 		}
-		log.Printf("store: set mode of %s from %04o to %04o", p, perm, e.mode)
+		log.Printf("store: set mode of %s from %04o to %04o", logsafe.Text(p), perm, e.mode)
 	}
 	return nil
 }
@@ -230,6 +231,16 @@ CREATE TABLE IF NOT EXISTS artifacts (
 		if err := s.addColumnIfMissing(col.name, col.ddl); err != nil {
 			return err
 		}
+	}
+	// Files whose row is gone (or no longer names them) but which may still be
+	// on disk: recorded in the transaction that drops the reference, removed
+	// afterwards, retried by the sweeper until the unlink succeeds. See
+	// generation.go.
+	if _, err := s.db.Exec(pendingDeletionsSchema); err != nil {
+		return fmt.Errorf("create pending deletions table: %w", err)
+	}
+	if _, err := s.db.Exec(pendingWritesSchema); err != nil {
+		return fmt.Errorf("create pending writes table: %w", err)
 	}
 	// Index the sweeper's predicate (expires_at > 0 AND <= now).
 	if _, err := s.db.Exec(
@@ -300,6 +311,11 @@ type PutOptions struct {
 //
 // The body is streamed to disk — it is never fully buffered in memory.
 func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
+	if opts.TTL < 0 {
+		// Zero is the only "never expires" value. A negative TTL is a caller
+		// bug, and storing it as no expiry would fail open.
+		return Artifact{}, &InputError{Msg: "ttl must not be negative"}
+	}
 	slug, _, err := s.resolveSlug(opts.Slug, opts.Private)
 	if err != nil {
 		return Artifact{}, err
@@ -320,8 +336,14 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 	if err != nil {
 		return Artifact{}, err
 	}
+	// The write intent comes before any file of this generation exists, so
+	// Reconcile can tell a write in flight from an orphan (generation.go).
+	if err := s.beginWrite(slug, gen); err != nil {
+		return Artifact{}, err
+	}
 	sniffed, size, err := s.writeBlob(s.blobFile(slug, gen), r)
 	if err != nil {
+		s.abortWrite(slug, gen, noSourceGen)
 		return Artifact{}, err
 	}
 
@@ -333,7 +355,7 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 	if opts.Source != nil {
 		sourceGen = gen
 		if err := s.writeSource(s.sourceFile(slug, sourceGen), opts.Source); err != nil {
-			os.Remove(s.blobFile(slug, gen))
+			s.abortWrite(slug, gen, sourceGen)
 			return Artifact{}, err
 		}
 	}
@@ -366,11 +388,14 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 		Version:      gen,
 	}
 
+	if beforeMetaCommit != nil {
+		beforeMetaCommit(slug)
+	}
 	unlock := s.locks.lock(slug)
 	defer unlock()
 	prior, err := s.swapMeta(&art, sourceGen)
 	if err != nil {
-		_ = s.removeGenFiles(slug, gen, sourceGen)
+		s.abortWrite(slug, gen, sourceGen)
 		return Artifact{}, err
 	}
 	if prior.exists {
@@ -503,7 +528,7 @@ func (s *Store) exists(slug string) (bool, error) {
 // rename) and returns the sniffed content-type and total byte count. Only the
 // first sniffLen bytes are held in memory; the rest is copied straight through.
 func (s *Store) writeBlob(final string, r io.Reader) (sniffed string, size int64, err error) {
-	tmp, err := os.CreateTemp(s.blobDir, ".tmp-*")
+	tmp, err := os.CreateTemp(s.blobDir, tempPattern(final))
 	if err != nil {
 		return "", 0, fmt.Errorf("create temp blob: %w", err)
 	}
@@ -589,6 +614,12 @@ RETURNING modified_at;`
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 	}
 	defer tx.Rollback()
+	// Retire the write intent in the commit itself. If Reconcile reclaimed
+	// it as abandoned, its files may be gone: fail rather than commit a row
+	// naming missing bytes.
+	if err := endWrite(tx, a.Slug, a.Version); err != nil {
+		return priorGen{}, err
+	}
 	var p priorGen
 	err = tx.QueryRow(`SELECT blob_gen, source_gen FROM artifacts WHERE slug = ?`, a.Slug).Scan(&p.blobGen, &p.sourceGen)
 	switch {
@@ -597,6 +628,13 @@ RETURNING modified_at;`
 	case errors.Is(err, sql.ErrNoRows):
 	default:
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
+	}
+	if p.exists {
+		// Recorded before the row stops naming these files, in the same
+		// transaction, so a failed unlink after the commit is retried.
+		if err := queueDeletion(tx, a.Slug, p.blobGen, p.sourceGen); err != nil {
+			return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
+		}
 	}
 	var modified int64
 	if err := tx.QueryRow(q,
@@ -706,13 +744,17 @@ func (s *Store) lookup(slug string) (Artifact, error) {
 // Delete removes an artifact's metadata row, its bytes and its retained source.
 // It returns ErrNotFound if no such slug exists. The row is removed first, so a
 // concurrent Get either sees the whole artifact or none of it.
+//
+// The files to remove are recorded as pending deletions in the transaction
+// that removes the row. Once that commits the artifact is deleted: it is no
+// longer served or listed, and a file that cannot be unlinked right now (a
+// read-only or failing disk) is logged and retried by the sweeper rather than
+// orphaned, so a confidential page's bytes and source are always reclaimed.
 func (s *Store) Delete(slug string) error {
 	unlock := s.locks.lock(slug)
 	defer unlock()
-	var blobGen, sourceGen string
-	err := s.db.QueryRow(
-		`DELETE FROM artifacts WHERE slug = ? RETURNING blob_gen, source_gen`, slug,
-	).Scan(&blobGen, &sourceGen)
+	blobGen, sourceGen, err := s.deleteRow(slug,
+		`DELETE FROM artifacts WHERE slug = ? RETURNING blob_gen, source_gen`, slug)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -721,7 +763,29 @@ func (s *Store) Delete(slug string) error {
 	}
 	// The retained source goes with it: a deleted artifact must not leave its
 	// plaintext behind on disk.
-	return s.removeGenFiles(slug, blobGen, sourceGen)
+	s.finishDeletion(slug, blobGen, sourceGen)
+	return nil
+}
+
+// deleteRow runs a DELETE ... RETURNING blob_gen, source_gen for slug's row
+// and records the returned generations as a pending deletion in the same
+// transaction. It returns sql.ErrNoRows when nothing matched.
+func (s *Store) deleteRow(slug, query string, args ...any) (blobGen, sourceGen string, err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback()
+	if err := tx.QueryRow(query, args...).Scan(&blobGen, &sourceGen); err != nil {
+		return "", "", err
+	}
+	if err := queueDeletion(tx, slug, blobGen, sourceGen); err != nil {
+		return "", "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", "", err
+	}
+	return blobGen, sourceGen, nil
 }
 
 // List returns owner's artifacts, newest first, excluding any already past TTL
@@ -812,11 +876,15 @@ func (s *Store) SweepExpired(now time.Time) (int, error) {
 	for _, slug := range slugs {
 		reaped, err := s.reapIfExpired(slug, now)
 		if err != nil {
-			return n, fmt.Errorf("delete expired %q: %w", slug, err)
+			return n, fmt.Errorf("delete expired %s: %w", logsafe.Slug(slug), err)
 		}
 		if reaped {
 			n++
 		}
+	}
+	// Finish any deletion whose unlink failed earlier (this pass's included).
+	if err := s.retryPendingDeletions(); err != nil {
+		return n, err
 	}
 	return n, nil
 }
@@ -829,11 +897,9 @@ func (s *Store) SweepExpired(now time.Time) (int, error) {
 func (s *Store) reapIfExpired(slug string, now time.Time) (bool, error) {
 	unlock := s.locks.lock(slug)
 	defer unlock()
-	var blobGen, sourceGen string
-	err := s.db.QueryRow(
+	blobGen, sourceGen, err := s.deleteRow(slug,
 		`DELETE FROM artifacts WHERE slug = ? AND expires_at > 0 AND expires_at <= ? RETURNING blob_gen, source_gen`,
-		slug, now.Unix(),
-	).Scan(&blobGen, &sourceGen)
+		slug, now.Unix())
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -842,9 +908,8 @@ func (s *Store) reapIfExpired(slug string, now time.Time) (bool, error) {
 	}
 	// An expired artifact's retained source expires with it. Only the
 	// generation the deleted row named is removed, never a newer publish's.
-	if err := s.removeGenFiles(slug, blobGen, sourceGen); err != nil {
-		return false, err
-	}
+	// A failed unlink stays pending and is retried (see Delete).
+	s.finishDeletion(slug, blobGen, sourceGen)
 	return true, nil
 }
 

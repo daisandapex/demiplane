@@ -69,7 +69,7 @@ type SourceRecord struct {
 // valid artifact. Only called with a path built from a slug that passed
 // validation, so a caller-supplied path segment never reaches the filesystem.
 func (s *Store) writeSource(path string, body []byte) error {
-	tmp, err := os.CreateTemp(s.sourceDir, ".tmp-*")
+	tmp, err := os.CreateTemp(s.sourceDir, tempPattern(path))
 	if err != nil {
 		return fmt.Errorf("create temp source: %w", err)
 	}
@@ -237,6 +237,32 @@ func (s *Store) Rebake(slug string, render func(SourceRecord) ([]byte, error)) (
 	return Artifact{}, ErrConcurrentWrite
 }
 
+// swapBody points slug's row at blob generation gen if it still names cur,
+// recording cur as a pending deletion in the same transaction. It returns
+// sql.ErrNoRows when the row is gone or names another generation.
+func (s *Store) swapBody(slug, gen, cur string, size int64) (int64, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if err := endWrite(tx, slug, gen); err != nil {
+		return 0, err
+	}
+	var modified int64
+	if err := tx.QueryRow(
+		`UPDATE artifacts SET size = ?, blob_gen = ?, modified_at = ?
+		  WHERE slug = ? AND blob_gen = ? RETURNING modified_at`,
+		size, gen, time.Now().Unix(), slug, cur,
+	).Scan(&modified); err != nil {
+		return 0, err
+	}
+	if err := queueDeletion(tx, slug, cur, noSourceGen); err != nil {
+		return 0, err
+	}
+	return modified, tx.Commit()
+}
+
 // replaceBodyLocked writes r as slug's bytes at a fresh generation and points
 // the row at it. With expect set, the row is updated only if it still names
 // that version (errGenConflict otherwise). The caller holds slug's lock.
@@ -256,26 +282,25 @@ func (s *Store) replaceBodyLocked(slug string, expect *string, r io.Reader) (Art
 	if err != nil {
 		return Artifact{}, err
 	}
+	if err := s.beginWrite(slug, gen); err != nil {
+		return Artifact{}, err
+	}
 	_, size, err := s.writeBlob(s.blobFile(slug, gen), r)
 	if err != nil {
+		s.abortWrite(slug, gen, noSourceGen)
 		return Artifact{}, err
 	}
 	// The modified time is the wall clock, never ahead of it. A rebake in the
 	// same second as the publish keeps the same Last-Modified; the new version
 	// (ETag) is what marks the change.
-	var modified int64
-	err = s.db.QueryRow(
-		`UPDATE artifacts SET size = ?, blob_gen = ?, modified_at = ?
-		  WHERE slug = ? AND blob_gen = ? RETURNING modified_at`,
-		size, gen, time.Now().Unix(), slug, cur,
-	).Scan(&modified)
+	modified, err := s.swapBody(slug, gen, cur, size)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		os.Remove(s.blobFile(slug, gen))
+		s.abortWrite(slug, gen, noSourceGen)
 		return Artifact{}, fmt.Errorf("update body: %w", err)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		// Deleted or republished by another process since the lookup.
-		os.Remove(s.blobFile(slug, gen))
+		s.abortWrite(slug, gen, noSourceGen)
 		if _, lerr := s.lookup(slug); errors.Is(lerr, ErrNotFound) {
 			return Artifact{}, ErrNotFound
 		}

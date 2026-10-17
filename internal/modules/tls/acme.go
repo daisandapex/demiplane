@@ -12,6 +12,8 @@ import (
 
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
+
+	"github.com/daisandapex/demiplane/internal/logsafe"
 )
 
 // acmeConfig builds the tls.Config for ACME mode: certificates are obtained
@@ -32,7 +34,7 @@ func acmeConfig(dataDir string, s settings) (*stdtls.Config, error) {
 	}
 	m := newACMEManager(cacheDir, s)
 	log.Printf("tls: ACME enabled for %v (cache %s) — the control listener must be reachable on :443 for the TLS-ALPN-01 challenge",
-		s.acmeDomains, cacheDir)
+		logsafe.Text(fmt.Sprint(s.acmeDomains)), logsafe.Text(cacheDir))
 	cfg := m.TLSConfig()
 	cfg.MinVersion = stdtls.VersionTLS12
 	return cfg, nil

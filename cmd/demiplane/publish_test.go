@@ -298,6 +298,33 @@ func TestRunPublishPrivateSlugConflict(t *testing.T) {
 	}
 }
 
+// TestRunPublishRejectsBadTTL pins the client-side TTL gate: a value the server
+// would refuse (or, before the shared parser, silently store as "never
+// expires") fails before any request is sent. Each server counts hits, so a
+// request that slipped through fails the test.
+func TestRunPublishRejectsBadTTL(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"url":"http://x/y","slug":"y"}`)
+	}))
+	defer srv.Close()
+	src := filepath.Join(t.TempDir(), "p.html")
+	if err := os.WriteFile(src, []byte("<p>x</p>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"1e-20d", "NaNd", "+Infd", "1e300d", "500ms", "-1h", "nope", " "} {
+		if err := runPublish([]string{"--url", srv.URL, "--ttl", bad, src}); err == nil {
+			t.Errorf("--ttl %q: runPublish = nil, want a ttl error", bad)
+		}
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("server saw %d request(s) for invalid TTLs, want 0", n)
+	}
+}
+
 func TestRunWatchRejectsStdinAndPrivate(t *testing.T) {
 	// stdin (no path)
 	if err := runWatch(context.Background(), &publisher{}, "", false); err == nil ||

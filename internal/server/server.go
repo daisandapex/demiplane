@@ -9,8 +9,6 @@ package server
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/render"
 	"github.com/daisandapex/demiplane/internal/store"
@@ -46,8 +45,12 @@ type Config struct {
 	// derive the advertised content URL from a request that arrived on the
 	// control listener. Empty = same-origin mode (content == control origin).
 	ContentPort string
-	Browse      bool  // serve an HTML index of non-private artifacts at GET /
-	MaxUpload   int64 // max publish body bytes; 0 = unlimited (the CLI defaults it to 100 MiB)
+	// AllowedHosts, when non-empty, is the accepted-host policy: requests
+	// whose Host is not listed (nor the host of BaseURL/ContentBaseURL) get
+	// 421 on both planes. See hostpolicy.go.
+	AllowedHosts []string
+	Browse       bool  // serve an HTML index of non-private artifacts at GET /
+	MaxUpload    int64 // max publish body bytes; 0 = unlimited (the CLI defaults it to 100 MiB)
 	// RenderTheme names the built-in theme for ?render=md pages (see
 	// internal/theme: "light"/"dark"); empty = the default house style.
 	RenderTheme string
@@ -73,6 +76,7 @@ type Server struct {
 	baseURL          string
 	contentBaseURL   string
 	contentPort      string
+	hostRules        []hostRule // accepted-host policy; nil = any Host
 	authToken        string
 	browse           bool
 	maxUpload        int64
@@ -98,6 +102,7 @@ func New(st *store.Store, cfg Config) *Server {
 		baseURL:          strings.TrimRight(cfg.BaseURL, "/"),
 		contentBaseURL:   strings.TrimRight(cfg.ContentBaseURL, "/"),
 		contentPort:      cfg.ContentPort,
+		hostRules:        buildHostRules(cfg.AllowedHosts, cfg.BaseURL, cfg.ContentBaseURL),
 		authToken:        cfg.AuthToken,
 		browse:           cfg.Browse,
 		maxUpload:        cfg.MaxUpload,
@@ -162,7 +167,7 @@ func (s *Server) ModuleDataDir(name string) (string, error) {
 func (s *Server) ControlHandler() http.Handler {
 	mux := http.NewServeMux()
 	s.registerControlRoutes(mux)
-	return withSecurityHeaders(s.guardCrossOriginWrites(mux))
+	return withSecurityHeaders(s.hostPolicy(canonicalPaths(s.guardCrossOriginWrites(mux))))
 }
 
 // ContentHandler returns the artifact-serving handler: GET /{slug} only. It is
@@ -184,7 +189,7 @@ func (s *Server) ContentHandler() http.Handler {
 	// The bare content root has no landing on this plane (the landing lives on the
 	// control origin); serve the themed 404 rather than ServeMux's plaintext one.
 	mux.HandleFunc("GET /{$}", s.serveContentNotFound)
-	return withSecurityHeaders(mux)
+	return withSecurityHeaders(s.hostPolicy(canonicalPaths(mux)))
 }
 
 // Handler returns a single combined handler that serves BOTH the control plane
@@ -201,7 +206,7 @@ func (s *Server) Handler() http.Handler {
 	s.mountCoreContentRoutes(mux)
 	s.mountContentRouteModules(mux)
 	mux.HandleFunc("GET /{slug}", s.handleGet)
-	return withSecurityHeaders(mux)
+	return withSecurityHeaders(s.hostPolicy(canonicalPaths(mux)))
 }
 
 // registerControlRoutes mounts every route except the artifact catch-all
@@ -246,7 +251,7 @@ func (s *Server) registerControlRoutes(mux *http.ServeMux) {
 // ingest path, agents — no Sec-Fetch/Origin headers) pass untouched.
 func (s *Server) guardCrossOriginWrites(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isCrossOriginWrite(r) {
+		if s.isCrossOriginWrite(r) {
 			http.Error(w, "cross-origin write rejected", http.StatusForbidden)
 			return
 		}
@@ -259,9 +264,11 @@ func (s *Server) guardCrossOriginWrites(next http.Handler) http.Handler {
 // authoritative when present (every modern browser sends it): only same-origin
 // and none (a top-level/user-initiated load) are allowed; same-site (e.g. a
 // different port — our content origin) and cross-site are rejected. When
-// Sec-Fetch-Site is absent, fall back to comparing the Origin header to the
-// listener's own host. No header at all ⇒ a non-browser client ⇒ allowed.
-func isCrossOriginWrite(r *http.Request) bool {
+// Sec-Fetch-Site is absent, fall back to comparing the Origin header, as a
+// full origin (scheme, host and port), with the --base-url origin when one is
+// configured, else with the request's own origin. No header at all ⇒ a
+// non-browser client ⇒ allowed.
+func (s *Server) isCrossOriginWrite(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead, http.MethodOptions:
 		return false // reads/preflights don't change state
@@ -275,13 +282,52 @@ func isCrossOriginWrite(r *http.Request) bool {
 		}
 	}
 	if origin := r.Header.Get("Origin"); origin != "" {
-		u, err := url.Parse(origin)
-		if err != nil || u.Host == "" {
-			return true // unparseable Origin on a write ⇒ refuse
+		got, ok := normalizeOrigin(origin)
+		if !ok {
+			return true // opaque ("null") or unparseable Origin on a write ⇒ refuse
 		}
-		return !strings.EqualFold(u.Host, r.Host)
+		// With --base-url set its origin is authoritative: behind a
+		// TLS-terminating proxy the listener sees plain HTTP from the proxy,
+		// so an origin inferred from the request would accept an http://
+		// page writing to the https:// control plane.
+		if s.baseURL != "" {
+			base, ok := normalizeOrigin(s.baseURL)
+			return !ok || got != base
+		}
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		self, ok := normalizeOrigin(scheme + "://" + r.Host)
+		return !ok || got != self
 	}
 	return false // no browser signals ⇒ non-browser client (curl/SSH/agent)
+}
+
+// normalizeOrigin reduces a URL or serialized origin to scheme://host:port,
+// lowercased, with the scheme's default port filled in, so origins compare
+// as the browser defines them. It fails for anything without an http(s)
+// scheme and a host, including the opaque origin "null".
+func normalizeOrigin(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil {
+		return "", false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	port := u.Port()
+	switch scheme {
+	case "http":
+		if port == "" {
+			port = "80"
+		}
+	case "https":
+		if port == "" {
+			port = "443"
+		}
+	default:
+		return "", false
+	}
+	return scheme + "://" + net.JoinHostPort(strings.ToLower(u.Hostname()), port), true
 }
 
 // frameAncestorsSelf is the framing policy on every response: only same-origin
@@ -474,7 +520,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "upload exceeds the configured size limit", http.StatusRequestEntityTooLarge)
 				return
 			}
-			log.Printf("render read failed: %v", rerr)
+			log.Printf("render read failed: %s", logsafe.Err(rerr))
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -539,7 +585,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		log.Printf("publish failed: %v", err)
+		log.Printf("publish failed: %s", logsafe.Err(err, named))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -584,7 +630,7 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 			s.serveContentNotFound(w, r)
 			return
 		}
-		log.Printf("get %s failed: %v", redactSlug(slug), err)
+		log.Printf("get %s failed: %s", logsafe.Slug(slug), logsafe.Err(err, slug))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -700,7 +746,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		log.Printf("delete %s failed: %v", redactSlug(slug), err)
+		log.Printf("delete %s failed: %s", logsafe.Slug(slug), logsafe.Err(err, slug))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -728,7 +774,7 @@ type listItem struct {
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	arts, err := s.store.List(store.DefaultOwner)
 	if err != nil {
-		log.Printf("list failed: %v", err)
+		log.Printf("list failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -842,7 +888,7 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	base := s.requestBase(r)
 	count, err := s.store.Count(store.DefaultOwner)
 	if err != nil {
-		log.Printf("landing count failed: %v", err)
+		log.Printf("landing count failed: %s", logsafe.Err(err))
 		count = -1
 	}
 
@@ -955,7 +1001,7 @@ func collapseSeries(pub []store.Artifact) []landingRow {
 func (s *Server) artifactTable(r *http.Request) string {
 	arts, err := s.store.List(store.DefaultOwner)
 	if err != nil {
-		log.Printf("browse list failed: %v", err)
+		log.Printf("browse list failed: %s", logsafe.Err(err))
 		return ""
 	}
 	base := s.contentBase(r)
@@ -1018,11 +1064,9 @@ func plural(n int, noun string) string {
 
 // redactSlug returns a short, non-reversible tag for a slug so error logs never
 // leak the slug itself — for a private artifact the slug IS the capability
-// secret, and logs are a common exposure surface.
-func redactSlug(slug string) string {
-	sum := sha256.Sum256([]byte(slug))
-	return "slug#" + hex.EncodeToString(sum[:])[:12]
-}
+// secret, and logs are a common exposure surface. See internal/logsafe, which
+// also strips the capability-bearing paths inside wrapped filesystem errors.
+func redactSlug(slug string) string { return logsafe.Slug(slug) }
 
 // shortType trims charset/boundary params from a content type for display.
 func shortType(ct string) string {
@@ -1071,15 +1115,24 @@ func sanitizeHost(host string) string {
 // URL minted while handling a control-listener request (/publish, /list) must
 // point at the content origin, not the request's own host. Resolution order:
 //  1. an explicit --content-base-url (proxy/TLS deployments);
-//  2. derive from the request host, swapping in the content port (the zero-config
-//     two-port default — handles loopback and wildcard binds alike);
-//  3. same-origin mode (no content port): the request origin itself.
+//  2. same-origin mode (no content port): the request base itself;
+//  3. with --base-url set, its scheme and host with the content port swapped
+//     in, so an authoritative base URL keeps the Host header out of every
+//     advertised URL;
+//  4. otherwise derive from the request host, swapping in the content port
+//     (the zero-config two-port default — handles loopback and wildcard binds
+//     alike).
 func (s *Server) contentBase(r *http.Request) string {
 	if s.contentBaseURL != "" {
 		return s.contentBaseURL
 	}
 	if s.contentPort == "" {
 		return s.requestBase(r)
+	}
+	if s.baseURL != "" {
+		if u, err := url.Parse(s.baseURL); err == nil && u.Hostname() != "" {
+			return u.Scheme + "://" + net.JoinHostPort(u.Hostname(), s.contentPort)
+		}
 	}
 	scheme := "http"
 	if r.TLS != nil {

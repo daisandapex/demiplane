@@ -41,17 +41,17 @@ func waitHook(t *testing.T, ch chan Reply) Reply {
 func TestConfigureHookValidatesURL(t *testing.T) {
 	t.Cleanup(func() { std.hook = hookConfig{} })
 	for _, bad := range []string{"not a url", "ftp://x/y", "/relative/only", "http://"} {
-		if err := ConfigureHook("", bad); err == nil {
+		if err := ConfigureHook("", bad, false); err == nil {
 			t.Errorf("ConfigureHook(url=%q) should error", bad)
 		}
 	}
-	if err := ConfigureHook("touch /tmp/x", "http://127.0.0.1:9999/hook"); err != nil {
+	if err := ConfigureHook("touch /tmp/x", "http://127.0.0.1:9999/hook", false); err != nil {
 		t.Errorf("valid hook config rejected: %v", err)
 	}
 	if !std.hook.enabled() {
 		t.Error("ConfigureHook did not arm the registered module")
 	}
-	if err := ConfigureHook("", ""); err != nil {
+	if err := ConfigureHook("", "", false); err != nil {
 		t.Errorf("empty hook config should disable, not error: %v", err)
 	}
 	if std.hook.enabled() {

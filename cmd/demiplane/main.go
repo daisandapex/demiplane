@@ -36,6 +36,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/server"
 	"github.com/daisandapex/demiplane/internal/store"
@@ -77,11 +78,11 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		if err := runServe(os.Args[2:]); err != nil {
-			log.Fatal(err)
+			log.Fatal(exitMessage(err))
 		}
 	case "receive":
 		if err := runReceive(os.Args[2:]); err != nil {
-			log.Fatal(err)
+			log.Fatal(exitMessage(err))
 		}
 	case "mcp":
 		if err := runMCP(os.Args[2:]); err != nil {
@@ -101,6 +102,13 @@ func main() {
 		os.Exit(2)
 	}
 }
+
+// exitMessage formats a fatal error from serve or receive, the commands that
+// open the store. It goes through logsafe like every other log line: a failed
+// private publish over SSH receive, for one, carries the generated capability
+// slug inside the wrapped filesystem path. The client commands (publish, mcp)
+// report their errors verbatim; their paths are the user's own files.
+func exitMessage(err error) string { return logsafe.Err(err) }
 
 func usage() {
 	fmt.Fprint(os.Stderr, `demiplane — internal-first publishing service
@@ -145,6 +153,7 @@ func runServe(args []string) error {
 	unsafeSameOrigin := fs.Bool("unsafe-same-origin", false, "serve artifacts and the control plane on ONE origin (legacy; re-enables the stored-XSS footgun ADR 0003 closes)")
 	dir := fs.String("store", "", "directory for content + metadata (required)")
 	baseURL := fs.String("base-url", "", "advertised control-plane base URL; if empty, derived from request Host")
+	allowedHosts := fs.String("allowed-hosts", "", "comma-separated Host values to serve (host or host:port); others get 421. The --base-url and --content-base-url hosts are always included. Empty = any Host")
 	tokenFile := fs.String("token-file", "", "file holding the bearer token for publish/delete/list; overrides DEMIPLANE_TOKEN")
 	sweep := fs.Duration("sweep-interval", time.Minute, "how often to reap past-TTL artifacts")
 	browse := fs.Bool("browse", false, "serve an HTML index of non-private artifacts at GET /")
@@ -162,6 +171,10 @@ func runServe(args []string) error {
 	}
 	if *dir == "" {
 		return fmt.Errorf("--store is required")
+	}
+	hosts, err := server.ParseHostList(*allowedHosts)
+	if err != nil {
+		return err
 	}
 	if *themeName != "" && !theme.Valid(*themeName) {
 		return fmt.Errorf("--theme %q: unknown theme (choose one of: %s)", *themeName, strings.Join(theme.Names, ", "))
@@ -235,6 +248,7 @@ func runServe(args []string) error {
 		BaseURL:          *baseURL,
 		ContentBaseURL:   *contentBaseURL,
 		ContentPort:      cPort,
+		AllowedHosts:     hosts,
 		AuthToken:        token,
 		Browse:           *browse,
 		MaxUpload:        *maxUpload,
@@ -430,9 +444,14 @@ func plural(n int) string {
 	return "s"
 }
 
+// reconcileInterval is how often the sweeper also scans the store for
+// orphaned files (store.Reconcile). Pending deletions are retried on every
+// sweep; the directory scan is the slower, rarer backstop.
+const reconcileInterval = time.Hour
+
 // runSweeper periodically reaps past-TTL artifacts until ctx is cancelled. It
-// runs an immediate sweep on start so a restart promptly clears anything that
-// expired while the process was down.
+// runs an immediate sweep and reconcile on start so a restart promptly clears
+// anything that expired, or failed to unlink, while the process was down.
 func runSweeper(ctx context.Context, st *store.Store, interval time.Duration) {
 	if interval <= 0 {
 		interval = time.Minute
@@ -440,22 +459,38 @@ func runSweeper(ctx context.Context, st *store.Store, interval time.Duration) {
 	sweep := func() {
 		n, err := st.SweepExpired(time.Now())
 		if err != nil {
-			log.Printf("ttl sweep error: %v", err)
+			log.Printf("ttl sweep error: %s", logsafe.Err(err))
 			return
 		}
 		if n > 0 {
 			log.Printf("ttl sweep: reaped %d expired artifact(s)", n)
 		}
 	}
+	reconcile := func() {
+		n, err := st.Reconcile(time.Now())
+		if err != nil {
+			log.Printf("store reconcile error: %s", logsafe.Err(err))
+			return
+		}
+		if n > 0 {
+			log.Printf("store reconcile: removed %d orphaned file(s)", n)
+		}
+	}
 	sweep()
+	reconcile()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	lastReconcile := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			sweep()
+			if time.Since(lastReconcile) >= reconcileInterval {
+				reconcile()
+				lastReconcile = time.Now()
+			}
 		}
 	}
 }

@@ -29,6 +29,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/module"
 )
 
@@ -164,7 +165,7 @@ func ServerConfig(dataDir string, bindHosts []string) (*stdtls.Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("tls: load certificate: %w", err)
 		}
-		log.Printf("tls: serving operator-supplied certificate %s", current.certFile)
+		log.Printf("tls: serving operator-supplied certificate %s", logsafe.Text(current.certFile))
 		return baseConfig(cert), nil
 	case ModeACME:
 		return acmeConfig(dataDir, current)

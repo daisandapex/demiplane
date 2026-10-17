@@ -22,6 +22,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/daisandapex/demiplane/internal/logsafe"
 )
 
 const (
@@ -60,13 +62,13 @@ func loadUsableSelfSigned(certPath, keyPath string, hosts []string) (stdtls.Cert
 	cert, err := stdtls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			log.Printf("tls: persisted self-signed pair unreadable (%v) — regenerating", err)
+			log.Printf("tls: persisted self-signed pair unreadable (%s) — regenerating", logsafe.Err(err))
 		}
 		return stdtls.Certificate{}, false
 	}
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
-		log.Printf("tls: persisted self-signed cert unparseable (%v) — regenerating", err)
+		log.Printf("tls: persisted self-signed cert unparseable (%s) — regenerating", logsafe.Err(err))
 		return stdtls.Certificate{}, false
 	}
 	if time.Now().After(leaf.NotAfter.Add(-selfSignedRenewWindow)) {
@@ -140,7 +142,7 @@ func generateSelfSigned(certPath, keyPath string, hosts []string) (stdtls.Certif
 	log.Printf("tls: generated self-signed certificate for %v (valid to %s)\n"+
 		"tls:   SHA-256 fingerprint %s\n"+
 		"tls:   clients that verify certificates must trust %s (curl --cacert, or pin the fingerprint)",
-		hosts, tmpl.NotAfter.Format("2006-01-02"), hex.EncodeToString(sum[:]), certPath)
+		logsafe.Text(fmt.Sprint(hosts)), tmpl.NotAfter.Format("2006-01-02"), hex.EncodeToString(sum[:]), logsafe.Text(certPath))
 
 	cert, err := stdtls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {

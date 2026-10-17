@@ -40,8 +40,19 @@ want it.
   `X-Demiplane-Password` header on publish and HTTP Basic on read).
 - **Input handling.** Uploads stream to disk (bounded memory); slugs are
   validated against path traversal; the optional markdown renderer HTML-escapes
-  all source and allowlists link schemes; error logs redact slugs (a private
-  slug is a secret).
+  all source and allowlists link schemes. Link destinations containing a
+  backslash or a control character, and `http(s)` links with userinfo
+  (`https://trusted@other`), are rendered as plain text, because a browser
+  resolves them to a different host than they appear to name.
+- **Log hygiene.** A private slug is a secret, so error logs never carry one:
+  slugs are logged as a short hash tag (`slug#…`), and the filesystem paths
+  inside wrapped I/O errors (which embed the slug) are replaced by `[path]` on
+  every path that logs a store error, including rerender, expiry, the
+  sweeper and the fatal error line of `serve` and `receive`. Reply-hook failures log the webhook's origin only (no userinfo,
+  path or query) and omit the exec hook's output unless
+  `reply_hook_log_output = on`; logged hook output is truncated and has its
+  control characters escaped. The webhook client follows no redirects, so a
+  reply is never replayed to another origin or over plain HTTP.
 
 **Out of scope / explicitly accepted for v1:**
 
@@ -81,7 +92,13 @@ from reading any control-plane response (`/list` enumeration, capability URLs),
 and a **cross-origin write guard** (an `Origin`/`Sec-Fetch-Site` check on the
 control plane) blocks fire-and-forget cross-origin `POST`/`DELETE` — so a
 published page's script can neither exfiltrate the artifact inventory nor publish
-a worm. This holds on bare loopback with no DNS, certs, or proxy.
+a worm. This holds on bare loopback with no DNS, certs, or proxy. When a browser
+sends no `Sec-Fetch-Site`, the `Origin` fallback compares the **full origin**
+(scheme, host and port, default ports normalized) with the `--base-url` origin
+when one is set, else with the listener's own origin; an `http://` page cannot
+write to an `https://` control plane on the same host and port, or the reverse.
+Behind a TLS-terminating proxy, set `--base-url` so the browser's `https://`
+origin is the one accepted.
 
 A defense-in-depth layer also refuses to relabel a non-HTML body to `text/html`
 via `?filename=` (closing the content-type-confusion vector that bypassed the
@@ -141,7 +158,11 @@ inherits the posture above and was reviewed adversarially before release.
   traversal-checked (`..`, absolute paths, and backslashes rejected; each segment
   re-validated as a named slug) and confined under the site prefix on both write
   and serve; symlink and other non-regular entries are skipped, never
-  materialized. The archive is bounded on **both** the compressed upload
+  materialized. The serve path opens every component through an `os.Root` and
+  refuses a symlink anywhere on the path (site directory, intermediate
+  directory or file), checking that what it opened is what it inspected, so a
+  link planted or swapped in out of band is never followed. The archive is
+  bounded on **both** the compressed upload
   (`--max-upload`, buffered to a scratch file) and the **total decompressed
   bytes** across all entries — enforced identically for zip **and** tar, so a
   compression- or sparse-tar bomb is rejected with `413` — plus a file-count cap.
@@ -167,6 +188,12 @@ inherits the posture above and was reviewed adversarially before release.
   site cannot frame a hosted page or the control UI. Same-origin framing stays
   allowed because the `?live` preview wrapper legitimately iframes the artifact's
   own URL.
+- **Path canonicalization.** Both planes resolve path ambiguity before
+  routing. A non-canonical path (`//`, `/./`, `/../`) is redirected (`307`) to
+  its canonical form with its original escaping and query kept, never
+  re-escaped and never to a `//host` reference. A path segment that decodes to
+  `.` or `..`, contains an encoded or literal `/` or `\`, or carries a control
+  character is refused with `400`.
 - **Referrer leakage.** Every response carries
   `Referrer-Policy: strict-origin-when-cross-origin`, so a capability URL
   (`?private=true` slug) is not disclosed in the `Referer` header when a hosted
@@ -191,7 +218,21 @@ inherits the posture above and was reviewed adversarially before release.
   `--base-url` is unset — `llms.txt`, publish responses, minted links) pass
   through a character allowlist first, so a crafted Host header cannot inject
   content into those surfaces. Setting `--base-url` removes the reflection
-  entirely.
+  entirely: the control URL is the base URL, and the content URL is
+  `--content-base-url` or, when that is unset, the base URL's scheme and host
+  with the content port. For a public deployment, set both base URLs and an
+  accepted-host policy, `--allowed-hosts <host[:port],...>`: a request whose
+  `Host` is not listed (the base URL hosts are always included) gets
+  `421 Misdirected Request` on both planes before routing.
+- **Deletion is durable.** Delete, expiry and overwrite record the files they
+  stop referencing in the same transaction that drops the reference. A file
+  that cannot be unlinked (a read-only or failing disk) is logged and retried
+  on every sweep instead of being orphaned, and an hourly reconcile removes
+  orphaned generation files, so a deleted or expired page's bytes and retained
+  source are always reclaimed. Every write records an intent before it creates
+  a file and retires it in the commit, so reconcile never removes a write in
+  flight, in this process or in SSH receive; an intent is reclaimed only after
+  24 hours, and a write whose intent was reclaimed fails instead of committing.
 - **Store permissions.** The store root, `blobs/`, `sources/`, `sites/` and the
   metadata database (`meta.db` and its `-wal`/`-shm` files) are owner-only
   (directories `0700`, files `0600`). The database holds capability slugs and

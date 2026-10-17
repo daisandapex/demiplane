@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	ttlparse "github.com/daisandapex/demiplane/internal/ttl"
 )
 
 // passwordHeader mirrors internal/server.PasswordHeader. The view password
@@ -81,6 +83,11 @@ Flags:
 	}
 	if err := validateRender(*render); err != nil {
 		return err
+	}
+	// The server's own TTL grammar, so a value it would refuse fails here
+	// before the body is streamed.
+	if _, err := ttlparse.Parse(*ttl); err != nil {
+		return fmt.Errorf("--ttl: %w", err)
 	}
 	if *private && *slug != "" {
 		return fmt.Errorf("--private cannot be combined with --slug: a private artifact is an unguessable capability URL, not a named one")

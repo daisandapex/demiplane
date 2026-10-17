@@ -113,11 +113,20 @@ reply_hook_url  = http://127.0.0.1:9099/reply-event
   as `DEMIPLANE_REPLY_ID/SLUG/KIND/BODY` env vars. Bounded at 5 minutes —
   long-running work should enqueue/detach (as the `systemd-run` example does).
 - **webhook** — the same JSON is POSTed (`application/json`, 30 s bound).
+  Redirects are not followed (a `3xx` is logged as a failed delivery), so the
+  reply is only ever sent to the configured URL; point it at the final
+  endpoint.
 
 Dispatch is **fire-and-forget, strictly after the insert**: a failing or slow
 hook is logged and can never fail, delay, or roll back the reply write — the
 viewer's honest confirmation is independent of hook fate. A malformed
 `reply_hook_url` is a hard startup error, like any other config key.
+
+Failure logs are kept free of reply content and hook credentials. The exec
+hook's output is discarded by default, because a grading hook often echoes the
+answer it was given; set `reply_hook_log_output = on` while debugging a hook to
+log the first 512 bytes, with control characters escaped. Webhook failures log
+only the URL's origin (`scheme://host`), never its userinfo, path or query.
 
 ## Forward flow (`?next=` — auto-advance to the next lesson)
 

@@ -13,9 +13,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/daisandapex/demiplane/internal/ttl"
 )
 
 // passwordHeader mirrors server.PasswordHeader: the per-artifact view password
@@ -397,33 +398,12 @@ func readHTTPError(resp *http.Response) error {
 	return &httpError{Status: resp.StatusCode, Body: strings.TrimSpace(string(b))}
 }
 
-// validateTTL mirrors store.ParseTTL's accepted forms (Go durations plus a "d"
-// day suffix) so a malformed ttl is rejected client-side before any HTTP call,
-// per the "validate params before forwarding" requirement. It does not import
-// the store package (thin-client boundary).
+// validateTTL applies the server's own TTL grammar (internal/ttl, a
+// dependency-free leaf, not the store) so a malformed, non-finite, overflowing
+// or sub-second ttl is rejected client-side before any HTTP call.
 func validateTTL(s string) error {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	if rest, ok := strings.CutSuffix(s, "d"); ok {
-		days, err := strconv.ParseFloat(rest, 64)
-		if err != nil {
-			return fmt.Errorf("invalid ttl %q", s)
-		}
-		if days <= 0 {
-			return fmt.Errorf("ttl %q must be positive", s)
-		}
-		return nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return fmt.Errorf("invalid ttl %q", s)
-	}
-	if d <= 0 {
-		return fmt.Errorf("ttl %q must be positive", s)
-	}
-	return nil
+	_, err := ttl.Parse(s)
+	return err
 }
 
 // isTextual reports whether a content type is safe to inline as an MCP text

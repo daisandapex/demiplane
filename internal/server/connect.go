@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+
+	"github.com/daisandapex/demiplane/internal/logsafe"
 )
 
 // connect.go owns feature T1.3: the GET /connect onboarding page (control plane)
@@ -167,7 +169,7 @@ func mcpStanza(base string) string {
 	if err != nil {
 		// Unreachable: the value is plain strings and a string map. Fall back to
 		// an empty object rather than serving a half-written block.
-		log.Printf("demiplane: mcp stanza marshal: %v", err)
+		log.Printf("demiplane: mcp stanza marshal: %s", logsafe.Err(err))
 		return "{}"
 	}
 	return string(out)

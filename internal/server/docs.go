@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	demiplane "github.com/daisandapex/demiplane"
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/render"
 )
 
@@ -75,7 +76,7 @@ func (s *Server) handleDocsPage(w http.ResponseWriter, r *http.Request) {
 	}
 	src, err := demiplane.DocsFS.ReadFile(page.File)
 	if err != nil {
-		log.Printf("docs read %q failed: %v", page.File, err)
+		log.Printf("docs read %q failed: %s", page.File, logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

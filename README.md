@@ -185,7 +185,7 @@ The README is the map; the full reference lives in [`docs/`](docs/):
 | | |
 |---|---|
 | [`API.md`](API.md) | Full REST reference — every endpoint and parameter, with curl, Python, JavaScript, and Go examples |
-| [`docs/deployment.md`](docs/deployment.md) | Binding, reachability tiers, config file, Docker |
+| [`docs/deployment.md`](docs/deployment.md) | Binding, reachability tiers, public deployments (base URLs, `--allowed-hosts`), config file, Docker |
 | [`docs/harness.md`](docs/harness.md) | MCP, Claude Code, Aider, CI, and the capture hook |
 | [`docs/rendering.md`](docs/rendering.md) | `?render=md`, themes, live-reload, inline replies |
 | [`docs/tls.md`](docs/tls.md) | Self-signed, ACME, and bring-your-own certificates |

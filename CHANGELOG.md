@@ -8,6 +8,48 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **New `--allowed-hosts` accepted-host policy.** When set, requests for any
+  other `Host` (beyond the `--base-url` and `--content-base-url` hosts) get
+  `421` on both planes. With `--base-url` set and no `--content-base-url`,
+  content URLs are now derived from the base URL rather than the request
+  `Host`.
+- **The control-plane write guard compares full origins.** Its `Origin`
+  fallback now matches scheme, host and port (default ports normalized)
+  against the `--base-url` origin when set, else the listener's own origin,
+  instead of host and port alone.
+- **Request paths are canonicalized before routing.** Non-canonical paths
+  redirect to their canonical form with the original escaping (previously the
+  redirect re-escaped `%` signs), and paths with encoded dot segments,
+  separators inside a segment or control characters get `400`.
+- **Site files are opened through `os.Root` with no symlinks followed.** A
+  symlink anywhere on a served site path (the site directory, an
+  intermediate directory or the file) is a 404, and the check cannot race
+  the open.
+- **Markdown links cannot disguise their destination.** A link destination
+  containing a backslash or a control character, or an `http(s)` URL with
+  userinfo, renders as plain text; the scheme allowlist is unchanged.
+- **Deleted and expired files are always reclaimed.** The files a delete,
+  expiry or overwrite stops referencing are recorded in the same transaction;
+  a failed unlink is retried on every sweep, and an hourly reconcile removes
+  unreferenced generation files. Every write records an intent before it
+  creates a file, so reconcile never removes a write in flight (including
+  one in a concurrent SSH receive) until its intent is 24 hours old; a write
+  reclaimed then fails instead of committing.
+- **The reply webhook follows no redirects.** A `3xx` from the configured
+  endpoint is logged as a failed delivery instead of resending the reply to
+  the `Location`.
+- **Logs no longer carry capability slugs, store paths or hook secrets.**
+  Errors from the store and the filesystem are logged with every path
+  replaced, rerender logs a slug tag instead of the slug, webhook failures log
+  only the URL's origin, and the exec hook's output is omitted unless the new
+  `reply_hook_log_output = on` key is set (then truncated and escaped). The
+  fatal error line of `serve` and `receive` is redacted the same way.
+- **Every accepted TTL expires.** `?ttl=`, `receive --ttl`, the MCP `publish`
+  tool and `demiplane publish --ttl` share one parser. Day values must be plain
+  decimals and are converted exactly; non-finite, overflowing and sub-second
+  values are rejected with `400` (or a client-side error) instead of being
+  stored as "never expires". A blank value (only whitespace) is an error
+  too; omit the TTL for no expiry.
 - **MCP `publish` paths are confined to a publish root.** The tool's `path`
   argument must resolve inside `--publish-root` / `DEMIPLANE_PUBLISH_ROOT`
   (default: the working directory of `demiplane mcp`) and is opened through that
@@ -35,6 +77,10 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Fixed
 
+- **Every generated capability slug is a valid slug.** About one in 32
+  started with `-` or `_`, which the named-slug rule rejects, so it could
+  not be republished to, named in `?next=` or passed to `receive --slug`.
+  Such draws are now discarded and redrawn.
 - **Concurrent writes to one slug no longer corrupt it.** A publish racing a
   delete, the expiry sweeper or a rebake could leave a row with no bytes (a
   permanent 500) or a page rendered from an older source. Writers to a slug are

@@ -495,9 +495,22 @@ func TestTTLPublishExpiresAndBadTTL(t *testing.T) {
 		t.Errorf("bad ttl status = %d, want 400", resp.StatusCode)
 	}
 
-	// Very short TTL expires; GET 404s after it passes (lazy reclaim).
-	url := publish(t, ts, "?slug=blip&ttl=1ms", "<html>fleeting</html>")
-	time.Sleep(10 * time.Millisecond)
+	// A TTL that would round to "no expiry" or sits below the one-second
+	// expiry resolution is a 400, never a permanent artifact.
+	for _, bad := range []string{"1e-20d", "NaNd", "%2BInfd", "1e300d", "1ms", "%20"} {
+		resp, err := http.Post(ts.URL+"/publish?slug=never&ttl="+bad, "application/octet-stream", strings.NewReader("x"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("ttl=%s status = %d, want 400", bad, resp.StatusCode)
+		}
+	}
+
+	// The shortest TTL expires; GET 404s after it passes (lazy reclaim).
+	url := publish(t, ts, "?slug=blip&ttl=1s", "<html>fleeting</html>")
+	time.Sleep(1100 * time.Millisecond)
 	if resp, _ := get(t, url); resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expired GET = %d, want 404", resp.StatusCode)
 	}

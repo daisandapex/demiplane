@@ -66,7 +66,7 @@ operator set `--max-upload`.
 |---|---|
 | `slug=<name>` | Named, stable URL that overwrites in place on re-publish. Charset `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. Omit for an auto friendly slug like `shadow-specter`. |
 | `private=true` | Mint a high-entropy, unguessable capability slug. Cannot be combined with `slug` (a named slug is guessable). |
-| `ttl=<dur>` | Auto-expire: `30m`, `2h`, `7d` (days), or any Go duration. After it lapses the slug returns 404. |
+| `ttl=<dur>` | Auto-expire: `30m`, `2h`, `7d` (days), or any Go duration. Days are a plain decimal (`7d`, `0.5d`); exponents, signs, `NaN` and `Inf` are refused. The minimum is `1s` and the maximum about 292 years; anything outside that range, or a value of only whitespace, is a `400`, never a page that does not expire. An empty or omitted `ttl` means no expiry. After it lapses the slug returns 404. |
 | `render=md` | Render a markdown body to a styled HTML page on publish (house theme, sticky title header, optional light/dark toggle). |
 | `reply=question` | Bake a first-class inline reply box into the rendered page. Requires `render=md` and a named `slug`; not valid with `private`. Needs the `reply` build tag. |
 | `next=<slug>` | Forward flow: names the page that follows this one's answer. Requires `reply`. Must differ from `slug`; need not exist yet. |
@@ -516,7 +516,8 @@ mesh), while listing and acking are publisher actions (bearer). A reply record i
 
 `kind` is one of `approve`, `defer`, `comment`. The inline `?reply` box always
 records `comment`. A recorded reply can fire a server-side hook (config keys
-`reply_hook_exec` and `reply_hook_url`) so an agent reacts with zero polling.
+`reply_hook_exec` and `reply_hook_url`, plus `reply_hook_log_output` to log a
+failing exec hook's output) so an agent reacts with zero polling.
 
 ### Replies: worked examples
 

@@ -228,7 +228,8 @@ func TestGetByURL_PortPivotRejected(t *testing.T) {
 
 func TestValidateTTL(t *testing.T) {
 	good := []string{"", "30m", "2h", "7d", "1.5d", "90s"}
-	bad := []string{"nope", "-1h", "0d", "5x", "-3d"}
+	bad := []string{"nope", "-1h", "0d", "5x", "-3d",
+		"1e-20d", "NaNd", "+Infd", "-Infd", "1e300d", "106752d", "500ms", "0x1p-2d", " "}
 	for _, s := range good {
 		if err := validateTTL(s); err != nil {
 			t.Errorf("validateTTL(%q) = %v, want nil", s, err)

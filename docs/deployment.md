@@ -59,6 +59,30 @@ a separate content **hostname** also gains cookie isolation, which ports alone d
 run the old single-port topology, pass `--unsafe-same-origin`. See
 [ADR 0003](./adr/0003-content-origin-isolation.md).
 
+## Public or proxied deployments
+
+Anything reachable by clients you do not control should not derive its URLs
+from the request `Host`, which the client chooses. Set all three:
+
+```sh
+demiplane serve --store /var/lib/demiplane \
+  --base-url https://demiplane.example.com \
+  --content-base-url https://content.example.com \
+  --allowed-hosts demiplane.example.com,content.example.com
+```
+
+`--base-url` and `--content-base-url` make every advertised URL (publish
+responses, `/list`, `llms.txt`, rendered pages) authoritative. With only
+`--base-url` set, the content URL is its scheme and host with the content port.
+`--allowed-hosts` is a comma-separated list of `host` (any port) or `host:port`
+entries; a request naming any other `Host` gets `421 Misdirected Request` on
+both listeners. The base URL host names are always accepted on any port, so the
+list only needs the extra names (a mesh IP, an internal hostname) you also
+serve; list those without a port to accept both the control and content
+ports, since a bare `Host` means the scheme's default port. Behind a
+TLS-terminating proxy, `--base-url` is also what lets the cross-origin write
+guard recognize the browser's `https://` origin.
+
 ## `serve` flags
 
 `--bind <host:port>` (default `127.0.0.1:8080` — control plane; set a
@@ -67,6 +91,8 @@ default = host of `--bind` with port +1, i.e. `:8081`), `--content-base-url <url
 (advertise the content origin for proxy/TLS deployments), `--unsafe-same-origin` (serve both
 on one origin — legacy footgun), `--store <dir>` (**required**), `--base-url <url>`
 (optional; advertise a canonical URL instead of deriving it from the request `Host`),
+`--allowed-hosts <host[:port],...>` (optional; serve only these `Host` values plus
+the base URL hosts, `421` for anything else; see above),
 `--token-file <path>` (optional; bearer token for write/list — `DEMIPLANE_TOKEN` is the
 env-var alternative), `--sweep-interval <dur>` (optional; how often to reap past-TTL
 artifacts, default `1m`), `--browse` (optional; serve an HTML index of non-private
