@@ -196,19 +196,13 @@ served by the control plane:
 <a href="http://demiplane.mesh:8080/reply/my-report">Leave a reply</a>
 ```
 
-…or inline the control in a page served by the control plane (it posts
-`application/x-www-form-urlencoded`). A page on the content origin cannot post
-here: the control plane refuses cross-origin browser writes. Use
-`?reply=question` for an answer box on the page itself.
-
-```html
-<form method="post" action="/reply/my-report">
-  <textarea name="body" placeholder="Optional note…"></textarea>
-  <button name="kind" value="approve">Approve</button>
-  <button name="kind" value="defer">Defer</button>
-  <button name="kind" value="comment">Comment</button>
-</form>
-```
+Use the form demiplane serves rather than a hand-written one: a browser
+submission needs the `token` field that form carries, and the token is bound to
+the artifact's current publish, so a copy pasted into another page stops
+working at the next republish. A page on the content origin cannot post to
+`/reply/{slug}` either: the control plane refuses cross-origin browser writes.
+Use `?reply=question` for an answer box on the page itself; its form, token
+included, is baked into the page.
 
 ## Storage & safety
 
