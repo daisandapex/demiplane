@@ -9,9 +9,12 @@ package limit
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -274,14 +277,97 @@ func (g Gate) Release() {
 // InUse reports how many slots are held.
 func (g Gate) InUse() int { return len(g) }
 
-// ClientKey returns the key a request is charged to: the TCP peer address,
-// with IPv6 peers grouped by /64 (one subscriber's allocation). Forwarding
-// headers are deliberately ignored, like everywhere else in demiplane, so
-// behind a reverse proxy every request shares the proxy's key; per-client
-// limits must then be enforced at the proxy.
+// ClientKey returns the key a request is charged to: the client address,
+// with IPv6 grouped by /64 (one subscriber's allocation). The address is the
+// one the server resolved for the request (WithClient), which is the TCP peer
+// unless the peer is a trusted proxy (Proxies); a request with none resolved
+// is charged to its TCP peer.
 func ClientKey(r *http.Request) string {
+	if k, ok := r.Context().Value(clientCtxKey{}).(string); ok && k != "" {
+		return k
+	}
 	return AddrKey(r.RemoteAddr)
 }
+
+type clientCtxKey struct{}
+
+// WithClient returns ctx carrying key as its request's client key.
+func WithClient(ctx context.Context, key string) context.Context {
+	return context.WithValue(ctx, clientCtxKey{}, key)
+}
+
+// Proxies is the set of reverse proxies (--trusted-proxy) whose
+// X-Forwarded-For names the client. Empty means none: forwarding headers are
+// ignored and every request is its TCP peer, so behind a proxy all clients
+// share the proxy's key.
+type Proxies []netip.Prefix
+
+// ParseProxies parses a comma-separated list of CIDRs or bare IP addresses.
+func ParseProxies(csv string) (Proxies, error) {
+	var out Proxies
+	for _, e := range strings.Split(csv, ",") {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(e); err == nil {
+			out = append(out, p.Masked())
+			continue
+		}
+		a, err := netip.ParseAddr(e)
+		if err != nil {
+			return nil, fmt.Errorf("--trusted-proxy entry %q: want an IP address or CIDR", e)
+		}
+		a = a.Unmap()
+		out = append(out, netip.PrefixFrom(a, a.BitLen()))
+	}
+	return out, nil
+}
+
+func (p Proxies) trusted(a netip.Addr) bool {
+	a = a.Unmap()
+	for _, n := range p {
+		if n.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// ClientAddr returns the address r is charged to. It is the TCP peer unless
+// the peer is a trusted proxy; then X-Forwarded-For is read from the right,
+// past every trusted hop, and the first address that is not a trusted proxy
+// is the client. Entries to its left were written by the client and are never
+// used. A missing or malformed header leaves the proxy as the client.
+func (p Proxies) ClientAddr(r *http.Request) string {
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	peer, err := netip.ParseAddr(host)
+	if err != nil || len(p) == 0 || !p.trusted(peer) {
+		return host
+	}
+	var hops []string
+	for _, v := range r.Header.Values("X-Forwarded-For") {
+		hops = append(hops, strings.Split(v, ",")...)
+	}
+	client := peer
+	for i := len(hops) - 1; i >= 0; i-- {
+		a, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			break
+		}
+		client = a.Unmap()
+		if !p.trusted(client) {
+			break
+		}
+	}
+	return client.String()
+}
+
+// Key is ClientKey's value for r under these proxies.
+func (p Proxies) Key(r *http.Request) string { return AddrKey(p.ClientAddr(r)) }
 
 // AddrKey is ClientKey for a bare "host:port" (or host) address.
 func AddrKey(addr string) string {

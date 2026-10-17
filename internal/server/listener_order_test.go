@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/daisandapex/demiplane/internal/limit"
 )
 
 // connGet sends a GET for path on c and reads one response.
@@ -143,6 +145,59 @@ func TestContentWriteGuardUsesContentOrigin(t *testing.T) {
 			h.ServeHTTP(rec, r)
 			if rec.Code != tc.want {
 				t.Errorf("status %d, want %d", rec.Code, tc.want)
+			}
+		})
+	}
+}
+
+// TestTrustedProxyClientIdentity: behind a --trusted-proxy, per-client
+// admission charges the forwarded client, not the proxy; without one the
+// forwarded header is ignored.
+func TestTrustedProxyClientIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		proxies string
+		// status of a second request from another forwarded client while the
+		// first holds the only per-client slot
+		otherClient int
+	}{
+		{"trusted proxy", "127.0.0.1", http.StatusOK},
+		{"no trusted proxy", "", http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := limit.ParseProxies(tc.proxies)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s, _ := limitServer(t, Config{TrustedProxies: p, Requests: RequestLimits{MaxRequestsPerClient: 1}})
+			held, release := make(chan struct{}), make(chan struct{})
+			ts := httptest.NewServer(s.wrapListener(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/hold" {
+					close(held)
+					<-release
+				}
+			})))
+			t.Cleanup(ts.Close)
+			t.Cleanup(func() { close(release) })
+			get := func(path, xff string) int {
+				req, _ := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+				req.Header.Set("X-Forwarded-For", xff)
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+				return resp.StatusCode
+			}
+			go get("/hold", "203.0.113.1")
+			<-held
+			if got := get("/ok", "203.0.113.2"); got != tc.otherClient {
+				t.Errorf("another forwarded client: %d, want %d", got, tc.otherClient)
+			}
+			if tc.proxies != "" {
+				if got := get("/ok", "203.0.113.1"); got != http.StatusServiceUnavailable {
+					t.Errorf("same forwarded client: %d, want 503", got)
+				}
 			}
 		})
 	}

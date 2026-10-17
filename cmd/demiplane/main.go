@@ -157,6 +157,7 @@ func runServe(args []string) error {
 	dir := fs.String("store", "", "directory for content + metadata (required)")
 	baseURL := fs.String("base-url", "", "advertised control-plane base URL; if empty, derived from request Host")
 	allowedHosts := fs.String("allowed-hosts", "", "comma-separated Host values to serve (host or host:port); others get 421. The --base-url and --content-base-url hosts are always included. Empty = any Host")
+	trustedProxy := fs.String("trusted-proxy", "", "comma-separated IPs or CIDRs of reverse proxies whose X-Forwarded-For names the client for per-client limits; empty = the TCP peer is the client")
 	tokenFile := fs.String("token-file", "", "file holding the bearer token for publish/delete/list; overrides DEMIPLANE_TOKEN")
 	sweep := fs.Duration("sweep-interval", time.Minute, "how often to reap past-TTL artifacts")
 	browse := fs.Bool("browse", false, "serve an HTML index of non-private artifacts at GET /")
@@ -187,6 +188,10 @@ func runServe(args []string) error {
 		return fmt.Errorf("--store is required")
 	}
 	hosts, err := server.ParseHostList(*allowedHosts)
+	if err != nil {
+		return err
+	}
+	proxies, err := limit.ParseProxies(*trustedProxy)
 	if err != nil {
 		return err
 	}
@@ -280,6 +285,7 @@ func runServe(args []string) error {
 		ContentBaseURL:    *contentBaseURL,
 		ContentPort:       cPort,
 		AllowedHosts:      hosts,
+		TrustedProxies:    proxies,
 		AuthToken:         token,
 		Browse:            *browse,
 		MaxUpload:         *maxUpload,

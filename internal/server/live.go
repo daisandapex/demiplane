@@ -12,12 +12,12 @@ import (
 	"html"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/limit"
 	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/store"
@@ -185,23 +185,10 @@ func (h *liveHub) unsubscribe(slug, client string, ch chan struct{}) {
 	}
 }
 
-// liveClientKey groups a request's peer address for the per-client cap: the
-// IPv4 address, or the /64 of an IPv6 address (one subscriber commonly holds a
-// whole /64). X-Forwarded-For is not consulted; it is client-controlled.
-func liveClientKey(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return host
-	}
-	if v4 := ip.To4(); v4 != nil {
-		return v4.String()
-	}
-	return ip.Mask(net.CIDRMask(64, 128)).String()
-}
+// liveClientKey is the client a stream counts against for the per-client cap:
+// limit.ClientKey, the IPv4 address or IPv6 /64 the server resolved for the
+// request (the TCP peer, or the forwarded client behind a --trusted-proxy).
+func liveClientKey(r *http.Request) string { return limit.ClientKey(r) }
 
 // liveGrant records the password hash a stream's credentials were last
 // verified against. The credentials themselves stay on the stream's request.

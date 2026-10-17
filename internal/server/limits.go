@@ -160,7 +160,8 @@ func (s *Server) withAdmission(next http.Handler) http.Handler {
 			refuseBusy(w, "server busy; try again shortly")
 			return
 		}
-		key := limit.ClientKey(r)
+		// The client every per-client limit downstream charges (limit.ClientKey).
+		key := s.proxies.Key(r)
 		if !perClient.acquire(key) {
 			inflight.Release()
 			refuseBusy(w, "too many requests in progress from this client")
@@ -171,7 +172,8 @@ func (s *Server) withAdmission(next http.Handler) http.Handler {
 			inflight.Release()
 		}}
 		defer slots.done()
-		ctx := context.WithValue(r.Context(), serverCtxKey{}, s)
+		ctx := limit.WithClient(r.Context(), key)
+		ctx = context.WithValue(ctx, serverCtxKey{}, s)
 		ctx = context.WithValue(ctx, slotsCtxKey{}, slots)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

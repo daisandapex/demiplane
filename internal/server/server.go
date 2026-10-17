@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/daisandapex/demiplane/internal/limit"
 	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/render"
@@ -49,8 +50,11 @@ type Config struct {
 	// whose Host is not listed (nor the host of BaseURL/ContentBaseURL) get
 	// 421 on both planes. See hostpolicy.go.
 	AllowedHosts []string
-	Browse       bool  // serve an HTML index of non-private artifacts at GET /
-	MaxUpload    int64 // max publish body bytes; 0 = unlimited (the CLI defaults it to 100 MiB)
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For names the
+	// client for per-client limits (limit.Proxies). Empty = the TCP peer.
+	TrustedProxies limit.Proxies
+	Browse         bool  // serve an HTML index of non-private artifacts at GET /
+	MaxUpload      int64 // max publish body bytes; 0 = unlimited (the CLI defaults it to 100 MiB)
 	// RenderTheme names the built-in theme for ?render=md pages (see
 	// internal/theme: "light"/"dark"); empty = the default house style.
 	RenderTheme string
@@ -93,7 +97,8 @@ type Server struct {
 	baseURL          string
 	contentBaseURL   string
 	contentPort      string
-	hostRules        []hostRule // accepted-host policy; nil = any Host
+	hostRules        []hostRule    // accepted-host policy; nil = any Host
+	proxies          limit.Proxies // trusted reverse proxies for client identity
 	authToken        string
 	browse           bool
 	maxUpload        int64
@@ -132,6 +137,7 @@ func New(st *store.Store, cfg Config) *Server {
 		contentBaseURL:   strings.TrimRight(cfg.ContentBaseURL, "/"),
 		contentPort:      cfg.ContentPort,
 		hostRules:        buildHostRules(cfg.AllowedHosts, cfg.BaseURL, cfg.ContentBaseURL),
+		proxies:          cfg.TrustedProxies,
 		authToken:        cfg.AuthToken,
 		browse:           cfg.Browse,
 		maxUpload:        cfg.MaxUpload,

@@ -5,6 +5,7 @@ package limit
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"sync"
@@ -179,5 +180,57 @@ func TestRateString(t *testing.T) {
 	}
 	if got := (Rate{}).String(); got != "unlimited" {
 		t.Errorf("zero rate = %q", got)
+	}
+}
+
+func TestProxiesClientAddr(t *testing.T) {
+	p, err := ParseProxies("10.0.0.0/8, 192.0.2.7 ,fd00::/64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := func(peer string, xff ...string) *http.Request {
+		r := &http.Request{RemoteAddr: peer, Header: http.Header{}}
+		for _, v := range xff {
+			r.Header.Add("X-Forwarded-For", v)
+		}
+		return r
+	}
+	for _, tc := range []struct {
+		name string
+		r    *http.Request
+		want string
+	}{
+		{"untrusted peer ignores the header", req("198.51.100.9:1", "203.0.113.5"), "198.51.100.9"},
+		{"trusted peer, one hop", req("10.1.2.3:1", "203.0.113.5"), "203.0.113.5"},
+		{"client-written entries to the left are ignored", req("10.1.2.3:1", "1.1.1.1, 203.0.113.5"), "203.0.113.5"},
+		{"chained trusted proxies are skipped", req("10.1.2.3:1", "203.0.113.5, 192.0.2.7"), "203.0.113.5"},
+		{"several header lines read as one list", req("10.1.2.3:1", "203.0.113.5", "10.9.9.9"), "203.0.113.5"},
+		{"no header leaves the proxy", req("10.1.2.3:1"), "10.1.2.3"},
+		{"malformed hop stops at the last good one", req("10.1.2.3:1", "203.0.113.5, junk"), "10.1.2.3"},
+		{"IPv6 proxy", req("[fd00::1]:1", "2001:db8::5"), "2001:db8::5"},
+		{"all hops trusted", req("10.1.2.3:1", "10.4.4.4"), "10.4.4.4"},
+	} {
+		if got := p.ClientAddr(tc.r); got != tc.want {
+			t.Errorf("%s: ClientAddr = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	if got := Proxies(nil).ClientAddr(req("10.1.2.3:1", "203.0.113.5")); got != "10.1.2.3" {
+		t.Errorf("no trusted proxies: ClientAddr = %q, want the peer", got)
+	}
+	for _, bad := range []string{"10.0.0.0/33", "proxy.example", "10.0.0.1:80"} {
+		if _, err := ParseProxies(bad); err == nil {
+			t.Errorf("ParseProxies(%q) accepted", bad)
+		}
+	}
+}
+
+func TestClientKeyUsesResolvedClient(t *testing.T) {
+	r := &http.Request{RemoteAddr: "10.1.2.3:1", Header: http.Header{}}
+	if ClientKey(r) != "10.1.2.3" {
+		t.Fatalf("unresolved request: %q", ClientKey(r))
+	}
+	r = r.WithContext(WithClient(context.Background(), "203.0.113.5"))
+	if ClientKey(r) != "203.0.113.5" {
+		t.Fatalf("resolved request: %q", ClientKey(r))
 	}
 }
