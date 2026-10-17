@@ -8,6 +8,7 @@ import (
 	"html"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -54,7 +55,12 @@ func init() {
 }
 
 func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
-	arts, err := s.store.List(store.DefaultOwner)
+	// One page of listPageSize cards at a time, so a page's size does not grow
+	// with the instance.
+	arts, next, ok, err := s.listPage(w, r)
+	if !ok {
+		return
+	}
 	if err != nil {
 		log.Printf("gallery list failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -83,7 +89,8 @@ func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
 		shown++
 	}
 
-	if shown == 0 {
+	paged := r.URL.Query().Has("after")
+	if shown == 0 && !paged {
 		// True empty state (no public artifacts at all) — orient a newcomer.
 		b.WriteString(`<div class="gempty"><div class="t">No artifacts yet</div>` +
 			`<p>Publish your first page, then it shows up here. New to demiplane? ` +
@@ -95,7 +102,7 @@ func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
 
 	// Search + sort toolbar. IDs are wired by the inline script below.
 	fmt.Fprintf(&b, `<div class="gtools"><input id="gq" class="gsearch" type="search" `+
-		`placeholder="Filter %s by name or slug" `+
+		`placeholder="Filter %s on this page by name or slug" `+
 		`autocomplete="off" spellcheck="false" aria-label="Filter artifacts">`,
 		html.EscapeString(plural(shown, "artifact")))
 	b.WriteString(`<select id="ggroup" class="gsortsel" aria-label="Group artifacts">` +
@@ -113,6 +120,20 @@ func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
 	b.WriteString(cards.String())
 	b.WriteString(`</div>`)
 	b.WriteString(`<p id="gnomatch" class="gnomatch" style="display:none">No artifacts match that filter.</p>`)
+	if paged || next != nil {
+		b.WriteString(`<p class="gpages">`)
+		if paged {
+			b.WriteString(`<a href="/gallery">Newest artifacts</a>`)
+		}
+		if next != nil {
+			if paged {
+				b.WriteString(` · `)
+			}
+			fmt.Fprintf(&b, `<a href="/gallery?after=%s">Older artifacts →</a>`,
+				html.EscapeString(url.QueryEscape(next.String())))
+		}
+		b.WriteString(`</p>`)
+	}
 	b.WriteString(galleryScript)
 
 	writeHTML(w, s.pageHTML("Gallery — demiplane", galleryNav(), b.String()))

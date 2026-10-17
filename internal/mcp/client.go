@@ -245,10 +245,15 @@ func (c *Client) Publish(ctx context.Context, p PublishParams) (*PublishResult, 
 	return &out, nil
 }
 
-// List GETs /list and returns the raw JSON body (already filtered to non-private
-// artifacts by the server).
-func (c *Client) List(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.ControlURL+"/list", nil)
+// List GETs one page of /list, after the given cursor ("" = the first page),
+// and returns the raw JSON body (already filtered to non-private artifacts by
+// the server).
+func (c *Client) List(ctx context.Context, after string) (string, error) {
+	target := c.ControlURL + "/list"
+	if after != "" {
+		target += "?after=" + url.QueryEscape(after)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return "", err
 	}

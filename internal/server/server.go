@@ -971,10 +971,34 @@ type listItem struct {
 	Series      string `json:"series,omitempty"`
 }
 
-// handleList returns the caller's artifacts as JSON, newest first. In v1 the
-// caller is the single local owner.
+// listPageSize is how many artifacts one /list or /gallery response holds.
+const listPageSize = 200
+
+// listPage reads the page of artifacts a listing request asks for with
+// ?after=<cursor>. ok=false means the cursor was malformed and a 400 has been
+// written.
+func (s *Server) listPage(w http.ResponseWriter, r *http.Request) (arts []store.Artifact, next *store.ListCursor, ok bool, err error) {
+	var after *store.ListCursor
+	if v := r.URL.Query().Get("after"); v != "" {
+		c, perr := store.ParseListCursor(v)
+		if perr != nil {
+			http.Error(w, "bad after cursor", http.StatusBadRequest)
+			return nil, nil, false, nil
+		}
+		after = &c
+	}
+	arts, next, err = s.store.ListPage(store.DefaultOwner, after, listPageSize)
+	return arts, next, true, err
+}
+
+// handleList returns the caller's artifacts as JSON, newest first, a page of
+// listPageSize at a time: "next", when present, is the ?after= cursor for the
+// following page. In v1 the caller is the single local owner.
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
-	arts, err := s.store.List(store.DefaultOwner)
+	arts, next, ok, err := s.listPage(w, r)
+	if !ok {
+		return
+	}
 	if err != nil {
 		log.Printf("list failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -997,7 +1021,11 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 			Series:      a.Series,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"artifacts": items, "count": len(items)})
+	resp := map[string]any{"artifacts": items, "count": len(items)}
+	if next != nil {
+		resp["next"] = next.String()
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // quotaMessage is the 507 body when a write would pass the store quota.

@@ -666,3 +666,61 @@ func TestValidateSeries(t *testing.T) {
 		}
 	}
 }
+
+func TestListCursorRoundTripAndRejects(t *testing.T) {
+	c := ListCursor{Created: 1700000000, Slug: "a.b-c"}
+	got, err := ParseListCursor(c.String())
+	if err != nil || got != c {
+		t.Fatalf("round trip %q: %+v, %v", c.String(), got, err)
+	}
+	for _, bad := range []string{"", "1700000000", "1700000000.", ".slug", "-1.slug", "x.slug", "1." + strings.Repeat("s", 256)} {
+		if _, err := ParseListCursor(bad); err == nil {
+			t.Errorf("ParseListCursor(%q) accepted", bad)
+		}
+	}
+}
+
+// TestListPageWalksEveryArtifactOnce: pages of 3 over artifacts sharing a
+// creation second visit each exactly once, in List order.
+func TestListPageWalksEveryArtifactOnce(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	for i := 0; i < 10; i++ {
+		if _, err := st.Put(PutOptions{Slug: fmt.Sprintf("p%02d", i)}, strings.NewReader("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := st.List(DefaultOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var walked []string
+	var after *ListCursor
+	for {
+		page, next, err := st.ListPage(DefaultOwner, after, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) > 3 {
+			t.Fatalf("page of %d", len(page))
+		}
+		for _, a := range page {
+			walked = append(walked, a.Slug)
+		}
+		if next == nil {
+			break
+		}
+		after = next
+	}
+	if len(walked) != len(all) {
+		t.Fatalf("walked %d, listed %d", len(walked), len(all))
+	}
+	for i, a := range all {
+		if walked[i] != a.Slug {
+			t.Fatalf("position %d: walked %s, List has %s", i, walked[i], a.Slug)
+		}
+	}
+}

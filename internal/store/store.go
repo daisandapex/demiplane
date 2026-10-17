@@ -15,10 +15,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -983,7 +985,11 @@ func (s *Store) List(owner string) ([]Artifact, error) {
 		return nil, fmt.Errorf("list artifacts: %w", err)
 	}
 	defer rows.Close()
+	return scanArtifacts(rows)
+}
 
+// scanArtifacts reads List's columns from rows.
+func scanArtifacts(rows *sql.Rows) ([]Artifact, error) {
 	var out []Artifact
 	for rows.Next() {
 		var (
@@ -1006,6 +1012,61 @@ func (s *Store) List(owner string) ([]Artifact, error) {
 		return nil, fmt.Errorf("iterate artifacts: %w", err)
 	}
 	return out, nil
+}
+
+// ListCursor marks a position in List order (newest first, then slug): the
+// last artifact of a page. Its String form is "<created unix>.<slug>".
+type ListCursor struct {
+	Created int64
+	Slug    string
+}
+
+func (c ListCursor) String() string { return strconv.FormatInt(c.Created, 10) + "." + c.Slug }
+
+// ParseListCursor parses a ListCursor's String form.
+func ParseListCursor(v string) (ListCursor, error) {
+	ts, slug, ok := strings.Cut(v, ".")
+	created, err := strconv.ParseInt(ts, 10, 64)
+	if !ok || err != nil || created < 0 || slug == "" || len(slug) > 255 {
+		return ListCursor{}, fmt.Errorf("bad list cursor")
+	}
+	return ListCursor{Created: created, Slug: slug}, nil
+}
+
+// ListPage returns up to limit of owner's artifacts in List order, starting
+// after the cursor (nil = from the newest), and the cursor for the next page
+// (nil when this page is the last).
+func (s *Store) ListPage(owner string, after *ListCursor, limit int) ([]Artifact, *ListCursor, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	created, slug := int64(math.MaxInt64), ""
+	if after != nil {
+		created, slug = after.Created, after.Slug
+	}
+	rows, err := s.db.Query(
+		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec
+		   FROM artifacts
+		  WHERE owner = ? AND private = 0 AND (expires_at = 0 OR expires_at > ?)
+		    AND (created_at < ? OR (created_at = ? AND slug > ?))
+		  ORDER BY created_at DESC, slug ASC
+		  LIMIT ?`,
+		owner, time.Now().Unix(), created, created, slug, limit+1,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list artifacts: %w", err)
+	}
+	defer rows.Close()
+	out, err := scanArtifacts(rows)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(out) <= limit {
+		return out, nil, nil
+	}
+	out = out[:limit]
+	last := out[limit-1]
+	return out, &ListCursor{Created: last.CreatedAt.Unix(), Slug: last.Slug}, nil
 }
 
 // Count returns the number of non-expired artifacts owned by owner.

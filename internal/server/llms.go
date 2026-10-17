@@ -178,7 +178,7 @@ func (s *Server) handleHelp(w http.ResponseWriter, r *http.Request) {
 			},
 			{Method: "GET", Path: "/{slug}", Auth: false,
 				Desc: "Fetch an artifact as-is. Open; password-gated artifacts require HTTP Basic credentials."},
-			{Method: "GET", Path: "/list", Auth: true, Desc: "JSON list of the owner's artifacts."},
+			{Method: "GET", Path: "/list", Auth: true, Desc: "JSON list of the owner's artifacts, newest first, 200 a page; pass the response's next as ?after= for the following page."},
 			{Method: "DELETE", Path: "/{slug}", Auth: true, Desc: "Delete an artifact."},
 			{Method: "POST", Path: "/rerender/{slug}", Auth: true,
 				Desc: "Rebake one ?render=md page from its retained markdown source with the current renderer. " +

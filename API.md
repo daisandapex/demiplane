@@ -315,6 +315,11 @@ The owner's artifacts as JSON, newest first. Auth: bearer. Always returns JSON
 (no `Accept` needed). Private capability slugs are included for the owner; the
 response never carries a password value, only whether a gate exists.
 
+A response holds at most 200 artifacts. When more follow, it carries `next`, a
+cursor; pass it back as `?after=<next>` for the following page. The last page
+has no `next`. `count` is the number of artifacts in this response. A malformed
+`after` gets `400`.
+
 ```json
 {
   "artifacts": [
@@ -331,7 +336,8 @@ response never carries a password value, only whether a gate exists.
       "expires_at": ""
     }
   ],
-  "count": 1
+  "count": 1,
+  "next": "1784109840.reports"
 }
 ```
 
@@ -339,17 +345,26 @@ response never carries a password value, only whether a gate exists.
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" "$CTRL/list"
+# the following page, with the previous response's "next"
+curl -H "Authorization: Bearer $TOKEN" "$CTRL/list?after=1784109840.reports"
 ```
 
 ```python
 import os, requests
-r = requests.get(
-    "https://demiplane.example/list",
-    headers={"Authorization": f"Bearer {os.environ['DEMIPLANE_TOKEN']}"},
-)
-r.raise_for_status()
-for a in r.json()["artifacts"]:
-    print(a["slug"], a["url"], a["size"])
+params = {}
+while True:
+    r = requests.get(
+        "https://demiplane.example/list",
+        headers={"Authorization": f"Bearer {os.environ['DEMIPLANE_TOKEN']}"},
+        params=params,
+    )
+    r.raise_for_status()
+    page = r.json()
+    for a in page["artifacts"]:
+        print(a["slug"], a["url"], a["size"])
+    if "next" not in page:
+        break
+    params = {"after": page["next"]}
 ```
 
 ```javascript
@@ -663,7 +678,9 @@ An HTML index of the instance's non-private artifacts, on the control plane. It
 is a human browse surface, never a JSON API, and it never lists private
 capability slugs. It follows `serve --browse`: with browsing on it is public,
 like the `GET /` listing; with browsing off (the default) it needs the bearer
-token, like `GET /list`.
+token, like `GET /list`. A page shows at most 200 artifacts, newest first; an
+"Older artifacts" link (`/gallery?after=<cursor>`) leads to the next page, and
+filtering, sorting and grouping apply to the page shown.
 
 ## Status codes
 
@@ -675,7 +692,7 @@ token, like `GET /list`.
 | `304 Not Modified` | Conditional `GET /{slug}` whose `If-None-Match` or `If-Modified-Since` still matches. |
 | `302 Found` | Forward-flow redirect once a `?next` slug exists. |
 | `307 Temporary Redirect` | A non-canonical path (`//`, `/./`, `/../`); `Location` is the canonical path with its escaping and query kept. |
-| `400 Bad Request` | Invalid or reserved slug, `private` + named slug, password in the URL query, bad `ttl`, a malformed publish query string, a site upload asking for `?private`/`?ttl`/a password, a malformed reply/site, or an ambiguous path (a segment that decodes to `.` or `..`, or holds an encoded `/` or `\`, or a control character), or a `Host` header longer than 255 bytes (on every listener, before routing). |
+| `400 Bad Request` | Invalid or reserved slug, `private` + named slug, password in the URL query, bad `ttl`, a malformed publish query string, a site upload asking for `?private`/`?ttl`/a password, a malformed reply/site, or an ambiguous path (a segment that decodes to `.` or `..`, or holds an encoded `/` or `\`, or a control character), a `Host` header longer than 255 bytes (on every listener, before routing), or a malformed `after` cursor (`/list`, `/gallery`). |
 | `401 Unauthorized` | Missing or invalid bearer token (write/list/delete/reply admin, `/gallery` without `--browse`), or a missing or wrong view password (read, `?live`, live-reload stream, reply). |
 | `403 Forbidden` | A cross-origin browser write (another site posting through a visitor's browser), or a browser reply submission without a valid form token. A service-worker script fetch is answered `200` with a fixed script that removes itself. |
 | `404 Not Found` | No such artifact or reply, or it expired. |

@@ -115,7 +115,7 @@ func TestList_And_Delete(t *testing.T) {
 	f.reply = `{"artifacts":[],"count":0}`
 	c := NewClient(f.URL, "", "tok")
 
-	body, err := c.List(context.Background())
+	body, err := c.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +124,15 @@ func TestList_And_Delete(t *testing.T) {
 	}
 	if f.lastPath != "/list" || f.lastAuth != "Bearer tok" {
 		t.Errorf("list req: %s auth=%q", f.lastPath, f.lastAuth)
+	}
+	if f.lastQuery != "" {
+		t.Errorf("first page sent query %q", f.lastQuery)
+	}
+	if _, err := c.List(context.Background(), "1700000000.a-b"); err != nil {
+		t.Fatal(err)
+	}
+	if f.lastQuery != "after=1700000000.a-b" {
+		t.Errorf("next page query = %q", f.lastQuery)
 	}
 
 	f.status = http.StatusNoContent

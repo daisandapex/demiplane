@@ -66,8 +66,13 @@ func toolDefs() []tool {
 		},
 		{
 			Name:        "list",
-			Description: "List the non-private artifacts published on this demiplane instance (JSON: slug, url, type, size, timestamps).",
-			InputSchema: map[string]any{"type": "object", "properties": map[string]any{}},
+			Description: "List the non-private artifacts published on this demiplane instance, newest first, 200 at a time (JSON: slug, url, type, size, timestamps; `next` is the cursor for the following page).",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"after": map[string]any{"type": "string", "description": "the `next` cursor from a previous list call, for the following page"},
+				},
+			},
 		},
 		{
 			Name:        "delete",
@@ -102,7 +107,7 @@ func callTool(ctx context.Context, c *Client, name string, args json.RawMessage)
 	case "publish":
 		return callPublish(ctx, c, args)
 	case "list":
-		return callList(ctx, c)
+		return callList(ctx, c, args)
 	case "delete":
 		return callDelete(ctx, c, args)
 	case "get":
@@ -284,8 +289,14 @@ func resolveDir(dir string) (string, error) {
 	return filepath.EvalSymlinks(abs)
 }
 
-func callList(ctx context.Context, c *Client) (*toolResult, *rpcError) {
-	body, err := c.List(ctx)
+func callList(ctx context.Context, c *Client, raw json.RawMessage) (*toolResult, *rpcError) {
+	var a struct {
+		After string `json:"after"`
+	}
+	if err := unmarshalArgs(raw, &a); err != nil {
+		return nil, err
+	}
+	body, err := c.List(ctx, a.After)
 	if err != nil {
 		return nil, upstreamError(err)
 	}
