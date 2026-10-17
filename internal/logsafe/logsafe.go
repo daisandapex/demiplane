@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -63,6 +64,9 @@ func Err(err error, secrets ...string) string {
 		}
 		var ue *url.Error
 		if errors.As(e, &ue) && ue.URL != "" {
+			// url.Error prints its URL with %q, so a URL containing a quote
+			// or backslash appears escaped: replace that form, too.
+			rs = append(rs, repl{strconv.Quote(ue.URL), strconv.Quote(URL(ue.URL))})
 			rs = append(rs, repl{ue.URL, URL(ue.URL)})
 		}
 	})

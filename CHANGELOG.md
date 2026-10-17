@@ -29,7 +29,8 @@ All notable changes to demiplane are documented here. The format follows
   Errors from the store and the filesystem are logged with every path
   replaced, rerender logs a slug tag instead of the slug, webhook failures log
   only the URL's origin, and the exec hook's output is omitted unless the new
-  `reply_hook_log_output = on` key is set (then truncated and escaped).
+  `reply_hook_log_output = on` key is set (then truncated and escaped). The
+  fatal error line of `serve` and `receive` is redacted the same way.
 - **Every accepted TTL expires.** `?ttl=`, `receive --ttl`, the MCP `publish`
   tool and `demiplane publish --ttl` share one parser. Day values must be plain
   decimals and are converted exactly; non-finite, overflowing and sub-second

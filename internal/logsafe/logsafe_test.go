@@ -95,3 +95,19 @@ func TestSlugTagStable(t *testing.T) {
 		t.Errorf("Slug tag = %q / %q", a, b)
 	}
 }
+
+// TestErrRedactsQuotedURL: url.Error formats its URL with %q, which escapes
+// quotes and backslashes; the redaction must still match.
+func TestErrRedactsQuotedURL(t *testing.T) {
+	raw := `http://127.0.0.1:1/private-token?x="secret"&y=a\b`
+	err := &url.Error{Op: "Post", URL: raw, Err: errors.New("connection refused")}
+	got := Err(fmt.Errorf("webhook: %w", errors.Join(err)))
+	for _, leak := range []string{"private-token", "secret", `a\b`} {
+		if strings.Contains(got, leak) {
+			t.Errorf("quoted URL leaked %q: %s", leak, got)
+		}
+	}
+	if !strings.Contains(got, "http://127.0.0.1:1") {
+		t.Errorf("origin lost: %s", got)
+	}
+}

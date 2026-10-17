@@ -47,8 +47,8 @@ want it.
 - **Log hygiene.** A private slug is a secret, so error logs never carry one:
   slugs are logged as a short hash tag (`slug#…`), and the filesystem paths
   inside wrapped I/O errors (which embed the slug) are replaced by `[path]` on
-  every path that logs a store error, including rerender, expiry and the
-  sweeper. Reply-hook failures log the webhook's origin only (no userinfo,
+  every path that logs a store error, including rerender, expiry, the
+  sweeper and the fatal error line of `serve` and `receive`. Reply-hook failures log the webhook's origin only (no userinfo,
   path or query) and omit the exec hook's output unless
   `reply_hook_log_output = on`; logged hook output is truncated and has its
   control characters escaped. The webhook client follows no redirects, so a

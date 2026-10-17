@@ -78,11 +78,11 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		if err := runServe(os.Args[2:]); err != nil {
-			log.Fatal(err)
+			log.Fatal(exitMessage(err))
 		}
 	case "receive":
 		if err := runReceive(os.Args[2:]); err != nil {
-			log.Fatal(err)
+			log.Fatal(exitMessage(err))
 		}
 	case "mcp":
 		if err := runMCP(os.Args[2:]); err != nil {
@@ -102,6 +102,13 @@ func main() {
 		os.Exit(2)
 	}
 }
+
+// exitMessage formats a fatal error from serve or receive, the commands that
+// open the store. It goes through logsafe like every other log line: a failed
+// private publish over SSH receive, for one, carries the generated capability
+// slug inside the wrapped filesystem path. The client commands (publish, mcp)
+// report their errors verbatim; their paths are the user's own files.
+func exitMessage(err error) string { return logsafe.Err(err) }
 
 func usage() {
 	fmt.Fprint(os.Stderr, `demiplane — internal-first publishing service

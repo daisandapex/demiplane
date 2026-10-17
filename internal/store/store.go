@@ -177,7 +177,7 @@ func tightenStorePerms(dir string) error {
 		if err := os.Chmod(p, e.mode); err != nil {
 			return fmt.Errorf("set mode of %s: %w", p, err)
 		}
-		log.Printf("store: set mode of %s from %04o to %04o", p, perm, e.mode)
+		log.Printf("store: set mode of %s from %04o to %04o", logsafe.Text(p), perm, e.mode)
 	}
 	return nil
 }
