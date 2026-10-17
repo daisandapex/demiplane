@@ -129,7 +129,8 @@ All notable changes to demiplane are documented here. The format follows
   host appears in every advertised URL, so an unbounded one multiplied the
   size of each listing.
 - **Listings are paged.** `GET /list` and `/gallery` return 200 artifacts at
-  a time, newest first, and the browse index reads only what it shows.
+  a time and `GET /replies` 100 replies, newest first, and the browse index
+  reads only what it shows.
 - **Site archives are checked before they are parsed.** A zip's central
   directory is validated against its end record (at most 4,096 entries and
   2 MiB) and read through a limit, a tar's headers are walked first (PAX and
@@ -255,6 +256,8 @@ All notable changes to demiplane are documented here. The format follows
   reply forms are refused as cross-origin. The new `--allowed-hosts` refuses
   any other `Host` with `421`.
 - **Upgrade note: `/gallery` needs the token unless `--browse` is set.**
+- **Upgrade note: `GET /replies` is paged** the same way: at most 100
+  replies a response, with `next` to pass back as `?after=`.
 - **Upgrade note: `GET /list` is paged.** A response holds at most 200
   artifacts; a client that reads one response as the whole list must follow
   `next` (`?after=<next>`) until it is absent. `count` now counts the

@@ -403,7 +403,7 @@ only in `-tags reply` builds.
 | Response | write deadline per response; an upload's starts at its longest allowed body time plus this, and tightens to this once the body is read | 60s | `--response-timeout` |
 | Response | extra time for an artifact or site file: size at this rate | 16 KiB/s | `--download-min-rate` |
 | Request host | `Host` header length; longer gets `400` before routing | 255 bytes | (code) |
-| Listings | artifacts per `/list` response or `/gallery` page; more via the `?after=` cursor | 200 | (code) |
+| Listings | artifacts per `/list` response or `/gallery` page / replies per `/replies` response; more via the `?after=` cursor | 200 / 100 | (code) |
 | Site archives | entries of every kind / zip central directory / tar special header / archives parsed at once (others wait 5s, then `503`) | 4,096 / 2 MiB / 64 KiB / 2 | (code) |
 | TTL | `ttl` value length; longer is `400` before parsing | 64 bytes | (code) |
 | Admission | requests in progress per listener / per client; excess `503` | 256 / 32 | `--max-requests`, `--max-requests-per-client` |
