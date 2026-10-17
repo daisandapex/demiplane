@@ -69,7 +69,7 @@ type SourceRecord struct {
 // valid artifact. Only called with a path built from a slug that passed
 // validation, so a caller-supplied path segment never reaches the filesystem.
 func (s *Store) writeSource(path string, body []byte) error {
-	tmp, err := os.CreateTemp(s.sourceDir, ".tmp-*")
+	tmp, err := os.CreateTemp(s.sourceDir, tempPattern(path))
 	if err != nil {
 		return fmt.Errorf("create temp source: %w", err)
 	}
@@ -246,6 +246,9 @@ func (s *Store) swapBody(slug, gen, cur string, size int64) (int64, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
+	if err := endWrite(tx, slug, gen); err != nil {
+		return 0, err
+	}
 	var modified int64
 	if err := tx.QueryRow(
 		`UPDATE artifacts SET size = ?, blob_gen = ?, modified_at = ?
@@ -279,8 +282,12 @@ func (s *Store) replaceBodyLocked(slug string, expect *string, r io.Reader) (Art
 	if err != nil {
 		return Artifact{}, err
 	}
+	if err := s.beginWrite(slug, gen); err != nil {
+		return Artifact{}, err
+	}
 	_, size, err := s.writeBlob(s.blobFile(slug, gen), r)
 	if err != nil {
+		s.abortWrite(slug, gen, noSourceGen)
 		return Artifact{}, err
 	}
 	// The modified time is the wall clock, never ahead of it. A rebake in the
@@ -288,12 +295,12 @@ func (s *Store) replaceBodyLocked(slug string, expect *string, r io.Reader) (Art
 	// (ETag) is what marks the change.
 	modified, err := s.swapBody(slug, gen, cur, size)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		os.Remove(s.blobFile(slug, gen))
+		s.abortWrite(slug, gen, noSourceGen)
 		return Artifact{}, fmt.Errorf("update body: %w", err)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		// Deleted or republished by another process since the lookup.
-		os.Remove(s.blobFile(slug, gen))
+		s.abortWrite(slug, gen, noSourceGen)
 		if _, lerr := s.lookup(slug); errors.Is(lerr, ErrNotFound) {
 			return Artifact{}, ErrNotFound
 		}

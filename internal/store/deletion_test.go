@@ -5,6 +5,7 @@ package store
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -236,4 +237,222 @@ func countPending(t *testing.T, s *Store) int {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// pausedPut starts a Put on w that blocks after writing its files and before
+// committing its row, and returns a function that releases it and returns the
+// Put's result.
+func pausedPut(t *testing.T, w *Store, slug, body string) (release func() (Artifact, error)) {
+	t.Helper()
+	paused := make(chan struct{})
+	resume := make(chan struct{})
+	beforeMetaCommit = func(s string) {
+		if s == slug {
+			close(paused)
+			<-resume
+		}
+	}
+	t.Cleanup(func() { beforeMetaCommit = nil })
+	type result struct {
+		a   Artifact
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		a, err := w.Put(PutOptions{Slug: slug, Source: []byte("# " + slug)}, strings.NewReader(body))
+		done <- result{a, err}
+	}()
+	<-paused
+	return func() (Artifact, error) {
+		close(resume)
+		r := <-done
+		return r.a, r.err
+	}
+}
+
+// TestReconcileSparesPausedWriter: a write paused between its file write and
+// its row commit for longer than the orphan grace, while another Store on the
+// same directory (another process, in production) reconciles, must keep its
+// files and then commit a readable artifact.
+func TestReconcileSparesPausedWriter(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { writer.Close() })
+	reconciler, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reconciler.Close() })
+
+	prev := orphanGrace
+	orphanGrace = 0
+	t.Cleanup(func() { orphanGrace = prev })
+
+	release := pausedPut(t, writer, "slowpoke", "<p>slow</p>")
+	if n := len(genFiles(t, writer.blobDir, "slowpoke")); n != 1 {
+		t.Fatalf("paused writer has %d blob file(s), want 1", n)
+	}
+	if _, err := reconciler.Reconcile(time.Now().Add(2 * time.Hour)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if n := len(genFiles(t, writer.blobDir, "slowpoke")); n != 1 {
+		t.Fatal("Reconcile removed the files of a write in flight")
+	}
+	if _, err := release(); err != nil {
+		t.Fatalf("paused Put failed after a reconcile: %v", err)
+	}
+	if _, b := readBack(t, reconciler, "slowpoke"); string(b) != "<p>slow</p>" {
+		t.Errorf("committed artifact reads %q", b)
+	}
+	if _, err := reconciler.Source("slowpoke"); err != nil {
+		t.Errorf("committed artifact lost its source: %v", err)
+	}
+}
+
+// TestReconcileReclaimsStaleWriteSafely: once a write intent is older than
+// staleWriteAge its files are reclaimed, and if that writer was only stalled
+// (not dead) its commit fails instead of leaving a row that names missing
+// bytes.
+func TestReconcileReclaimsStaleWriteSafely(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { writer.Close() })
+	reconciler, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reconciler.Close() })
+
+	release := pausedPut(t, writer, "stalled", "<p>stalled</p>")
+	n, err := reconciler.Reconcile(time.Now().Add(staleWriteAge + time.Hour))
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("reclaimed %d file(s), want 2 (blob and source)", n)
+	}
+	if _, err := release(); err == nil {
+		t.Fatal("a write whose intent was reclaimed still committed")
+	}
+	if _, _, err := reconciler.Get("stalled"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Get after a reclaimed write: err = %v, want ErrNotFound (never a row without bytes)", err)
+	}
+	if got := genFiles(t, writer.blobDir, "stalled"); len(got) != 0 {
+		t.Errorf("reclaimed write left files: %v", got)
+	}
+}
+
+// gateReader yields head, then blocks until released, then yields tail: a
+// publish stalled mid-stream, with only its temp file on disk.
+type gateReader struct {
+	head, tail io.Reader
+	reached    chan struct{}
+	release    chan struct{}
+	gated      bool
+}
+
+func (g *gateReader) Read(p []byte) (int, error) {
+	if n, err := g.head.Read(p); n > 0 || err != io.EOF {
+		return n, err
+	}
+	if !g.gated {
+		g.gated = true
+		close(g.reached)
+		<-g.release
+	}
+	return g.tail.Read(p)
+}
+
+// TestReconcileSparesStreamingTempFile: a publish stalled while streaming
+// (so only its temp file exists) for longer than the orphan grace must keep
+// that temp file while another Store reconciles, and then commit.
+func TestReconcileSparesStreamingTempFile(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { writer.Close() })
+	reconciler, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reconciler.Close() })
+	prev := orphanGrace
+	orphanGrace = 0
+	t.Cleanup(func() { orphanGrace = prev })
+
+	g := &gateReader{
+		head:    strings.NewReader(strings.Repeat("a", 4096)),
+		tail:    strings.NewReader("end"),
+		reached: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := writer.Put(PutOptions{Slug: "streaming"}, g)
+		done <- err
+	}()
+	<-g.reached
+	temps := func() int {
+		ents, _ := os.ReadDir(writer.blobDir)
+		n := 0
+		for _, e := range ents {
+			if strings.HasPrefix(e.Name(), tempPrefix) {
+				n++
+			}
+		}
+		return n
+	}
+	if temps() != 1 {
+		t.Fatalf("stalled writer has %d temp file(s), want 1", temps())
+	}
+	if _, err := reconciler.Reconcile(time.Now().Add(2 * time.Hour)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if temps() != 1 {
+		t.Fatal("Reconcile removed the temp file of a write in flight")
+	}
+	close(g.release)
+	if err := <-done; err != nil {
+		t.Fatalf("stalled Put failed after a reconcile: %v", err)
+	}
+	if _, b := readBack(t, reconciler, "streaming"); len(b) != 4096+3 {
+		t.Errorf("committed artifact has %d bytes, want %d", len(b), 4096+3)
+	}
+}
+
+// TestReconcileReclaimsFilelessIntent: a writer that died before creating any
+// file leaves only its intent row; a stale one must still be reclaimed.
+func TestReconcileReclaimsFilelessIntent(t *testing.T) {
+	s := newTestStore(t)
+	old := time.Now().Add(-staleWriteAge - time.Hour).Unix()
+	if _, err := s.db.Exec(`INSERT INTO pending_writes (slug, gen, started_at) VALUES ('ghost', '0011223344556677', ?)`, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.beginWrite("fresh", "8899aabbccddeeff"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Reconcile(time.Now()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM pending_writes WHERE slug = 'ghost'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Error("stale intent with no files survived reconcile")
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM pending_writes WHERE slug = 'fresh'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Error("a live intent was reclaimed")
+	}
 }

@@ -211,8 +211,11 @@ inherits the posture above and was reviewed adversarially before release.
   stop referencing in the same transaction that drops the reference. A file
   that cannot be unlinked (a read-only or failing disk) is logged and retried
   on every sweep instead of being orphaned, and an hourly reconcile removes
-  any generation file no row names once it is an hour old, so a deleted or
-  expired page's bytes and retained source are always reclaimed.
+  orphaned generation files, so a deleted or expired page's bytes and retained
+  source are always reclaimed. Every write records an intent before it creates
+  a file and retires it in the commit, so reconcile never removes a write in
+  flight, in this process or in SSH receive; an intent is reclaimed only after
+  24 hours, and a write whose intent was reclaimed fails instead of committing.
 - **Store permissions.** The store root, `blobs/`, `sources/`, `sites/` and the
   metadata database (`meta.db` and its `-wal`/`-shm` files) are owner-only
   (directories `0700`, files `0600`). The database holds capability slugs and

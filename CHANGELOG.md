@@ -18,7 +18,10 @@ All notable changes to demiplane are documented here. The format follows
 - **Deleted and expired files are always reclaimed.** The files a delete,
   expiry or overwrite stops referencing are recorded in the same transaction;
   a failed unlink is retried on every sweep, and an hourly reconcile removes
-  unreferenced generation files.
+  unreferenced generation files. Every write records an intent before it
+  creates a file, so reconcile never removes a write in flight (including
+  one in a concurrent SSH receive) until its intent is 24 hours old; a write
+  reclaimed then fails instead of committing.
 - **The reply webhook follows no redirects.** A `3xx` from the configured
   endpoint is logged as a failed delivery instead of resending the reply to
   the `Location`.
