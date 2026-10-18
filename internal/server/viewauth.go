@@ -104,7 +104,47 @@ type viewGate struct {
 	key []byte
 	mu  sync.Mutex
 	ok  map[[32]byte]time.Time
-	now func() time.Time // time source; a field so tests can move it
+	// inflight counts each client's attempts waiting for or holding a KDF
+	// slot (passwordClientInflight).
+	inflight map[string]int
+	now      func() time.Time // time source; a field so tests can move it
+}
+
+// passwordClientInflight is how many password checks one client may have
+// queued for or running in the KDF at once. A queued attempt that times out
+// is refunded, so without this cap a few clients could keep the queue full
+// at no cost and every other viewer's first check would time out behind
+// them; past it an attempt is answered busy without queueing.
+const passwordClientInflight = 2
+
+// enterKDF counts an attempt by client toward its in-flight cap, reporting
+// false (and counting nothing) when the client is at the cap.
+func (g *viewGate) enterKDF(client string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.inflight[client] >= passwordClientInflight {
+		return false
+	}
+	if g.inflight == nil {
+		g.inflight = map[string]int{}
+	}
+	g.inflight[client]++
+	return true
+}
+
+func (g *viewGate) leaveKDF(client string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.inflight[client]--; g.inflight[client] <= 0 {
+		delete(g.inflight, client)
+	}
+}
+
+// inflightFor reports client's attempts in flight (tests).
+func (g *viewGate) inflightFor(client string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.inflight[client]
 }
 
 func pickRate(r, def limit.Rate) limit.Rate {
@@ -218,12 +258,18 @@ func (g *viewGate) check(ctx context.Context, r *http.Request, hash string) (res
 	if allowed, w := limit.AllowAll(own...); !allowed {
 		return module.ViewThrottled, w
 	}
+	if !g.enterKDF(client) {
+		limit.RefundAll(own...)
+		return module.ViewBusy, time.Second
+	}
 	if !g.kdf.Acquire(ctx, passwordKDFWait) {
+		g.leaveKDF(client)
 		limit.RefundAll(own...)
 		return module.ViewBusy, time.Second
 	}
 	match := verifyPassword(hash, pass)
 	g.kdf.Release()
+	g.leaveKDF(client)
 	if !match {
 		g.target.Allow(hash)
 		g.global.Allow("")

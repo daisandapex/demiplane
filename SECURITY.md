@@ -462,7 +462,10 @@ Notes on the limits:
   goes unused for 10 minutes. A client that keeps failing is refused before
   hashing, but a viewer with no recent failures is always verified, so other
   clients' guesses cannot lock it out. Only completed failures count; a
-  client's own attempt still being checked does not. Guessing spread over many fresh
+  client's own attempt still being checked does not. A client may have at
+  most two checks waiting for or running in the KDF at once; a third is
+  answered `503` at once rather than queueing, so a few clients cannot fill
+  the queue ahead of other viewers. Guessing spread over many fresh
   addresses is bounded by the KDF concurrency and work factor rather than by
   a rate; use a strong password. Behind a proxy, set `--trusted-proxy`, or
   every user shares the proxy's budget. Reply routes, the `?live` wrapper and

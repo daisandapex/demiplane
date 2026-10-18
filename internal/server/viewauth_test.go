@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/daisandapex/demiplane/internal/limit"
+	"github.com/daisandapex/demiplane/internal/module"
 	"github.com/daisandapex/demiplane/internal/store"
 )
 
@@ -598,5 +599,59 @@ func TestPublishPasswordWaitsForTheKDFGate(t *testing.T) {
 	if _, f, err := st.Get("gated"); err == nil {
 		f.Close()
 		t.Fatal("a refused publish was stored")
+	}
+}
+
+// TestPasswordQueueIsCappedPerClient: one client can hold at most
+// passwordClientInflight places in the KDF queue; its next attempt is
+// turned away at once instead of queueing, so a few clients cannot fill the
+// queue ahead of everyone else. Another client still queues.
+func TestPasswordQueueIsCappedPerClient(t *testing.T) {
+	g := newViewGate(PasswordLimits{Concurrency: 1}, []byte("k"))
+	hash, err := store.HashPassword("letmein")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Hold the only KDF slot so every attempt queues.
+	if !g.kdf.TryAcquire() {
+		t.Fatal("setup: could not take the KDF slot")
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < passwordClientInflight; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			g.check(context.Background(), basicReq("locked", fmt.Sprintf("wrong-%d", i), "198.51.100.7:1000"), hash)
+		}(i)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for g.inflightFor("198.51.100.7") < passwordClientInflight {
+		if time.Now().After(deadline) {
+			t.Fatal("setup: attempts never queued")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	start := time.Now()
+	res, _ := g.check(context.Background(), basicReq("locked", "wrong-x", "198.51.100.7:1001"), hash)
+	if res != module.ViewBusy {
+		t.Fatalf("an attempt past the per-client cap = %v, want ViewBusy", res)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("an attempt past the per-client cap queued for %v", time.Since(start))
+	}
+	other := make(chan time.Duration, 1)
+	go func() {
+		s := time.Now()
+		g.check(context.Background(), basicReq("locked", "wrong-y", "203.0.113.9:1000"), hash)
+		other <- time.Since(s)
+	}()
+	time.Sleep(200 * time.Millisecond)
+	g.kdf.Release()
+	if d := <-other; d < 150*time.Millisecond {
+		t.Fatalf("another client's attempt did not queue (returned after %v)", d)
+	}
+	wg.Wait()
+	if n := g.inflightFor("198.51.100.7"); n != 0 {
+		t.Fatalf("%d attempts still counted in flight", n)
 	}
 }
