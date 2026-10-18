@@ -23,6 +23,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/daisandapex/demiplane/internal/logsafe"
 	"github.com/daisandapex/demiplane/internal/store"
 )
 
@@ -130,7 +131,9 @@ func receiveTar(st *store.Store, opts ReceiveOptions, in io.Reader, out io.Write
 			TTL:          opts.TTL,
 		}, &store.BudgetReader{R: tr, Remaining: &budget})
 		if err != nil {
-			return fmt.Errorf("publish %q: %w", hdr.Name, err)
+			// The entry name is the slug of the artifact it would replace,
+			// which may be a capability, so the error carries its tag.
+			return fmt.Errorf("publish %s: %w", logsafe.Slug(slug), err)
 		}
 		if _, err := fmt.Fprintln(out, artifactURL(opts.BaseURL, art.Slug)); err != nil {
 			return err
