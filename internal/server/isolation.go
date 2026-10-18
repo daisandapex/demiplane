@@ -193,12 +193,19 @@ self.addEventListener("activate", function (event) {
 // mark those with "Service-Worker: script", and no demiplane URL is meant to
 // be one) with killSwitchWorker instead of the requested URL. It is the
 // network-side half of the service-worker defence, and it holds even if a page
-// ran unsandboxed on the content origin. A worker registered before this
-// defence existed is removed by it: the browser's update check fetches the
-// registered script URL with that header, gets the kill switch, installs it
-// over the old worker and the kill switch unregisters itself. A refusal would
-// not do that, because a failed update keeps the old worker. A new
-// registration attempt gets the same script and removes itself the same way.
+// ran unsandboxed on the content origin. A new registration attempt gets the
+// kill switch, which removes itself at once.
+//
+// A worker registered before this defence existed is cleaned up eventually,
+// not prevented: the browser's update check fetches the registered script URL
+// with that header, gets the kill switch, installs it over the old worker and
+// the kill switch unregisters itself. A refusal would not do even that,
+// because a failed update keeps the old worker. But the browser runs the check
+// after the old worker has handled the navigation that triggered it, so that
+// first navigation after the upgrade (its URL, and with cached credentials the
+// response) is still exposed to the old worker. Moving the content plane to a
+// new origin, or viewers clearing site data for it, is what prevents that;
+// the upgrade notes give the procedure.
 //
 // Service-Worker-Allowed: / lets the replacement cover whatever scope the old
 // registration had, so the update cannot fail on the scope check. The worker's
