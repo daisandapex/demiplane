@@ -100,3 +100,43 @@ func TestListQueriesUseAnIndex(t *testing.T) {
 		}
 	}
 }
+
+// TestListPageBoundary: 101 replies in one second page as 100 and 1, the
+// first page carrying next and the last none.
+func TestListPageBoundary(t *testing.T) {
+	ts, m := setup(t)
+	at := time.Unix(1_700_000_000, 0)
+	for i := 0; i < 101; i++ {
+		if _, err := m.rs.add("s1", "comment", "r", at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var pages []int
+	seen := map[int64]bool{}
+	after := ""
+	for len(pages) < 5 {
+		u := ts.URL + "/replies?status=all"
+		if after != "" {
+			u += "&after=" + url.QueryEscape(after)
+		}
+		_, body := do(t, http.MethodGet, u, "", "", true)
+		var page struct {
+			Replies []Reply `json:"replies"`
+			Next    string  `json:"next"`
+		}
+		if err := json.Unmarshal(body, &page); err != nil {
+			t.Fatal(err)
+		}
+		pages = append(pages, len(page.Replies))
+		for _, r := range page.Replies {
+			seen[r.ID] = true
+		}
+		if page.Next == "" {
+			break
+		}
+		after = page.Next
+	}
+	if len(pages) != 2 || pages[0] != 100 || pages[1] != 1 || len(seen) != 101 {
+		t.Fatalf("pages %v, %d distinct replies; want [100 1] and 101", pages, len(seen))
+	}
+}
