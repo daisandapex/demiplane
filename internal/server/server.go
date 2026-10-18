@@ -642,7 +642,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	next := q.Get("next")
 	if next != "" {
 		if !replyBox {
-			http.Error(w, "?next requires ?reply — it names the page that follows this one's answer", http.StatusBadRequest)
+			http.Error(w, "?next requires ?reply=question — it names the page that follows this one's answer", http.StatusBadRequest)
 			return
 		}
 		if err := store.ValidateNamedSlug(next); err != nil {
