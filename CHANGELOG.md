@@ -172,10 +172,14 @@ All notable changes to demiplane are documented here. The format follows
   server's sweep removes it. At most 10,000 may be waiting; past that, a
   publish through `receive` that would replace an artifact is refused until
   the server has swept. Deletes are never refused.
-- **An upgraded store refuses writes from older binaries.** A 2.0.0 writer
+- **An upgraded store cannot be opened by older binaries.** A 2.0.0 writer
   left running against an upgraded store could republish a reply-enabled
-  page with replies still on and its old reply tokens still valid; such
-  writes now fail and change nothing (enforced in the database).
+  page with replies still on and its old reply tokens still valid, and
+  write blob files and sites in place. The first open by this release moves
+  `blobs/`, `sources/` and `sites/` under `data/` and leaves a marker file
+  at each old name, so an older `serve` or `receive` stops at open before
+  reading or writing anything; the database also refuses older writers' row
+  changes.
 - **Unnamed publishes can no longer replace each other.** Two concurrent
   publishes without `?slug=` could be given the same generated slug; the
   second then silently replaced the first, deleting its bytes and retained
@@ -187,6 +191,9 @@ All notable changes to demiplane are documented here. The format follows
 - **An interrupted site replace no longer loses the site.** The replace is
   recorded before the old site is moved aside, and startup and the hourly
   reconcile restore the old site (or finish the replace) before any cleanup.
+  Only the serving process recovers replaces and cleans up site trees; a
+  later publish or delete of the site settles an interrupted replace first,
+  so a deleted site never comes back.
 - **The server no longer releases quota it never counted.** Removing an
   artifact, an old version or a pending deletion that `demiplane receive`
   created after the server last measured its usage no longer lowers the
@@ -288,9 +295,9 @@ All notable changes to demiplane are documented here. The format follows
   `token` field (JSON: `"token"`).
 - **Upgrade note: upgrade every writer together; roll back from a backup.**
   `serve` and every `receive` (SSH forced commands, cron, CI) must run this
-  release. Once this release has opened a store, a 2.0.0 binary cannot write
-  to it (its writes fail and change nothing), so back up the store directory
-  first; returning to 2.0.0 means restoring that backup, and publishes made
+  release. Once this release has opened a store, a 2.0.0 binary cannot open
+  it (it stops at start-up with nothing changed), so back up the store
+  directory first; returning to 2.0.0 means restoring that backup, and publishes made
   since are not in it. See the deployment guide, "Upgrading".
 - **Upgrade note: move the content origin if hostile pages may have been
   published.** Under an affected release, a published page could register a

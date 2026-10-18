@@ -39,9 +39,10 @@ want it.
   optional **per-artifact password** (salted PBKDF2-HMAC-SHA256, supplied via the
   `X-Demiplane-Password` header on publish and HTTP Basic on read).
 - **Mixed-version writers.** Writers must be upgraded together: an upgraded
-  store refuses writes from older binaries (enforced in the database),
-  because they would leave a republished page's replies on and its reply
-  tokens valid.
+  store's content lives under `data/`, with marker files at the old names
+  that stop older binaries at open, before they write anything (and the
+  database refuses their row changes too), because they would leave a
+  republished page's replies on and its reply tokens valid.
 - **Generated slugs.** A generated slug, friendly or capability, is reserved
   in the store's database (checked against existing artifacts and writes in
   flight in one transaction) before the upload is written, and a generated
