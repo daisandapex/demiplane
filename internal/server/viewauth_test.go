@@ -217,7 +217,9 @@ func TestKDFConcurrencyIsBoundedAndUnrelatedRequestsServe(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			if serve(h, basicReq("locked", "wrong", "192.0.2.9:1")).Code == http.StatusServiceUnavailable {
+			// Distinct clients: one client's identical checks share a
+			// single KDF run and are capped per client.
+			if serve(h, basicReq("locked", "wrong", fmt.Sprintf("192.0.2.%d:1", 20+i))).Code == http.StatusServiceUnavailable {
 				busy.Add(1)
 			}
 		}()
