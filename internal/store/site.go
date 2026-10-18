@@ -517,8 +517,42 @@ func (s *Store) DeleteSite(site string) error {
 	if beforeSiteRemove != nil {
 		beforeSiteRemove()
 	}
-	if err := s.removeLiveTree(dir); err != nil {
+	// The site's name goes first, durably: the tree moves to a tombstone
+	// name and the sites directory is synced before anything in it is
+	// removed, so a power loss leaves the site whole or gone, never partly
+	// removed. If the sync fails the tree moves back and the delete fails.
+	// Rename, sync and removal are one transition, and the tombstone is
+	// registered throughout, so neither a recount nor the scavenger walks it
+	// halfway; one left behind is the scavenger's.
+	gen, err := newGen()
+	if err != nil {
 		return fmt.Errorf("delete site: %w", err)
+	}
+	root := s.siteRoot()
+	name := tempPrefix + "del-" + gen
+	tomb := filepath.Join(root, name)
+	s.beginTransition()
+	s.registerStaging(name)
+	if err := siteRename(dir, tomb); err != nil {
+		s.unregisterStaging(name)
+		s.endTransition(0, 0)
+		return fmt.Errorf("delete site: %w", err)
+	}
+	if err := sitesSync(root); err != nil {
+		if rerr := siteRename(tomb, dir); rerr != nil {
+			log.Printf("store: could not restore a site after a failed delete: %s", logsafe.Err(rerr))
+		}
+		s.unregisterStaging(name)
+		s.endTransition(0, 0)
+		return fmt.Errorf("delete site: %w", err)
+	}
+	// The site is deleted now. What cannot be removed stays charged, under
+	// the tombstone name, for the scavenger.
+	r, err := s.removeTreeCounted(tomb)
+	s.unregisterStaging(name)
+	s.endChange(r.change())
+	if err != nil {
+		log.Printf("store: could not remove a deleted site's tree, will retry: %s", logsafe.Err(err))
 	}
 	return nil
 }

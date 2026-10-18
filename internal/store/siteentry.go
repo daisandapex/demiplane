@@ -148,6 +148,21 @@ func (s *Store) unregisterStaging(name string) {
 	s.quota.mu.Unlock()
 }
 
+// claimStaging registers name for the caller unless a writer already owns
+// it, and reports whether it did.
+func (s *Store) claimStaging(name string) bool {
+	s.quota.mu.Lock()
+	defer s.quota.mu.Unlock()
+	if _, ok := s.quota.staging[name]; ok {
+		return false
+	}
+	if s.quota.staging == nil {
+		s.quota.staging = make(map[string]struct{})
+	}
+	s.quota.staging[name] = struct{}{}
+	return true
+}
+
 func (s *Store) stagingLive(name string) bool {
 	s.quota.mu.Lock()
 	defer s.quota.mu.Unlock()
@@ -176,18 +191,42 @@ func (s *Store) reclaimStagingTrees(now time.Time) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if afterStagingScan != nil {
+		afterStagingScan()
+	}
 	cutoff := now.Add(-orphanGrace)
 	removed := 0
 	for _, e := range ents {
-		if !strings.HasPrefix(e.Name(), tempPrefix) || s.stagingLive(e.Name()) || swapping[e.Name()] {
+		name := e.Name()
+		if !strings.HasPrefix(name, tempPrefix) || s.stagingLive(name) || swapping[name] {
 			continue
 		}
 		fi, err := e.Info()
 		if err != nil || !fi.ModTime().Before(cutoff) {
 			continue
 		}
+		// The snapshot above may be stale: a writer can since have given a
+		// tree up to recovery (a kept first install or backup), recording
+		// its swap before releasing it. So the tree is claimed first, which
+		// no writer can then take, and the records are read afresh. The
+		// claim is inside the transition, so a recount that skips the
+		// claimed tree is not applied.
 		s.beginTransition()
-		r, err := s.removeTreeCounted(filepath.Join(root, e.Name()))
+		if !s.claimStaging(name) {
+			s.endTransition(0, 0)
+			continue
+		}
+		named, err := s.swapNamed(name)
+		if err != nil || named {
+			s.unregisterStaging(name)
+			s.endTransition(0, 0)
+			if err != nil {
+				return removed, err
+			}
+			continue
+		}
+		r, err := s.removeTreeCounted(filepath.Join(root, name))
+		s.unregisterStaging(name)
 		s.endChange(r.change())
 		removed += int(r.entries)
 		if err != nil {

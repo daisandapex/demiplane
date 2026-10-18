@@ -139,6 +139,19 @@ func syncDir(dir string) error {
 	return err
 }
 
+// afterStagingScan runs after the scavenger has listed the staging trees
+// and read the swap records; a test hook.
+var afterStagingScan func()
+
+// swapNamed reports whether an outstanding swap names the tree name.
+func (s *Store) swapNamed(name string) (bool, error) {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM site_swaps WHERE backup = ? OR staging = ?`, name, name).Scan(&n); err != nil {
+		return false, fmt.Errorf("read site swaps: %w", err)
+	}
+	return n > 0, nil
+}
+
 // swapNames returns the backup and staging names of the outstanding swaps,
 // which the scavenger must leave alone.
 func (s *Store) swapNames() (map[string]bool, error) {
@@ -259,7 +272,14 @@ func (s *Store) settleSwapLocked(site string) error {
 	if from == "" {
 		if have, err = present(sw.staging); err != nil {
 			return err
-		} else if have && !s.stagingLive(sw.staging) {
+		} else if have {
+			// A recorded staging tree is never a writer's (Commit holds
+			// the site lock across its swap), so one registered now is
+			// being claimed by the scavenger, which will spare it; settle
+			// later rather than drop the record.
+			if s.stagingLive(sw.staging) {
+				return fmt.Errorf("site swap: its staged tree is being inspected; will retry")
+			}
 			from = sw.staging
 		}
 	}

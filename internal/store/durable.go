@@ -61,3 +61,16 @@ func syncTree(root string) error {
 	}
 	return nil
 }
+
+// SkipSyncForTest turns the content syncs above off, for test packages
+// outside this one that publish thousands of artifacts through the full
+// path: on a test machine's disk the syncs came to dominate their run time.
+// Durability is this package's to test, with the syncs on. Returns a restore
+// func. Not safe for concurrent use, and it must never be called outside a
+// test.
+func SkipSyncForTest() func() {
+	pf, pc := fileSync, contentSync
+	fileSync = func(*os.File) error { return nil }
+	contentSync = func(string) error { return nil }
+	return func() { fileSync, contentSync = pf, pc }
+}

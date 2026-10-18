@@ -18,8 +18,14 @@ import (
 //
 // The shipped default is unchanged and guarded by
 // store.TestProductionIterationCount.
+//
+// It also skips the store's content syncs, for the same reason: a few
+// thousand publishes each syncing a file and a directory nearly doubled this
+// package's run time. The store's own tests cover durability.
 func TestMain(m *testing.M) {
 	restore := store.SetPBKDF2IterForTest(1)
 	defer restore()
+	restoreSync := store.SkipSyncForTest()
+	defer restoreSync()
 	m.Run()
 }

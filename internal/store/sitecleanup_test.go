@@ -83,7 +83,8 @@ func TestSiteAbortKeepsSurvivorsCharged(t *testing.T) {
 }
 
 // TestDeleteSiteUnreadableSubdirKeepsCharge: a delete that cannot read part
-// of the tree releases only what it removed.
+// of the tree releases only what it removed. The site is gone (its name went
+// durably first); the scavenger removes the rest later.
 func TestDeleteSiteUnreadableSubdirKeepsCharge(t *testing.T) {
 	skipIfRoot(t)
 	s := newQuotaStore(t, 1<<20)
@@ -104,8 +105,11 @@ func TestDeleteSiteUnreadableSubdirKeepsCharge(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(locked, 0o700) })
-	if err := s.DeleteSite("site"); err == nil {
-		t.Fatal("DeleteSite of an unreadable tree reported success")
+	if err := s.DeleteSite("site"); err != nil {
+		t.Fatalf("DeleteSite of a partly unreadable tree: %v", err)
+	}
+	if s.SiteExists("site") {
+		t.Fatal("site still served after its delete")
 	}
 	// Survivors: the site dir, d and a.txt; x.txt went.
 	want := int64(3*metaAllowance + 100)
@@ -115,11 +119,11 @@ func TestDeleteSiteUnreadableSubdirKeepsCharge(t *testing.T) {
 	if err := os.Chmod(locked, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteSite("site"); err != nil {
-		t.Fatalf("retried delete: %v", err)
+	if _, err := s.Reconcile(time.Now().Add(2 * orphanGrace)); err != nil {
+		t.Fatal(err)
 	}
 	if used, _ := s.Usage(); used != 0 {
-		t.Fatalf("usage after the retried delete = %d, want 0", used)
+		t.Fatalf("usage after the scavenger removed the rest = %d, want 0", used)
 	}
 	assertAccounted(t, s)
 }

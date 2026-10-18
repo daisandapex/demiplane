@@ -359,3 +359,129 @@ func TestFailedFirstInstallKeepsItsRecordedTree(t *testing.T) {
 	}
 	assertAccounted(t, s)
 }
+
+// TestScavengerSparesATreeKeptMidPass: a staged tree a writer gives up to
+// recovery (its first install failed and its record could not be cleared)
+// while a scavenging pass is under way is not removed by that pass.
+func TestScavengerSparesATreeKeptMidPass(t *testing.T) {
+	s := newQuotaStore(t, 1<<20)
+	sw, err := s.NewSiteWriter("fresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sw.AddFile("index.html", strings.NewReader("v1")); err != nil {
+		t.Fatal(err)
+	}
+	scanned, resume := make(chan struct{}), make(chan struct{})
+	afterStagingScan = func() {
+		close(scanned)
+		<-resume
+	}
+	t.Cleanup(func() { afterStagingScan = nil })
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.reclaimStagingTrees(time.Now().Add(2 * orphanGrace))
+		done <- err
+	}()
+	select {
+	case <-scanned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the scavenging pass never reached its scan hook")
+	}
+	restore := failInstall(t, s.root, "fresh")
+	clearSwapErr = func() error { return errors.New("injected clear failure") }
+	if _, err := sw.Commit(); err == nil {
+		t.Fatal("commit with a failing install reported success")
+	}
+	clearSwapErr = nil
+	restore()
+	close(resume)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	afterStagingScan = nil
+	if b, err := os.ReadFile(filepath.Join(sw.tmpDir, "index.html")); err != nil || string(b) != "v1" {
+		t.Fatalf("kept tree after the pass: %q, %v", b, err)
+	}
+	if _, err := s.Reconcile(time.Now().Add(2 * orphanGrace)); err != nil {
+		t.Fatal(err)
+	}
+	if got := readSite(t, s, "fresh", "index.html"); got != "v1" {
+		t.Fatalf("site after recovery = %q", got)
+	}
+	assertAccounted(t, s)
+}
+
+// TestSiteDeleteIsDurableBeforeRemoval: a delete takes the site's name
+// away durably before it removes anything, and if that cannot be synced the
+// site stays whole and the delete fails.
+func TestSiteDeleteIsDurableBeforeRemoval(t *testing.T) {
+	s := newQuotaStore(t, 1<<20)
+	for _, name := range []string{"a", "b"} {
+		if err := publishSiteBody(s, name, "index.html", "v1 "+name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var checked bool
+	sitesSync = func(dir string) error {
+		if _, err := os.Stat(filepath.Join(dir, "a")); err == nil {
+			t.Error("sites directory synced for the delete with the site still named")
+		}
+		ents, _ := os.ReadDir(dir)
+		for _, e := range ents {
+			if strings.HasPrefix(e.Name(), tempPrefix) {
+				if b, err := os.ReadFile(filepath.Join(dir, e.Name(), "index.html")); err == nil && string(b) == "v1 a" {
+					checked = true
+				}
+			}
+		}
+		return syncDir(dir)
+	}
+	t.Cleanup(func() { sitesSync = syncDir })
+	if err := s.DeleteSite("a"); err != nil {
+		t.Fatal(err)
+	}
+	if !checked {
+		t.Error("the delete did not sync the sites directory while the tree was still whole")
+	}
+	sitesSync = func(string) error { return errors.New("injected sync failure") }
+	if err := s.DeleteSite("b"); err == nil {
+		t.Fatal("delete succeeded although it could not be synced")
+	}
+	sitesSync = syncDir
+	if got := readSite(t, s, "b", "index.html"); got != "v1 b" {
+		t.Fatalf("site after a failed delete = %q, want it whole", got)
+	}
+	if s.SiteExists("a") {
+		t.Fatal("deleted site still exists")
+	}
+	assertAccounted(t, s)
+}
+
+// TestSyncSkippedOnlyByTests: nothing but test files turns the content
+// syncs off.
+func TestSyncSkippedOnlyByTests(t *testing.T) {
+	root := filepath.Join("..", "..")
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules") {
+			return filepath.SkipDir
+		}
+		if d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") || filepath.Base(p) == "durable.go" {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(b), "SkipSyncForTest(") {
+			t.Errorf("%s calls SkipSyncForTest", p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
