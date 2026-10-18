@@ -84,6 +84,11 @@ func (s *Store) writeSource(path string, body []byte) error {
 		s.discardTemp(tmpName, cw.charged)
 		return fmt.Errorf("write source: %w", err)
 	}
+	if err := fileSync(tmp); err != nil {
+		tmp.Close()
+		s.discardTemp(tmpName, cw.charged)
+		return fmt.Errorf("sync source: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		s.discardTemp(tmpName, cw.charged)
 		return fmt.Errorf("close source: %w", err)
@@ -342,6 +347,10 @@ func (s *Store) replaceBodyLocked(slug string, expect *string, r io.Reader) (Art
 	}
 	_, size, err := s.writeBlob(s.blobFile(slug, gen), r)
 	if err != nil {
+		s.abortWrite(slug, gen, noSourceGen)
+		return Artifact{}, err
+	}
+	if err := s.syncGeneration(false); err != nil {
 		s.abortWrite(slug, gen, noSourceGen)
 		return Artifact{}, err
 	}

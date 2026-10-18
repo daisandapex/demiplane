@@ -194,6 +194,12 @@ All notable changes to demiplane are documented here. The format follows
   Only the serving process recovers replaces and cleans up site trees; a
   later publish or delete of the site settles an interrupted replace first,
   so a deleted site never comes back.
+- **A publish or site replace is on disk before it takes effect.** An
+  artifact's bytes and retained source, and every file and directory of a
+  staged site, are synced before the row or the swap that names them
+  commits, and a replaced site is removed only once the swap itself is
+  durable, so a power loss cannot leave a page or site pointing at bytes
+  that never reached the disk with its predecessor already gone.
 - **The server no longer releases quota it never counted.** Removing an
   artifact, an old version or a pending deletion that `demiplane receive`
   created after the server last measured its usage no longer lowers the

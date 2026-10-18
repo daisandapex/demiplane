@@ -669,6 +669,13 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 	// commits only as a new row; if a named publish took its slug after it
 	// was reserved, the write moves to a fresh slug and commits there.
 	for attempt := 0; ; attempt++ {
+		// The files' names are durable before the row that points at them
+		// (durable.go); a move to a fresh slug renamed them, so each attempt
+		// syncs.
+		if err := s.syncGeneration(sourceGen != noSourceGen); err != nil {
+			s.abortWrite(slug, gen, sourceGen)
+			return Artifact{}, err
+		}
 		unlock := s.locks.lock(slug)
 		prior, err := s.swapMeta(&art, sourceGen, !named)
 		if errors.Is(err, errSlugTaken) && attempt < genAttempts {
@@ -926,6 +933,10 @@ func (s *Store) writeBlob(final string, r io.Reader) (sniffed string, size int64
 	}
 	size = int64(n) + copied
 
+	if serr := fileSync(tmp); serr != nil {
+		err = fmt.Errorf("sync blob: %w", serr)
+		return "", 0, err
+	}
 	if cerr := tmp.Close(); cerr != nil {
 		err = fmt.Errorf("close blob: %w", cerr)
 		return "", 0, err

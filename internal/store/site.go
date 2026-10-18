@@ -243,6 +243,10 @@ func (w *SiteWriter) AddFile(relpath string, r io.Reader) error {
 		tmp.Close()
 		return fail(fmt.Errorf("write site file %q: %w", clean, err))
 	}
+	if err := fileSync(tmp); err != nil {
+		tmp.Close()
+		return fail(fmt.Errorf("sync site file %q: %w", clean, err))
+	}
 	if err := tmp.Close(); err != nil {
 		return fail(fmt.Errorf("close site file %q: %w", clean, err))
 	}
@@ -300,6 +304,12 @@ func (w *SiteWriter) Commit() (int, error) {
 	if w.count == 0 {
 		w.Abort()
 		return 0, inputErrorf("site archive contained no publishable files")
+	}
+	// The staged tree is durable, files and directories, before it replaces
+	// anything (durable.go).
+	if err := syncTree(w.tmpDir); err != nil {
+		w.Abort()
+		return 0, fmt.Errorf("sync staged site: %w", err)
 	}
 	s := w.store
 	unlock := s.locks.lock(siteLockKey(w.site))
@@ -374,11 +384,13 @@ func (w *SiteWriter) Commit() (int, error) {
 	}
 	w.done = true
 	s.unregisterStaging(filepath.Base(w.tmpDir))
+	durable := true
 	if backup != "" {
 		// The record goes only once both renames are durable; until then
-		// recovery finds the site in place and drops it.
+		// recovery finds the site in place, syncs, and drops it.
 		if err := sitesSync(root); err != nil {
 			log.Printf("store: could not sync the sites directory: %s", logsafe.Err(err))
+			durable = false
 		} else if err := s.clearSwap(swap); err != nil {
 			log.Printf("store: %s", logsafe.Err(err))
 		}
@@ -387,7 +399,7 @@ func (w *SiteWriter) Commit() (int, error) {
 	// transition, so no recount sees it registered (skipped) while its charge
 	// is live, or its survivors before they are unregistered.
 	c := change{settled: w.charged, settledEntries: w.entries}
-	if backup != "" {
+	if backup != "" && durable {
 		if beforeBackupRemove != nil {
 			beforeBackupRemove()
 		}
@@ -397,6 +409,11 @@ func (w *SiteWriter) Commit() (int, error) {
 		}
 		rc := r.change()
 		c.removed, c.removedEntries = rc.removed, rc.removedEntries
+	}
+	if backup != "" {
+		// A backup kept because the swap is not durable yet stays charged,
+		// named by the swap record, until recovery syncs and clears it; the
+		// scavenger removes it after that.
 		s.unregisterStaging(filepath.Base(backup))
 	}
 	s.endChange(c)
