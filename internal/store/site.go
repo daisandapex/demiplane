@@ -311,6 +311,11 @@ func (w *SiteWriter) Commit() (int, error) {
 		w.Abort()
 		return 0, fmt.Errorf("sync staged site: %w", err)
 	}
+	// So is its name in the sites directory, before a swap record names it.
+	if err := sitesSync(filepath.Dir(w.tmpDir)); err != nil {
+		w.Abort()
+		return 0, fmt.Errorf("sync staged site: %w", err)
+	}
 	s := w.store
 	unlock := s.locks.lock(siteLockKey(w.site))
 	defer unlock()
@@ -385,8 +390,15 @@ func (w *SiteWriter) Commit() (int, error) {
 			}
 			s.unregisterStaging(filepath.Base(backup))
 		} else if cerr := s.clearSwap(swap); cerr != nil {
-			// A first publish moved nothing; recovery drops the record.
+			// A first publish moved nothing, but its record still names the
+			// staged tree, which is complete: it is kept, charged and
+			// unowned, for recovery to install, never dismantled under the
+			// record (a partial removal would be installed as the site).
 			log.Printf("store: %s", logsafe.Err(cerr))
+			w.done = true
+			s.unregisterStaging(filepath.Base(w.tmpDir))
+			s.endChange(change{settled: w.charged, settledEntries: w.entries})
+			return 0, fmt.Errorf("commit site: %w", err)
 		}
 		s.endTransition(0, 0)
 		w.Abort()

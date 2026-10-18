@@ -101,6 +101,11 @@ func (s *Store) recordSwap(sw siteSwap) error {
 
 // clearSwap deletes exactly the swap record sw, never a newer one.
 func (s *Store) clearSwap(sw siteSwap) error {
+	if clearSwapErr != nil {
+		if err := clearSwapErr(); err != nil {
+			return fmt.Errorf("clear site swap: %w", err)
+		}
+	}
 	if _, err := s.db.Exec(`DELETE FROM site_swaps WHERE site = ? AND id = ?`, sw.site, sw.id); err != nil {
 		return fmt.Errorf("clear site swap: %w", err)
 	}
@@ -167,6 +172,9 @@ var beforeSwapLock func()
 // A swap record is cleared only once its outcome is durable, so a power
 // loss cannot undo a restore whose record is gone.
 var sitesSync = syncDir
+
+// clearSwapErr, when set, makes clearSwap fail with its error; a test hook.
+var clearSwapErr func() error
 
 // recoverSiteSwaps settles every outstanding site swap (see above). A swap
 // it cannot settle yet is logged and kept for the next try. A shared store

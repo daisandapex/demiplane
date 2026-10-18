@@ -156,7 +156,7 @@ func TestReplaceKeepsTheBackupUntilDurable(t *testing.T) {
 	if err := publishSiteBody(s, "site", "index.html", "v1"); err != nil {
 		t.Fatal(err)
 	}
-	restore := failSitesSync(t)
+	restore := failSitesSyncAfterRecord(t)
 	if err := publishSiteBody(s, "site", "index.html", "v2"); err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestReplaceKeepsTheBackupUntilDurable(t *testing.T) {
 // only that site's trees.
 func TestFirstSitePublishIsRecoverableUntilDurable(t *testing.T) {
 	s := newQuotaStore(t, 1<<20)
-	restore := failSitesSync(t)
+	restore := failSitesSyncAfterRecord(t)
 	if err := publishSiteBody(s, "fresh", "index.html", "v1"); err != nil {
 		t.Fatal(err)
 	}
@@ -275,6 +275,87 @@ func TestFirstSitePublishIsRecoverableUntilDurable(t *testing.T) {
 	}
 	if err := s.RecountUsage(); err != nil {
 		t.Fatal(err)
+	}
+	assertAccounted(t, s)
+}
+
+// TestStagedTreeNameIsDurableBeforeItsRecord: the staged tree's entry in
+// the sites directory is synced before a swap record names it, and a
+// failure there stops the publish before anything is recorded or moved.
+func TestStagedTreeNameIsDurableBeforeItsRecord(t *testing.T) {
+	s := newQuotaStore(t, 1<<20)
+	var synced int
+	sitesSync = func(dir string) error { synced++; return syncDir(dir) }
+	afterSwapRecord = func() {
+		if synced == 0 {
+			t.Error("swap recorded before the sites directory was synced")
+		}
+	}
+	t.Cleanup(func() { sitesSync, afterSwapRecord = syncDir, nil })
+	if err := publishSiteBody(s, "site", "index.html", "v1"); err != nil {
+		t.Fatal(err)
+	}
+	failSitesSync(t)
+	if err := publishSiteBody(s, "site", "index.html", "v2"); err == nil {
+		t.Fatal("publish succeeded although the staged tree's name could not be synced")
+	}
+	if n := swapRows(t, s); n != 0 {
+		t.Fatalf("%d swap records after a refused publish", n)
+	}
+	sitesSync = syncDir
+	if got := readSite(t, s, "site", "index.html"); got != "v1" {
+		t.Fatalf("site = %q, want v1", got)
+	}
+	assertAccounted(t, s)
+}
+
+// TestFailedFirstInstallKeepsItsRecordedTree: a first install whose rename
+// fails, and whose record cannot then be cleared, keeps the complete staged
+// tree for recovery instead of dismantling it under the record.
+func TestFailedFirstInstallKeepsItsRecordedTree(t *testing.T) {
+	s := newQuotaStore(t, 1<<20)
+	dir := s.root
+	restore := failInstall(t, dir, "fresh")
+	clearSwapErr = func() error { return errors.New("injected clear failure") }
+	t.Cleanup(func() { clearSwapErr = nil })
+	sw, err := s.NewSiteWriter("fresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"index.html", "a/b.txt"} {
+		if err := sw.AddFile(p, strings.NewReader("v1 "+p)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := sw.Commit(); err == nil {
+		t.Fatal("commit with a failing install reported success")
+	}
+	restore()
+	clearSwapErr = nil
+	if n := swapRows(t, s); n != 1 {
+		t.Fatalf("%d swap records, want 1", n)
+	}
+	for _, p := range []string{"index.html", "a/b.txt"} {
+		b, err := os.ReadFile(filepath.Join(sw.tmpDir, p))
+		if err != nil || string(b) != "v1 "+p {
+			t.Fatalf("kept staged %s = %q, %v", p, b, err)
+		}
+	}
+	before, _ := s.Usage()
+	if err := s.RecountUsage(); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := s.Usage(); after != before {
+		t.Fatalf("usage %d, recount %d: the kept tree is not charged as it is", before, after)
+	}
+	if _, err := s.Reconcile(time.Now().Add(2 * orphanGrace)); err != nil {
+		t.Fatal(err)
+	}
+	if got := readSite(t, s, "fresh", "a/b.txt"); got != "v1 a/b.txt" {
+		t.Fatalf("site after recovery = %q", got)
+	}
+	if n := swapRows(t, s); n != 0 {
+		t.Fatalf("%d swap records after recovery", n)
 	}
 	assertAccounted(t, s)
 }

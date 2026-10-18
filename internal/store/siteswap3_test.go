@@ -20,6 +20,18 @@ func failSitesSync(t *testing.T) func() {
 	return restore
 }
 
+// failSitesSyncAfterRecord fails the sites directory syncs from the next
+// swap record on: the staged tree's own sync, before it, still succeeds.
+func failSitesSyncAfterRecord(t *testing.T) func() {
+	t.Helper()
+	afterSwapRecord = func() {
+		sitesSync = func(string) error { return errors.New("injected sync failure") }
+	}
+	restore := func() { sitesSync, afterSwapRecord = syncDir, nil }
+	t.Cleanup(restore)
+	return restore
+}
+
 // TestRecoveryClearsOnlyADurableRestore: a restore whose rename landed but
 // could not be synced keeps its record on every retry until a sync succeeds.
 func TestRecoveryClearsOnlyADurableRestore(t *testing.T) {
@@ -79,7 +91,7 @@ func TestRollbackClearsOnlyWhenDurable(t *testing.T) {
 		return os.Rename(from, to)
 	}
 	t.Cleanup(func() { siteRename = os.Rename })
-	failSitesSync(t)
+	failSitesSyncAfterRecord(t)
 	if err := publishSiteBody(s, "site", "index.html", "v2"); err == nil {
 		t.Fatal("replace with a failing install reported success")
 	}
