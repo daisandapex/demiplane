@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // oneFriendlySlug makes every friendly draw the same base slug for the test.
@@ -197,5 +198,141 @@ func TestConcurrentPrivatePublishesStayDistinct(t *testing.T) {
 		if got := readBody(t, a, art.Slug); got != strings.Repeat("x", i+1) {
 			t.Errorf("%s holds %d bytes, want %d", art.Slug, len(got), i+1)
 		}
+	}
+}
+
+// relocateGenerated publishes, under a quota, a generated artifact (with a
+// retained source) whose reserved slug a named publish takes before it
+// commits, so it is moved to a new slug. during, when set, runs after the
+// named publish and before the generated one is released. It returns the
+// relocated and the named artifacts.
+func relocateGenerated(t *testing.T, s *Store, during func(release func())) (Artifact, Artifact) {
+	t.Helper()
+	held, release := make(chan string), make(chan struct{})
+	var first atomic.Bool
+	beforeMetaCommit = func(slug string) {
+		if first.CompareAndSwap(false, true) {
+			held <- slug
+			<-release
+		}
+	}
+	t.Cleanup(func() { beforeMetaCommit = nil })
+	type result struct {
+		art Artifact
+		err error
+	}
+	gen := make(chan result, 1)
+	go func() {
+		a, err := s.Put(PutOptions{Source: []byte("# generated source"), RenderSpec: "{}"}, strings.NewReader("generated body"))
+		gen <- result{a, err}
+	}()
+	reserved := <-held
+	named, err := s.Put(PutOptions{Slug: reserved}, strings.NewReader("named body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	rel := func() { once.Do(func() { close(release) }) }
+	if during != nil {
+		during(rel)
+	}
+	rel()
+	r := <-gen
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if r.art.Slug == named.Slug {
+		t.Fatalf("not relocated: both at %s", named.Slug)
+	}
+	return r.art, named
+}
+
+// TestRelocatedGeneratedPublishIsAccounted: the files of a generated publish
+// moved to a new slug stay counted under their new names, so deleting the
+// artifact releases them and usage matches what is left.
+func TestRelocatedGeneratedPublishIsAccounted(t *testing.T) {
+	oneFriendlySlug(t)
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if err := s.SetQuota(1 << 20); err != nil {
+		t.Fatal(err)
+	}
+	moved, named := relocateGenerated(t, s, nil)
+	assertAccounted(t, s)
+	if err := s.Delete(moved.Slug); err != nil {
+		t.Fatal(err)
+	}
+	assertAccounted(t, s)
+	if err := s.Delete(named.Slug); err != nil {
+		t.Fatal(err)
+	}
+	assertAccounted(t, s)
+}
+
+// TestRecountOverlappingARelocationIsNotApplied: a recount that walked the
+// generation's files under their old names and would apply after one has
+// moved is not applied (a rename is a quota transition); the recount that
+// follows counts them where they are, and deleting the artifact releases
+// them.
+func TestRecountOverlappingARelocationIsNotApplied(t *testing.T) {
+	oneFriendlySlug(t)
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if err := s.SetQuota(1 << 20); err != nil {
+		t.Fatal(err)
+	}
+	walked, resume := make(chan struct{}), make(chan struct{})
+	var firstWalk atomic.Bool
+	afterUsageWalk = func() {
+		if firstWalk.CompareAndSwap(false, true) {
+			close(walked)
+			<-resume
+		}
+	}
+	t.Cleanup(func() { afterUsageWalk = nil })
+	recounted := make(chan error, 1)
+	beforeGenRename = func(file int) {
+		switch file {
+		case 0: // before the blob moves: a recount walks the old names
+			go func() { recounted <- s.RecountUsage() }()
+			<-walked
+		case 1: // the blob has moved: let that recount try to apply
+			close(resume)
+			if err := <-recounted; err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	t.Cleanup(func() { beforeGenRename = nil })
+	moved, _ := relocateGenerated(t, s, nil)
+	assertAccounted(t, s)
+	if err := s.Delete(moved.Slug); err != nil {
+		t.Fatal(err)
+	}
+	assertAccounted(t, s)
+}
+
+func pendingWrites(t *testing.T, s *Store) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM pending_writes`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); !cond(); {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not reached in 10s")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

@@ -747,6 +747,25 @@ func (s *Store) reserveSlug(slug, gen string) (bool, error) {
 	return true, nil
 }
 
+// renameCounted renames a counted blob or source file and moves its quota
+// ledger entry (ledger.go) with it, so removing the file under its new name
+// releases what was charged for it. The rename is a quota transition: a
+// recount whose walk overlaps it is not applied, since it may have seen the
+// file under its old name, or missed it between listing and measuring it.
+func (s *Store) renameCounted(from, to string) error {
+	s.beginTransition()
+	err := os.Rename(from, to)
+	if err == nil {
+		s.moveCounted(from, to)
+	}
+	s.endTransition(0, 0)
+	return err
+}
+
+// beforeGenRename, when set by a test, runs in moveGeneratedWrite before it
+// renames the blob (0) and the source (1).
+var beforeGenRename func(file int)
+
 // moveGeneratedWrite moves a generated publish's uncommitted generation from
 // slug to a freshly reserved one: the new slug's intent is recorded first,
 // then the files are renamed, then the old intent is dropped, so at every
@@ -761,13 +780,19 @@ func (s *Store) moveGeneratedWrite(slug, gen, sourceGen string, private bool) (s
 	unreserve := func() {
 		_, _ = s.db.Exec(`DELETE FROM pending_writes WHERE slug = ? AND gen = ?`, moved, gen)
 	}
-	if err := os.Rename(s.blobFile(slug, gen), s.blobFile(moved, gen)); err != nil {
+	if beforeGenRename != nil {
+		beforeGenRename(0)
+	}
+	if err := s.renameCounted(s.blobFile(slug, gen), s.blobFile(moved, gen)); err != nil {
 		unreserve()
 		return "", fmt.Errorf("move generated write: %w", err)
 	}
 	if sourceGen != noSourceGen {
-		if err := os.Rename(s.sourceFile(slug, sourceGen), s.sourceFile(moved, sourceGen)); err != nil {
-			_ = os.Rename(s.blobFile(moved, gen), s.blobFile(slug, gen))
+		if beforeGenRename != nil {
+			beforeGenRename(1)
+		}
+		if err := s.renameCounted(s.sourceFile(slug, sourceGen), s.sourceFile(moved, sourceGen)); err != nil {
+			_ = s.renameCounted(s.blobFile(moved, gen), s.blobFile(slug, gen))
 			unreserve()
 			return "", fmt.Errorf("move generated write: %w", err)
 		}

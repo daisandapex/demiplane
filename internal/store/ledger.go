@@ -58,6 +58,18 @@ func (s *Store) countFile(path string, size int64) {
 	}
 }
 
+// moveCounted moves the ledger entry of a counted file renamed from one path
+// to another.
+func (s *Store) moveCounted(from, to string) {
+	q := &s.quota
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if n, ok := q.counted.files[from]; ok {
+		delete(q.counted.files, from)
+		q.counted.files[to] = n
+	}
+}
+
 // uncountFile returns how much of a removed file of the given size this
 // process counted, and drops it from the ledger: the ledger's size for a
 // blob or source file (0 if it was never counted), the size for anything
