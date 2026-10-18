@@ -8,6 +8,11 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **Replies go with their artifact and can be deleted.** Deleting an
+  artifact (or its expiry) deletes its replies, so a later artifact published
+  under the same slug neither lists them nor starts part-way to its reply
+  limit; `DELETE /replies/{id}` and `DELETE /replies?slug=` (bearer) free
+  reply capacity, which nothing else did with retention off.
 - **Reply hooks no longer see the bearer token.** An exec hook inherited
   the server's whole environment, `DEMIPLANE_TOKEN` included; the server
   now drops the token from its environment once read, and hooks get none of

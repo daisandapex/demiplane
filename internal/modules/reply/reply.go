@@ -85,6 +85,8 @@ func (m *Module) Routes(mux *http.ServeMux, host module.Host) {
 	mux.HandleFunc("POST /reply/{slug}", m.handleSubmit)
 	mux.HandleFunc("GET /replies", host.RequireAuth(m.handleList))
 	mux.HandleFunc("POST /replies/{id}/ack", host.RequireAuth(m.handleAck))
+	mux.HandleFunc("DELETE /replies/{id}", host.RequireAuth(m.handleDelete))
+	mux.HandleFunc("DELETE /replies", host.RequireAuth(m.handleDeleteSlug))
 }
 
 // ContentReserved returns "answer": the module's content-origin submit route is
@@ -128,6 +130,23 @@ func (m *Module) ensureStore(host module.Host) {
 	if err != nil {
 		log.Printf("reply module: storage unavailable, serving 503: %s", logsafe.Err(err))
 		return
+	}
+	// An artifact's replies go with it: when its row is deleted (and, for any
+	// deleted while this could not run, at the sweeper's next pass), so a
+	// later artifact published under the same slug starts with none.
+	rs := m.rs
+	st := host.Store()
+	st.OnRemove(func(slug string) {
+		if _, err := rs.deleteSlug(slug); err != nil {
+			log.Printf("reply: could not remove a deleted artifact's replies, the sweeper will retry: %s", logsafe.Err(err))
+		}
+	})
+	rs.artifactGone = func(slug string) (bool, error) {
+		_, err := st.LookupPublic(slug)
+		if errors.Is(err, store.ErrNotFound) {
+			return true, nil
+		}
+		return false, err
 	}
 	// Retention (reply_retention, off by default) runs here, never on the
 	// submit path.
@@ -459,6 +478,48 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDelete deletes one reply (auth). 204 on success, 404 for an unknown
+// id. Deleting is how an operator frees reply capacity.
+func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if !m.ready(w) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "reply id must be an integer", http.StatusBadRequest)
+		return
+	}
+	if err := m.rs.deleteID(id); err != nil {
+		if errors.Is(err, errNoReply) {
+			http.NotFound(w, r)
+			return
+		}
+		log.Printf("reply: delete failed: %s", logsafe.Err(err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDeleteSlug deletes every reply to ?slug= (auth) and answers how many.
+func (m *Module) handleDeleteSlug(w http.ResponseWriter, r *http.Request) {
+	if !m.ready(w) {
+		return
+	}
+	slug := r.URL.Query().Get("slug")
+	if slug == "" {
+		http.Error(w, "slug is required", http.StatusBadRequest)
+		return
+	}
+	n, err := m.rs.deleteSlug(slug)
+	if err != nil {
+		log.Printf("reply: delete failed for %s: %s", logsafe.Slug(slug), logsafe.Err(err, slug))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": n})
 }
 
 // parseSubmission extracts (kind, body) from a JSON body or a form post. The

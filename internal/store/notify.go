@@ -28,3 +28,25 @@ func (s *Store) notify(slug string) {
 		s.notifier.Notify(slug)
 	}
 }
+
+// OnRemove registers f to run whenever an artifact's row is deleted (Delete,
+// or the expiry sweep reaping it), with the slug, while the slug's lock is
+// held, so no republish of the slug runs before f returns. Modules keep
+// per-artifact data (replies) that must go with the artifact rather than
+// pass to a later, unrelated artifact published under the same slug. Called
+// at startup; f must not call back into the store for the same slug.
+func (s *Store) OnRemove(f func(slug string)) {
+	s.removeMu.Lock()
+	defer s.removeMu.Unlock()
+	s.removeHooks = append(s.removeHooks, f)
+}
+
+// removed runs the OnRemove hooks for slug.
+func (s *Store) removed(slug string) {
+	s.removeMu.Lock()
+	hooks := append([]func(string){}, s.removeHooks...)
+	s.removeMu.Unlock()
+	for _, f := range hooks {
+		f(slug)
+	}
+}

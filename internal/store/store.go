@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -100,6 +101,9 @@ type Store struct {
 	// successful Put so the SSE live-reload feature can push a reload event. See
 	// notify.go. nil = no notifications (default).
 	notifier Notifier
+	// removeHooks run when an artifact's row is deleted (OnRemove).
+	removeMu    sync.Mutex
+	removeHooks []func(slug string)
 	// locks serializes writers to the same slug (generation.go).
 	locks slugLocks
 	// rowsExamined counts the index entries the listing reads have examined
@@ -1216,6 +1220,7 @@ func (s *Store) Delete(slug string) error {
 	// The retained source goes with it: a deleted artifact must not leave its
 	// plaintext behind on disk.
 	s.finishDeletion(slug, blobGen, sourceGen)
+	s.removed(slug)
 	return nil
 }
 
@@ -1656,6 +1661,7 @@ func (s *Store) reapIfExpired(slug string, now time.Time) (bool, error) {
 	// generation the deleted row named is removed, never a newer publish's.
 	// A failed unlink stays pending and is retried (see Delete).
 	s.finishDeletion(slug, blobGen, sourceGen)
+	s.removed(slug)
 	return true, nil
 }
 

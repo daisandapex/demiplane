@@ -44,6 +44,10 @@ type replyStore struct {
 	sweepMu sync.Mutex
 	stop    chan struct{}
 	done    chan struct{}
+
+	// artifactGone, when set, reports whether slug no longer names an
+	// artifact; the sweeper then removes that slug's replies (sweepOrphans).
+	artifactGone func(slug string) (bool, error)
 }
 
 // retentionEvery is how often the retention sweeper runs.
@@ -266,6 +270,11 @@ func (rs *replyStore) startSweeper(retention func() time.Duration, every time.Du
 			} else if n > 0 {
 				log.Printf("reply: retention removed %d old replies", n)
 			}
+			if n, err := rs.sweepOrphans(); err != nil {
+				log.Printf("reply: orphan pass failed: %s", logsafe.Err(err))
+			} else if n > 0 {
+				log.Printf("reply: removed %d replies to deleted artifacts", n)
+			}
 			select {
 			case <-stop:
 				return
@@ -380,6 +389,76 @@ func (rs *replyStore) list(slug, status string, after *listCursor, limit int) ([
 	out = out[:limit]
 	last := out[limit-1]
 	return out, &listCursor{created: last.CreatedAt.Unix(), id: last.ID}, nil
+}
+
+// deleteSlug deletes every reply to slug and returns how many it deleted.
+// The triggers update the totals in the same statement's transaction.
+func (rs *replyStore) deleteSlug(slug string) (int64, error) {
+	res, err := rs.db.Exec(`DELETE FROM replies WHERE slug = ?`, slug)
+	if err != nil {
+		return 0, fmt.Errorf("delete replies: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// deleteID deletes one reply. Returns errNoReply if the id does not exist.
+func (rs *replyStore) deleteID(id int64) error {
+	res, err := rs.db.Exec(`DELETE FROM replies WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete reply: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete reply: %w", err)
+	}
+	if n == 0 {
+		return errNoReply
+	}
+	return nil
+}
+
+// sweepOrphans deletes the replies to artifacts that no longer exist (deleted
+// while no hook could run, or before this release), so they never pass to a
+// later artifact published under the same slug. It returns how many it
+// deleted.
+func (rs *replyStore) sweepOrphans() (int64, error) {
+	if rs.artifactGone == nil {
+		return 0, nil
+	}
+	rows, err := rs.db.Query(`SELECT DISTINCT slug FROM replies`)
+	if err != nil {
+		return 0, fmt.Errorf("list reply slugs: %w", err)
+	}
+	var slugs []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("list reply slugs: %w", err)
+		}
+		slugs = append(slugs, s)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return 0, fmt.Errorf("list reply slugs: %w", err)
+	}
+	var total int64
+	for _, s := range slugs {
+		gone, err := rs.artifactGone(s)
+		if err != nil {
+			return total, err
+		}
+		if !gone {
+			continue
+		}
+		n, err := rs.deleteSlug(s)
+		if err != nil {
+			return total, err
+		}
+		total += n
+	}
+	return total, nil
 }
 
 // errNoReply is returned by ack when the id is unknown.

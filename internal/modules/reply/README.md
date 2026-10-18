@@ -27,6 +27,7 @@ reply routes, no `reply`/`replies` reserved slugs.
 | Show the reply form | `GET /reply/{slug}` | viewer, same as submit |
 | List / triage replies | `GET /replies` | **bearer publish-auth** (same token as `POST /publish`, `GET /list`) |
 | Mark a reply read | `POST /replies/{id}/ack` | bearer publish-auth |
+| Delete replies | `DELETE /replies/{id}`, `DELETE /replies?slug=` | bearer publish-auth |
 
 No new auth primitive: submitting is a *view*-level act (network reachability,
 plus the view password through core's rate-limited check), reading the
@@ -80,6 +81,14 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 ### `POST /replies/{id}/ack` — mark read *(auth)*
 `204` on success, `404` for an unknown id. Idempotent triage of a pending queue.
+
+### `DELETE /replies/{id}`, `DELETE /replies?slug=` — delete *(auth)*
+Delete one reply (`204`, `404` for an unknown id) or every reply to a slug
+(`200` with `{"deleted": n}`). Deleting is how replies give back their share of
+`reply_max_per_artifact`, `reply_max_total` and `reply_max_bytes`. Replies also
+go with their artifact: deleting it, or its expiry, deletes them, and an
+hourly pass removes any left for an artifact that no longer exists, so a later
+artifact published under the same slug starts with none.
 
 ### `POST /answer/{slug}`: same-origin answer submit (content plane, viewer)
 The **content-origin** submit path for the inline reply box (below). It records a
@@ -220,7 +229,8 @@ included, is baked into the page.
   `reply_max_per_artifact` (1000) checked and inserted atomically,
   `reply_max_total` (100,000) and `reply_max_bytes` (64 MiB) in all, and
   `reply_retention` (unset or `0` keeps replies; set, an hourly sweep deletes
-  replies older than it, never the submit path). The
+  replies older than it, never the submit path; `DELETE /replies` frees
+  capacity at any time). The
   content listener refuses cross-origin browser posts except from an opaque
   origin (a sandboxed page) with no Referer or one on the content origin; it
   cannot tell apart two pages served from the same content origin, and a
