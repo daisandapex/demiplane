@@ -327,7 +327,13 @@ func (g *viewGate) verify(ctx context.Context, hash, pass string, ck [32]byte, c
 // hashNew hashes a new view password at publish under the KDF gate, so
 // publishes and checks together run at most the gate's KDFs at once. ok is
 // false when no slot frees within passwordKDFWait (or ctx ends).
-func (g *viewGate) hashNew(ctx context.Context, pw string) (hash string, ok bool, err error) {
+//
+// It counts toward client's in-flight cap like a check does.
+func (g *viewGate) hashNew(ctx context.Context, client, pw string) (hash string, ok bool, err error) {
+	if !g.enterKDF(client) {
+		return "", false, nil
+	}
+	defer g.leaveKDF(client)
 	if !g.kdf.Acquire(ctx, passwordKDFWait) {
 		return "", false, nil
 	}

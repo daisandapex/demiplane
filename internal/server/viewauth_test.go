@@ -655,3 +655,37 @@ func TestPasswordQueueIsCappedPerClient(t *testing.T) {
 		t.Fatalf("%d attempts still counted in flight", n)
 	}
 }
+
+// TestPublishHashingIsCappedPerClient: hashing a new password at publish
+// counts toward the same per-client queue cap as checking one, so one
+// publisher cannot fill the KDF queue ahead of viewers.
+func TestPublishHashingIsCappedPerClient(t *testing.T) {
+	g := newViewGate(PasswordLimits{Concurrency: 1}, []byte("k"))
+	if !g.kdf.TryAcquire() {
+		t.Fatal("setup: could not take the KDF slot")
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < passwordClientInflight; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			g.hashNew(context.Background(), "198.51.100.7", "pw")
+		}()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for g.inflightFor("198.51.100.7") < passwordClientInflight {
+		if time.Now().After(deadline) {
+			t.Fatal("setup: hashes never queued")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	start := time.Now()
+	if _, ok, _ := g.hashNew(context.Background(), "198.51.100.7", "pw"); ok {
+		t.Fatal("a hash past the per-client cap ran")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("a hash past the per-client cap queued for %v", d)
+	}
+	g.kdf.Release()
+	wg.Wait()
+}

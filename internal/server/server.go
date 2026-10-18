@@ -731,7 +731,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	// password checks, not in the store.
 	var passwordHash string
 	if pw := r.Header.Get(PasswordHeader); pw != "" {
-		h, ok, err := s.views.hashNew(r.Context(), pw)
+		h, ok, err := s.views.hashNew(r.Context(), limit.ClientKey(r), pw)
 		if err != nil {
 			log.Printf("publish failed: %s", logsafe.Err(err, named))
 			http.Error(w, "internal error", http.StatusInternalServerError)
