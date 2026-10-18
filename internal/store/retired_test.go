@@ -102,3 +102,40 @@ func TestRetiredSiteFilesStayChargedWhileOpen(t *testing.T) {
 	}
 	assertAccounted(t, s)
 }
+
+// TestRetiredEmptyFileLeavesNoEntry: an empty file replaced while a reader
+// holds it leaves no retirement bookkeeping once that reader closes.
+func TestRetiredEmptyFileLeavesNoEntry(t *testing.T) {
+	s := newQuotaStore(t, 1<<20)
+	put := func() {
+		t.Helper()
+		sw, err := s.NewSiteWriter("site")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sw.AddFile("empty.txt", strings.NewReader("")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sw.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put()
+	for i := 0; i < 3; i++ {
+		f, _, _, err := s.OpenSiteFile("site", "empty.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		put()
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.open.mu.Lock()
+	n := len(s.open.retired)
+	s.open.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d retirement entries left after the readers closed", n)
+	}
+	assertAccounted(t, s)
+}

@@ -100,9 +100,12 @@ func (s *Store) readerClosed(k fileKey) {
 		return
 	}
 	delete(o.refs, k)
-	if n := o.retired[k]; n > 0 {
+	if n, ok := o.retired[k]; ok {
+		// An empty file is retired with nothing to release; its entry goes too.
 		delete(o.retired, k)
-		s.releaseRetired(n)
+		if n > 0 {
+			s.releaseRetired(n)
+		}
 	}
 }
 
