@@ -251,9 +251,12 @@ All notable changes to demiplane are documented here. The format follows
 - **Refused publishes are answered without reading the rest of the body**
   (for example a multipart upload over the 16 KiB header limit), and the
   connection is closed.
-- **Live-reload streams over HTTP/2 (native TLS) no longer reset between
-  heartbeats:** the per-frame write deadline is cleared once the frame is
-  sent. With `--write-timeout` set, downloads keep the sendfile path.
+- **Live-reload streams no longer reset between heartbeats:** the per-frame
+  write deadline is cleared once the frame is sent.
+- **demiplane speaks HTTP/1.1 only, TLS included.** HTTP/2 could keep a
+  finished response's streams waiting past request admission, many per
+  connection, so the admission and connection caps did not bound what a
+  client held. Put a reverse proxy in front for HTTP/2 to clients.
 - **`--write-timeout` bounds each whole response again,** from the start of
   the request, live-reload streams included; per-route deadlines no longer
   replace it.

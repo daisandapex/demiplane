@@ -33,6 +33,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -395,14 +396,7 @@ func runServe(args []string) error {
 	// internal/server/limits.go), which leave the live-reload stream alone.
 	// WriteTimeout stays off by default; --write-timeout opts in. See SECURITY.md.
 	mkServer := func(addr string, h http.Handler) *http.Server {
-		return &http.Server{
-			Addr:              addr,
-			Handler:           h,
-			TLSConfig:         tlsConf, // nil = plain HTTP (the default)
-			ReadHeaderTimeout: 15 * time.Second,
-			WriteTimeout:      *writeTimeout,
-			IdleTimeout:       *idleTimeout,
-		}
+		return newHTTPServer(addr, h, tlsConf, *writeTimeout, *idleTimeout)
 	}
 
 	var servers []*http.Server
@@ -877,4 +871,29 @@ func runDeleteSite(args []string) error {
 	}
 	fmt.Printf("deleted site %s\n", name)
 	return nil
+}
+
+// newHTTPServer builds a listener's server. It speaks HTTP/1.1 only, TLS or
+// not: request admission is released when a handler returns, and HTTP/2 can
+// keep a finished response's stream (and its buffers) waiting on flow
+// control past that, many streams per connection, so the admission and
+// connection caps would not bound what a client holds. A reverse proxy can
+// offer HTTP/2 to clients.
+func newHTTPServer(addr string, h http.Handler, tlsConf *tls.Config, writeTimeout, idleTimeout time.Duration) *http.Server {
+	if tlsConf != nil {
+		// A config that offers h2 itself (autocert's does) must not
+		// negotiate it either.
+		tlsConf = tlsConf.Clone()
+		tlsConf.NextProtos = slices.DeleteFunc(slices.Clone(tlsConf.NextProtos), func(p string) bool { return p == "h2" })
+	}
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		TLSConfig:         tlsConf, // nil = plain HTTP (the default)
+		ReadHeaderTimeout: 15 * time.Second,
+		WriteTimeout:      writeTimeout,
+		IdleTimeout:       idleTimeout,
+		// Non-nil and empty: ServeTLS does not add HTTP/2.
+		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
+	}
 }
