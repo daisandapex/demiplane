@@ -198,8 +198,11 @@ All notable changes to demiplane are documented here. The format follows
   retained source, and every file and directory of a staged site, are synced
   before the row or the site install that names them commits; a site install
   stays recorded until it is synced, so recovery finishes it, and a replaced
-  site is removed only after that, so a power loss cannot leave a page or site pointing at bytes
-  that never reached the disk with its predecessor already gone.
+  site is removed only after that, so a power loss cannot leave a page or
+  site pointing at bytes that never reached the disk with its predecessor
+  already gone. A site delete likewise takes the site's name away durably
+  before it removes any file, so a power loss leaves the site whole or
+  gone, never partly removed.
 - **The server no longer releases quota it never counted.** Removing an
   artifact, an old version or a pending deletion that `demiplane receive`
   created after the server last measured its usage no longer lowers the

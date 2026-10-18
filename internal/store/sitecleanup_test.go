@@ -116,6 +116,12 @@ func TestDeleteSiteUnreadableSubdirKeepsCharge(t *testing.T) {
 	if used, _ := s.Usage(); used != want {
 		t.Fatalf("usage after a partial delete = %d, want %d", used, want)
 	}
+	// The survivors sit under the tombstone the delete renamed the site to.
+	left, err := filepath.Glob(filepath.Join(s.siteRoot(), tempPrefix+"del-*", "d"))
+	if err != nil || len(left) != 1 {
+		t.Fatalf("tombstoned survivors = %v, %v; want one", left, err)
+	}
+	locked = left[0]
 	if err := os.Chmod(locked, 0o700); err != nil {
 		t.Fatal(err)
 	}
