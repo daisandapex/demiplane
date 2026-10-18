@@ -172,7 +172,7 @@ curl --data-binary @lesson-01.md \
   "http://demiplane.mesh:8890/publish?render=md&slug=lesson-01&reply=question&next=lesson-02"
 ```
 
-- `?next=` requires `?reply`, must be a well-formed named slug, and must differ
+- `?next=` requires `?reply=question` (not `reply=form`), must be a well-formed named slug, and must differ
   from `?slug=`. **It need not exist yet** — appearing later is the point.
 - The pointer rides the baked form as a hidden field; the submit handler
   re-validates it (hidden fields are client-tamperable) and anything malformed

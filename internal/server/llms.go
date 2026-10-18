@@ -81,8 +81,8 @@ Query parameters (all optional):
                   /reply/<slug> without changing the page (not valid with
                   ?private). A publish without ?reply turns replies off for the
                   slug; replies are accepted only where a publish enabled them.
-  ?next=<slug>    Forward flow (requires ?reply): names the page that follows
-                  this one. After a recorded answer the confirmation page waits
+  ?next=<slug>    Forward flow (requires ?reply=question): names the page
+                  that follows this one. After a recorded answer the confirmation page waits
                   (JS-free meta-refresh via GET /answer/<slug>/next?to=<next>)
                   until <next> is published, then carries the reader there.
                   <next> need not exist yet; it must differ from ?slug=.
