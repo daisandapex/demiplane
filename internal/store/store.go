@@ -470,7 +470,8 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 	} else if !validPublishID(publishID) {
 		return Artifact{}, &InputError{Msg: "malformed publish id"}
 	}
-	slug, _, err := s.resolveSlug(opts.Slug, opts.Private)
+	named := opts.Slug != ""
+	slug, err := s.resolveNamedSlug(opts.Slug, opts.Private)
 	if err != nil {
 		return Artifact{}, err
 	}
@@ -496,8 +497,15 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 		return Artifact{}, err
 	}
 	// The write intent comes before any file of this generation exists, so
-	// Reconcile can tell a write in flight from an orphan (generation.go).
-	if err := s.beginWrite(slug, gen); err != nil {
+	// Reconcile can tell a write in flight from an orphan (generation.go). A
+	// generated slug is drawn and reserved by the same intent, so no other
+	// generated publish, in this process or another, can draw it meanwhile.
+	if named {
+		err = s.beginWrite(slug, gen)
+	} else {
+		slug, err = s.reserveGeneratedSlug(opts.Private, gen)
+	}
+	if err != nil {
 		return Artifact{}, err
 	}
 	sniffed, size, err := s.writeBlob(s.blobFile(slug, gen), r)
@@ -521,7 +529,8 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 
 	contentType := inferContentType(opts.Filename, sniffed)
 	filename := opts.Filename
-	if filename == "" {
+	defaultName := filename == ""
+	if defaultName {
 		filename = slug
 	}
 
@@ -552,21 +561,43 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 	if beforeMetaCommit != nil {
 		beforeMetaCommit(slug)
 	}
-	unlock := s.locks.lock(slug)
-	defer unlock()
-	prior, err := s.swapMeta(&art, sourceGen)
-	if err != nil {
-		s.abortWrite(slug, gen, sourceGen)
-		return Artifact{}, err
+	// Only a named publish replaces an existing artifact. A generated one
+	// commits only as a new row; if a named publish took its slug after it
+	// was reserved, the write moves to a fresh slug and commits there.
+	for attempt := 0; ; attempt++ {
+		unlock := s.locks.lock(slug)
+		prior, err := s.swapMeta(&art, sourceGen, !named)
+		if errors.Is(err, errSlugTaken) && attempt < genAttempts {
+			unlock()
+			moved, merr := s.moveGeneratedWrite(slug, gen, sourceGen, opts.Private)
+			if merr != nil {
+				s.abortWrite(slug, gen, sourceGen)
+				return Artifact{}, merr
+			}
+			slug, art.Slug = moved, moved
+			if defaultName {
+				art.Filename = moved
+			}
+			continue
+		}
+		if err != nil {
+			unlock()
+			s.abortWrite(slug, gen, sourceGen)
+			if errors.Is(err, errSlugTaken) {
+				return Artifact{}, errNoUnusedSlug
+			}
+			return Artifact{}, err
+		}
+		if prior.exists {
+			s.dropReplacedGen(slug, prior.blobGen, prior.sourceGen)
+		}
+		// Fire the publish notification (guarded no-op when no notifier is set) so a
+		// live-preview tab on this slug can reload. Emitted only after the metadata
+		// row commits, so a subscriber that reacts sees the new bytes.
+		s.notify(art.Slug)
+		unlock()
+		return art, nil
 	}
-	if prior.exists {
-		s.dropReplacedGen(slug, prior.blobGen, prior.sourceGen)
-	}
-	// Fire the publish notification (guarded no-op when no notifier is set) so a
-	// live-preview tab on this slug can reload. Emitted only after the metadata
-	// row commits, so a subscriber that reacts sees the new bytes.
-	s.notify(art.Slug)
-	return art, nil
 }
 
 // ErrPrivateNamedSlug rejects the incoherent private + named-slug combination.
@@ -576,81 +607,124 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 // It is an *InputError so the HTTP layer maps it to 400.
 var ErrPrivateNamedSlug = &InputError{Msg: "private artifacts cannot use a named slug"}
 
-// resolveSlug validates a named slug (reporting whether it already exists, i.e.
-// an overwrite) or generates a fresh unused slug — capability-grade when the
-// artifact is private, friendly otherwise.
-func (s *Store) resolveSlug(named string, private bool) (slug string, overwrite bool, err error) {
-	if named != "" {
-		if private {
-			return "", false, ErrPrivateNamedSlug
-		}
-		if err := ValidateNamedSlug(named); err != nil {
-			return "", false, err
-		}
-		exists, err := s.exists(named)
-		if err != nil {
-			return "", false, err
-		}
-		return named, exists, nil
+// resolveNamedSlug validates a named slug, which may replace an existing
+// artifact. It returns "" for a generated publish, whose slug is drawn and
+// reserved later (reserveGeneratedSlug).
+func (s *Store) resolveNamedSlug(named string, private bool) (string, error) {
+	if named == "" {
+		return "", nil
 	}
 	if private {
-		slug, err = s.generateUnusedCapabilitySlug()
-		return slug, false, err
+		return "", ErrPrivateNamedSlug
 	}
-	slug, err = s.generateUnusedSlug()
-	return slug, false, err
+	if err := ValidateNamedSlug(named); err != nil {
+		return "", err
+	}
+	return named, nil
 }
 
-// generateUnusedCapabilitySlug returns an unused high-entropy slug. Collisions
-// are astronomically unlikely, but the existence check keeps the invariant.
-func (s *Store) generateUnusedCapabilitySlug() (string, error) {
-	for i := 0; i < genAttempts; i++ {
-		candidate, err := GenerateCapabilitySlug()
+// errSlugTaken is swapMeta's refusal to commit a generated publish over an
+// existing row.
+var errSlugTaken = errors.New("slug already in use")
+
+// errNoUnusedSlug: no unused slug could be drawn and committed.
+var errNoUnusedSlug = errors.New("could not generate an unused slug after retries")
+
+// reserveGeneratedSlug draws a slug for a generated publish and reserves it
+// with the write intent for gen (beginWrite's record). Friendly slugs are
+// tried first, then friendly slugs with a numeric suffix once the plain space
+// is crowded; private publishes draw capability slugs. A candidate is taken
+// only if no artifact and no write in flight uses it, checked and recorded
+// in one transaction, which holds the database's write lock, so two
+// publishes, in one process or two, never reserve the same slug.
+func (s *Store) reserveGeneratedSlug(private bool, gen string) (string, error) {
+	attempts := 2 * genAttempts
+	if private {
+		attempts = genAttempts
+	}
+	for i := 0; i < attempts; i++ {
+		var candidate string
+		var err error
+		switch {
+		case private:
+			candidate, err = GenerateCapabilitySlug()
+		case i < genAttempts:
+			candidate, err = GenerateFriendlySlug()
+		default:
+			candidate, err = generateFriendlySlugSuffixed()
+		}
 		if err != nil {
 			return "", err
 		}
-		exists, err := s.exists(candidate)
+		ok, err := s.reserveSlug(candidate, gen)
 		if err != nil {
 			return "", err
 		}
-		if !exists {
+		if ok {
 			return candidate, nil
 		}
 	}
-	return "", errors.New("could not generate an unused capability slug")
+	return "", errNoUnusedSlug
 }
 
-// generateUnusedSlug returns a friendly slug not already present, retrying and
-// then falling back to a numeric suffix if the space is crowded.
-func (s *Store) generateUnusedSlug() (string, error) {
-	for i := 0; i < genAttempts; i++ {
-		candidate, err := GenerateFriendlySlug()
-		if err != nil {
-			return "", err
-		}
-		exists, err := s.exists(candidate)
-		if err != nil {
-			return "", err
-		}
-		if !exists {
-			return candidate, nil
+// reserveSlug records the write intent for slug at gen if no artifact and no
+// other write in flight uses slug, reporting whether it did.
+func (s *Store) reserveSlug(slug, gen string) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("reserve slug: %w", err)
+	}
+	defer tx.Rollback()
+	var taken bool
+	if err := tx.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM artifacts WHERE slug = ?) OR EXISTS(SELECT 1 FROM pending_writes WHERE slug = ?)`,
+		slug, slug,
+	).Scan(&taken); err != nil {
+		return false, fmt.Errorf("reserve slug: %w", err)
+	}
+	if taken {
+		return false, nil
+	}
+	if _, err := tx.Exec(
+		`INSERT INTO pending_writes (slug, gen, started_at) VALUES (?, ?, ?)`,
+		slug, gen, time.Now().Unix()); err != nil {
+		return false, fmt.Errorf("record write intent: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("reserve slug: %w", err)
+	}
+	return true, nil
+}
+
+// moveGeneratedWrite moves a generated publish's uncommitted generation from
+// slug to a freshly reserved one: the new slug's intent is recorded first,
+// then the files are renamed, then the old intent is dropped, so at every
+// step each file is covered by an intent (Reconcile reclaims stale ones). It
+// returns the new slug. On failure the files are back under slug and only
+// its intent remains.
+func (s *Store) moveGeneratedWrite(slug, gen, sourceGen string, private bool) (string, error) {
+	moved, err := s.reserveGeneratedSlug(private, gen)
+	if err != nil {
+		return "", err
+	}
+	unreserve := func() {
+		_, _ = s.db.Exec(`DELETE FROM pending_writes WHERE slug = ? AND gen = ?`, moved, gen)
+	}
+	if err := os.Rename(s.blobFile(slug, gen), s.blobFile(moved, gen)); err != nil {
+		unreserve()
+		return "", fmt.Errorf("move generated write: %w", err)
+	}
+	if sourceGen != noSourceGen {
+		if err := os.Rename(s.sourceFile(slug, sourceGen), s.sourceFile(moved, sourceGen)); err != nil {
+			_ = os.Rename(s.blobFile(moved, gen), s.blobFile(slug, gen))
+			unreserve()
+			return "", fmt.Errorf("move generated write: %w", err)
 		}
 	}
-	// Crowded base space — switch to suffixed candidates.
-	for i := 0; i < genAttempts; i++ {
-		candidate, err := generateFriendlySlugSuffixed()
-		if err != nil {
-			return "", err
-		}
-		exists, err := s.exists(candidate)
-		if err != nil {
-			return "", err
-		}
-		if !exists {
-			return candidate, nil
-		}
+	if _, err := s.db.Exec(`DELETE FROM pending_writes WHERE slug = ? AND gen = ?`, slug, gen); err != nil {
+		log.Printf("store: could not clear a moved write intent: %s", logsafe.Err(err, slug))
 	}
-	return "", errors.New("could not generate an unused slug after retries")
+	return moved, nil
 }
 
 // HasPublic reports whether a slug names a currently VISIBLE artifact: it exists,
@@ -748,8 +822,9 @@ type priorGen struct {
 // is preserved on overwrite; privacy, password, and expiry are replaced with the
 // new publish's values (re-publishing resets them). It returns the generations
 // the row named before, read in the same transaction, so the caller removes
-// exactly the files this write replaced.
-func (s *Store) swapMeta(a *Artifact, sourceGen string) (priorGen, error) {
+// exactly the files this write replaced. With exclusive set (a generated
+// publish) it refuses with errSlugTaken when the row already exists.
+func (s *Store) swapMeta(a *Artifact, sourceGen string, exclusive bool) (priorGen, error) {
 	const q = `
 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, source_gen, modified_at, replies, publish_id)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -795,6 +870,11 @@ RETURNING modified_at;`
 	case errors.Is(err, sql.ErrNoRows):
 	default:
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
+	}
+	if exclusive && p.exists {
+		// A generated publish never replaces a row; rolling back keeps its
+		// write intent.
+		return priorGen{}, errSlugTaken
 	}
 	// A new row takes its metadata allowance from the quota (quota.go), and
 	// so does the pending deletion a replaced row leaves. The transaction
