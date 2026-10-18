@@ -157,8 +157,8 @@ func TestReplaceKeepsTheBackupUntilDurable(t *testing.T) {
 		t.Fatal(err)
 	}
 	restore := failSitesSyncAfterRecord(t)
-	if err := publishSiteBody(s, "site", "index.html", "v2"); err != nil {
-		t.Fatal(err)
+	if err := publishSiteBody(s, "site", "index.html", "v2"); err == nil {
+		t.Fatal("a replace that is not durable was acknowledged")
 	}
 	backups := func() []string {
 		ents, err := os.ReadDir(s.siteRoot())
@@ -214,8 +214,8 @@ func TestReplaceKeepsTheBackupUntilDurable(t *testing.T) {
 func TestFirstSitePublishIsRecoverableUntilDurable(t *testing.T) {
 	s := newQuotaStore(t, 1<<20)
 	restore := failSitesSyncAfterRecord(t)
-	if err := publishSiteBody(s, "fresh", "index.html", "v1"); err != nil {
-		t.Fatal(err)
+	if err := publishSiteBody(s, "fresh", "index.html", "v1"); err == nil {
+		t.Fatal("a first publish that is not durable was acknowledged")
 	}
 	if n := swapRows(t, s); n != 1 {
 		t.Fatalf("%d swap records after a first publish that is not durable, want 1", n)
@@ -484,4 +484,50 @@ func TestSyncSkippedOnlyByTests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestRetireSyncsBeforeDismantling: deleting a site whose failed replace
+// left it moved aside first makes that move durable; if it cannot, the
+// delete fails with the record and the moved-aside tree intact.
+func TestRetireSyncsBeforeDismantling(t *testing.T) {
+	s := newQuotaStore(t, 1<<20)
+	if err := publishSiteBody(s, "site", "index.html", "v1"); err != nil {
+		t.Fatal(err)
+	}
+	restore := failInstall(t, s.root, "site")
+	if err := publishSiteBody(s, "site", "index.html", "v2"); err == nil {
+		t.Fatal("replace with failing renames reported success")
+	}
+	restore()
+	if s.SiteExists("site") {
+		t.Fatal("setup: the site should be moved aside")
+	}
+	ents, err := filepath.Glob(filepath.Join(s.siteRoot(), tempPrefix+"old-*", "index.html"))
+	if err != nil || len(ents) != 1 {
+		t.Fatalf("setup: moved-aside tree = %v, %v", ents, err)
+	}
+	failSitesSync(t)
+	if err := s.DeleteSite("site"); err == nil {
+		t.Fatal("delete succeeded although the moved-aside site could not be synced")
+	}
+	if n := swapRows(t, s); n != 1 {
+		t.Fatalf("%d swap records after a refused delete, want 1", n)
+	}
+	if b, err := os.ReadFile(ents[0]); err != nil || string(b) != "v1" {
+		t.Fatalf("moved-aside tree after a refused delete: %q, %v", b, err)
+	}
+	sitesSync = syncDir
+	if err := s.DeleteSite("site"); err != nil {
+		t.Fatal(err)
+	}
+	if n := swapRows(t, s); n != 0 {
+		t.Fatalf("%d swap records after the delete", n)
+	}
+	if _, err := s.Reconcile(time.Now().Add(2 * orphanGrace)); err != nil {
+		t.Fatal(err)
+	}
+	if s.SiteExists("site") {
+		t.Fatal("deleted site came back")
+	}
+	assertAccounted(t, s)
 }

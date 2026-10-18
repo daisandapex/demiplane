@@ -311,6 +311,12 @@ func (s *Store) retireSwapLocked(site string) (bool, error) {
 	if err != nil || !ok {
 		return false, err
 	}
+	// The renames that moved the swap's trees off the site's name are made
+	// durable before its record goes and they are dismantled, so a power
+	// loss cannot put a partly removed tree back under the site's name.
+	if err := sitesSync(s.siteRoot()); err != nil {
+		return false, fmt.Errorf("sync sites: %w", err)
+	}
 	if err := s.clearSwap(sw); err != nil {
 		return false, err
 	}

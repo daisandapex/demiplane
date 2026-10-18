@@ -409,9 +409,10 @@ func (w *SiteWriter) Commit() (int, error) {
 	// The record goes only once the renames are durable; until then
 	// recovery finds the site in place, syncs, and drops it.
 	durable := true
+	var syncErr error
 	if err := sitesSync(root); err != nil {
 		log.Printf("store: could not sync the sites directory: %s", logsafe.Err(err))
-		durable = false
+		durable, syncErr = false, err
 	} else if err := s.clearSwap(swap); err != nil {
 		log.Printf("store: %s", logsafe.Err(err))
 	}
@@ -437,6 +438,13 @@ func (w *SiteWriter) Commit() (int, error) {
 		s.unregisterStaging(filepath.Base(backup))
 	}
 	s.endChange(c)
+	if syncErr != nil {
+		// The new site is in place but not durable: a power loss could bring
+		// the previous one back, so the publish is not acknowledged. The
+		// record stays for recovery, which syncs and drops it; a retry
+		// replaces the site again.
+		return 0, fmt.Errorf("commit site: not durable: %w", syncErr)
+	}
 	return w.count, nil
 }
 
