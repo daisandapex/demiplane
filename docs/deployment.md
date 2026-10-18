@@ -222,16 +222,29 @@ Every program that writes to a store is a demiplane binary: `serve`, and
 all of them together, and stop the old ones before the new `serve` first opens
 the store.
 
-The first time a binary of this release opens a store, it marks the store as
-upgraded. From then on a binary from 2.0.0 or earlier cannot write to it: its
-publishes, republishes and rebakes fail with `this store has been upgraded; this
-demiplane binary is too old to write to it`, and nothing is changed. (Before this
-check, such a writer could republish a page and leave replies on and its reply
-tokens valid.) Reading and deleting are unaffected.
+The first time a binary of this release opens a store, it moves the content
+directories `blobs/`, `sources/` and `sites/` into `data/` and leaves a small
+text file at each old name saying so. A binary from 2.0.0 or earlier then cannot
+open the store at all: `serve` and `receive` stop at start-up (`create blob dir:
+… not a directory`) before reading or writing anything, so they can neither
+publish, republish, rebake, publish a site nor delete. (Before this check, such
+a binary could republish a page and leave replies on and its reply tokens
+valid.) The database refuses older writers' row changes too, as a second line.
+
+The move is a rename within the store directory, so it is quick whatever the
+store holds, and an interrupted one finishes at the next open. If an older binary
+recreated an old directory in the meantime, an empty one is removed; one that
+holds files stops the open with a message naming both directories, and its
+files have to be moved into `data/` by hand.
 
 Rolling back is therefore a restore: back up the store directory before
 upgrading, and to return to an older release, stop demiplane and restore that
 backup. Publishes made after the upgrade are not in it.
+
+The store directory holds `meta.db` (with its `-wal` and `-shm` files), `data/`
+(`blobs/` for artifact bytes, `sources/` for retained markdown, `sites/` for
+site trees), `modules/` (module storage, such as replies) and the three marker
+files. All of it is owner-only.
 
 ## See also
 

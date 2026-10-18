@@ -107,7 +107,7 @@ func TestLogsRedactGetFailure(t *testing.T) {
 	f := newRedactFixture(t)
 	slug := f.publishPrivate(t, "")
 	logs := captureLog(t)
-	lockDir(t, filepath.Join(f.root, "blobs"), 0o000)
+	lockDir(t, filepath.Join(f.root, "data", "blobs"), 0o000)
 
 	resp, _ := get(t, f.ts.URL+"/"+slug)
 	if resp.StatusCode != http.StatusInternalServerError {
@@ -120,7 +120,7 @@ func TestLogsRedactDeleteFailure(t *testing.T) {
 	f := newRedactFixture(t)
 	slug := f.publishPrivate(t, "")
 	logs := captureLog(t)
-	lockDir(t, filepath.Join(f.root, "blobs"), 0o500)
+	lockDir(t, filepath.Join(f.root, "data", "blobs"), 0o500)
 
 	do(t, http.MethodDelete, f.ts.URL+"/"+slug, "", "")
 	assertNoLeak(t, logs.String(), slug, f.root)
@@ -130,7 +130,7 @@ func TestLogsRedactRerenderFailure(t *testing.T) {
 	f := newRedactFixture(t)
 	slug := f.publishPrivate(t, "&render=md")
 	logs := captureLog(t)
-	lockDir(t, filepath.Join(f.root, "sources"), 0o000)
+	lockDir(t, filepath.Join(f.root, "data", "sources"), 0o000)
 
 	if code, _ := do(t, http.MethodPost, f.ts.URL+"/rerender/"+slug, "", ""); code != http.StatusInternalServerError {
 		t.Fatalf("rerender with unreadable sources = %d, want 500", code)
@@ -142,7 +142,7 @@ func TestLogsRedactRerenderAllFailure(t *testing.T) {
 	f := newRedactFixture(t)
 	slug := f.publishPrivate(t, "&render=md")
 	logs := captureLog(t)
-	lockDir(t, filepath.Join(f.root, "sources"), 0o000)
+	lockDir(t, filepath.Join(f.root, "data", "sources"), 0o000)
 
 	do(t, http.MethodPost, f.ts.URL+"/rerender", "", "")
 	assertNoLeak(t, logs.String(), slug, f.root)
@@ -155,7 +155,7 @@ func TestLogsRedactSweepFailure(t *testing.T) {
 	f := newRedactFixture(t)
 	slug := f.publishPrivate(t, "&ttl=1s")
 	logs := captureLog(t)
-	lockDir(t, filepath.Join(f.root, "blobs"), 0o500)
+	lockDir(t, filepath.Join(f.root, "data", "blobs"), 0o500)
 	time.Sleep(1100 * time.Millisecond)
 
 	_, err := f.st.SweepExpired(time.Now())

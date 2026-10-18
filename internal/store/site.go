@@ -40,7 +40,7 @@ import (
 const maxSitePathSegments = 32
 
 // siteRoot is the parent directory that holds every site's file tree.
-func (s *Store) siteRoot() string { return filepath.Join(s.root, "sites") }
+func (s *Store) siteRoot() string { return filepath.Join(s.root, contentDirName, "sites") }
 
 // cleanSiteRelPath validates and normalizes a site-relative file path from an
 // archive entry. It is the traversal gate for the multi-file publish path: it

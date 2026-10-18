@@ -21,7 +21,7 @@ const swapCrashEnv = "DEMIPLANE_TEST_SITE_SWAP_CRASH"
 func ageSite(t *testing.T, dir, site string) {
 	t.Helper()
 	old := time.Now().Add(-2 * orphanGrace)
-	if err := os.Chtimes(filepath.Join(dir, "sites", site), old, old); err != nil {
+	if err := os.Chtimes(filepath.Join(dir, "data", "sites", site), old, old); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -130,7 +130,7 @@ func TestSiteSwapFailedRollbackRecovers(t *testing.T) {
 				t.Fatal(err)
 			}
 			ageSite(t, dir, "site")
-			final := filepath.Join(dir, "sites", "site")
+			final := filepath.Join(dir, "data", "sites", "site")
 			siteRename = func(from, to string) error {
 				if to == final {
 					return &os.LinkError{Op: "rename", Old: from, New: to, Err: os.ErrPermission}

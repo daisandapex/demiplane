@@ -41,7 +41,7 @@ func receiveOnce(t *testing.T, dir, slug, body string) {
 
 func blobFiles(t *testing.T, dir, slug string) int {
 	t.Helper()
-	ents, err := os.ReadDir(filepath.Join(dir, "blobs"))
+	ents, err := os.ReadDir(filepath.Join(dir, "data", "blobs"))
 	if err != nil {
 		t.Fatal(err)
 	}

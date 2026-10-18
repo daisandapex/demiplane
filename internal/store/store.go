@@ -130,10 +130,15 @@ func Open(dir string) (*Store, error) {
 
 // open is Open, or OpenShared with shared set.
 func open(dir string, shared bool) (*Store, error) {
-	blobDir := filepath.Join(dir, "blobs")
-	sourceDir := filepath.Join(dir, sourceDirName)
+	blobDir := filepath.Join(dir, contentDirName, "blobs")
+	sourceDir := filepath.Join(dir, contentDirName, sourceDirName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create store dir: %w", err)
+	}
+	// Content directories move under data/ and the old names become marker
+	// files that stop older binaries at open (layout.go).
+	if err := migrateLayout(dir); err != nil {
+		return nil, err
 	}
 	if err := tightenStorePerms(dir); err != nil {
 		return nil, err
@@ -206,9 +211,14 @@ var storePerms = []struct {
 	mode os.FileMode
 }{
 	{"", 0o700},
-	{"blobs", 0o700},
-	{sourceDirName, 0o700},
-	{"sites", 0o700},
+	{contentDirName, 0o700},
+	{filepath.Join(contentDirName, "blobs"), 0o700},
+	{filepath.Join(contentDirName, sourceDirName), 0o700},
+	{filepath.Join(contentDirName, "sites"), 0o700},
+	// The marker files at the old names (layout.go).
+	{"blobs", markerMode},
+	{sourceDirName, markerMode},
+	{"sites", markerMode},
 	{"meta.db", 0o600},
 	{"meta.db-wal", 0o600},
 	{"meta.db-shm", 0o600},

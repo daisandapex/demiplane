@@ -49,7 +49,7 @@ in [DESIGN.md](../DESIGN.md).
 ## Source retention and re-rendering
 
 A rendered page is baked once, at publish. demiplane keeps the **markdown it was
-given** alongside the baked HTML (a sidecar under `<store>/sources/`, mode 0700
+given** alongside the baked HTML (a sidecar under `<store>/data/sources/`, mode 0700
 like the blobs), so a later renderer or theme change can rebake the page from the
 store instead of from whatever copy of the source you still have:
 

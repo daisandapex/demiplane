@@ -41,7 +41,7 @@ the entry, or a wrapper), never an argument. Nested tar paths flatten to hyphena
 
 The binary in `command=` writes to the same store as `serve`, so upgrade it with
 `serve`: once a newer `serve` has opened the store, an older `receive` cannot
-write to it ([Upgrading](./deployment.md#upgrading)).
+open it ([Upgrading](./deployment.md#upgrading)).
 
 ## See also
 

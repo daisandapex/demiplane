@@ -131,7 +131,7 @@ func TestAbandonedStagingTreesReclaimed(t *testing.T) {
 	dir := t.TempDir()
 	plant := func(name string, age time.Duration) {
 		t.Helper()
-		p := filepath.Join(dir, "sites", name, "a")
+		p := filepath.Join(dir, "data", "sites", name, "a")
 		if err := os.MkdirAll(p, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -152,7 +152,7 @@ func TestAbandonedStagingTreesReclaimed(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.Close() })
-	if _, err := os.Stat(filepath.Join(dir, "sites", ".tmp-old-1")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "data", "sites", ".tmp-old-1")); !os.IsNotExist(err) {
 		t.Fatalf("an abandoned staging tree past the grace survived Open: %v", err)
 	}
 	if err := s.SetQuota(1 << 20); err != nil {

@@ -33,7 +33,7 @@ func newQuotaStore(t *testing.T, limit int64) *Store {
 func diskBytes(t *testing.T, s *Store) int64 {
 	t.Helper()
 	var n int64
-	for _, dir := range []string{"blobs", sourceDirName, "sites"} {
+	for _, dir := range []string{"data/blobs", "data/" + sourceDirName, "data/sites"} {
 		err := filepath.WalkDir(filepath.Join(s.root, dir), func(p string, d fs.DirEntry, err error) error {
 			if errors.Is(err, fs.ErrNotExist) {
 				return nil
@@ -61,7 +61,7 @@ func diskBytes(t *testing.T, s *Store) int64 {
 func tempFiles(t *testing.T, s *Store) []string {
 	t.Helper()
 	var out []string
-	for _, dir := range []string{"blobs", sourceDirName, "sites"} {
+	for _, dir := range []string{"data/blobs", "data/" + sourceDirName, "data/sites"} {
 		ents, err := os.ReadDir(filepath.Join(s.root, dir))
 		if err != nil && !os.IsNotExist(err) {
 			t.Fatalf("read %s: %v", dir, err)

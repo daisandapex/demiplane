@@ -37,13 +37,13 @@ func TestOpenTightensExistingStore(t *testing.T) {
 	s.Close()
 
 	loose := map[string]os.FileMode{
-		dir:                               0o775,
-		filepath.Join(dir, "blobs"):       0o755,
-		filepath.Join(dir, "sources"):     0o500,
-		filepath.Join(dir, "sites"):       0o755,
-		filepath.Join(dir, "meta.db"):     0o644,
-		filepath.Join(dir, "meta.db-wal"): 0o644,
-		filepath.Join(dir, "meta.db-shm"): 0o400,
+		dir:                                   0o775,
+		filepath.Join(dir, "data", "blobs"):   0o755,
+		filepath.Join(dir, "data", "sources"): 0o500,
+		filepath.Join(dir, "data", "sites"):   0o755,
+		filepath.Join(dir, "meta.db"):         0o644,
+		filepath.Join(dir, "meta.db-wal"):     0o644,
+		filepath.Join(dir, "meta.db-shm"):     0o400,
 	}
 	for p, m := range loose {
 		if _, err := os.Stat(p); os.IsNotExist(err) {

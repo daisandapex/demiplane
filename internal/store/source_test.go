@@ -55,7 +55,7 @@ func TestPutRetainsSource(t *testing.T) {
 
 	// The retained source must not be readable by other local users: it is the
 	// plaintext of a page that may be password-gated.
-	info, err := os.Stat(filepath.Join(s.root, sourceDirName))
+	info, err := os.Stat(filepath.Join(s.root, "data", sourceDirName))
 	if err != nil {
 		t.Fatalf("stat source dir: %v", err)
 	}

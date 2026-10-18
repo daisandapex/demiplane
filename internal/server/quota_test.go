@@ -41,7 +41,7 @@ func newQuotaServer(t *testing.T, limit int64, cfg Config) (*httptest.Server, *s
 func storeDiskBytes(t *testing.T, st *store.Store) int64 {
 	t.Helper()
 	var n int64
-	for _, dir := range []string{"blobs", "sources", "sites"} {
+	for _, dir := range []string{"data/blobs", "data/sources", "data/sites"} {
 		err := filepath.WalkDir(filepath.Join(st.Root(), dir), func(p string, d fs.DirEntry, err error) error {
 			if errors.Is(err, fs.ErrNotExist) {
 				return nil
@@ -78,7 +78,7 @@ func assertStoreAccounted(t *testing.T, st *store.Store) {
 	if want := storeDiskBytes(t, st) + (int64(len(arts))+entries)*store.MetaAllowance; used != want {
 		t.Errorf("usage = %d, bytes on disk + %d row and %d site-entry allowances = %d", used, len(arts), entries, want)
 	}
-	for _, dir := range []string{"blobs", "sources", "sites"} {
+	for _, dir := range []string{"data/blobs", "data/sources", "data/sites"} {
 		ents, _ := os.ReadDir(filepath.Join(st.Root(), dir))
 		for _, e := range ents {
 			if strings.HasPrefix(e.Name(), ".tmp-") {
@@ -218,7 +218,7 @@ func TestPublishMetadataBounded(t *testing.T) {
 // siteEntryCount counts the files and directories of the published sites.
 func siteEntryCount(t *testing.T, st *store.Store) int64 {
 	t.Helper()
-	root := filepath.Join(st.Root(), "sites")
+	root := filepath.Join(st.Root(), "data", "sites")
 	var n int64
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if errors.Is(err, fs.ErrNotExist) {
