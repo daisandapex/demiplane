@@ -87,7 +87,7 @@ func TestReceiveLeavesSitesAlone(t *testing.T) {
 	st.Close()
 	// A replace interrupted with the site moved aside, as the server would
 	// have recorded it.
-	backup := filepath.Join(dir, "sites", ".tmp-old-site-1")
+	backup := filepath.Join(dir, "data", "sites", ".tmp-old-site-1")
 	if err := os.MkdirAll(backup, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestReceiveLeavesSitesAlone(t *testing.T) {
 	if _, err := os.Stat(backup); err != nil {
 		t.Fatalf("receive touched the moved-aside site: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "sites", "site")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "data", "sites", "site")); !os.IsNotExist(err) {
 		t.Fatalf("receive restored the site itself: %v", err)
 	}
 	var n int

@@ -24,7 +24,7 @@ func swapRows(t *testing.T, s *Store) int {
 // and its rollback) until the returned function restores renames.
 func failInstall(t *testing.T, dir, site string) func() {
 	t.Helper()
-	final := filepath.Join(dir, "sites", site)
+	final := filepath.Join(dir, "data", "sites", site)
 	siteRename = func(from, to string) error {
 		if to == final {
 			return &os.LinkError{Op: "rename", Old: from, New: to, Err: os.ErrPermission}
@@ -121,11 +121,11 @@ func TestRecoveryIgnoresStaleSwap(t *testing.T) {
 // ageBackups backdates every ".tmp-old-" tree past the orphan grace.
 func ageBackups(t *testing.T, dir string) {
 	t.Helper()
-	ents, _ := os.ReadDir(filepath.Join(dir, "sites"))
+	ents, _ := os.ReadDir(filepath.Join(dir, "data", "sites"))
 	old := time.Now().Add(-2 * orphanGrace)
 	for _, e := range ents {
 		if strings.HasPrefix(e.Name(), tempPrefix+"old-") {
-			os.Chtimes(filepath.Join(dir, "sites", e.Name()), old, old)
+			os.Chtimes(filepath.Join(dir, "data", "sites", e.Name()), old, old)
 		}
 	}
 }
@@ -199,7 +199,7 @@ func TestRecoveryKeepsRecordWhenInspectionFails(t *testing.T) {
 		t.Fatal("replace with failing renames reported success")
 	}
 	restore()
-	sites := filepath.Join(dir, "sites")
+	sites := filepath.Join(dir, "data", "sites")
 	if err := os.Chmod(sites, 0o600); err != nil {
 		t.Fatal(err)
 	}
