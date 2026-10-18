@@ -172,6 +172,14 @@ All notable changes to demiplane are documented here. The format follows
   server's sweep removes it. At most 10,000 may be waiting; past that, a
   publish through `receive` that would replace an artifact is refused until
   the server has swept. Deletes are never refused.
+- **Unnamed publishes can no longer replace each other.** Two concurrent
+  publishes without `?slug=` could be given the same generated slug; the
+  second then silently replaced the first, deleting its bytes and retained
+  source, and both callers received the same URL. A generated slug is now
+  reserved in the database before the upload is written, across processes
+  (`serve` and SSH `receive`), and a generated publish only ever creates a
+  new artifact; only an explicit `?slug=` (or `receive --slug`) replaces one.
+  Affects 2.0.0.
 - **An interrupted site replace no longer loses the site.** The replace is
   recorded before the old site is moved aside, and startup and the hourly
   reconcile restore the old site (or finish the replace) before any cleanup.

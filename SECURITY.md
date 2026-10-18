@@ -38,6 +38,12 @@ want it.
   default), an unguessable **capability slug** (`?private=true`, 144-bit), and an
   optional **per-artifact password** (salted PBKDF2-HMAC-SHA256, supplied via the
   `X-Demiplane-Password` header on publish and HTTP Basic on read).
+- **Generated slugs.** A generated slug, friendly or capability, is reserved
+  in the store's database (checked against existing artifacts and writes in
+  flight in one transaction) before the upload is written, and a generated
+  publish commits only as a new artifact, so two concurrent publishes never
+  share a slug and one never replaces another. Only a publish naming its slug
+  (`?slug=`, `receive --slug`) replaces an existing artifact.
 - **Input handling.** Uploads stream to disk (bounded memory); slugs are
   validated against path traversal; the optional markdown renderer HTML-escapes
   all source and allowlists link schemes. Link destinations containing a
