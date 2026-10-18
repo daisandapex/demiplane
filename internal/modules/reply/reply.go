@@ -474,6 +474,12 @@ func parseSubmission(r *http.Request) (kind, body, token string, isJSON bool, er
 			Token string `json:"token"`
 		}
 		if derr := json.NewDecoder(r.Body).Decode(&in); derr != nil {
+			// Keep the size limit's error, so an oversized JSON body is a
+			// 413 like an oversized form, not a malformed one.
+			var maxErr *http.MaxBytesError
+			if errors.As(derr, &maxErr) {
+				return "", "", "", true, derr
+			}
 			return "", "", "", true, errors.New("invalid JSON body")
 		}
 		return strings.ToLower(strings.TrimSpace(in.Kind)), in.Body, in.Token, true, nil

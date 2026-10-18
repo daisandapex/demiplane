@@ -59,4 +59,9 @@ func TestCheckRefusesNonCanonicalSpelling(t *testing.T) {
 			t.Errorf("non-canonical spelling %q accepted", alt)
 		}
 	}
+	for _, alt := range []string{tok + "\n", tok + "\r\n", tok[:5] + "\n" + tok[5:], "\r" + tok} {
+		if Check(key, "s", "0123456789abcdef0123456789abcdef", alt) {
+			t.Errorf("spelling with a line break %q accepted", alt)
+		}
+	}
 }

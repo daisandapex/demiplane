@@ -528,3 +528,15 @@ func TestRegisteredAsRouteModule(t *testing.T) {
 	}
 	t.Fatal("reply module not registered as a RouteModule")
 }
+
+// TestJSONOverRequestCapIs413: a JSON submission over the request size cap
+// is a 413, like an oversized form, not a 400 for malformed JSON.
+func TestJSONOverRequestCapIs413(t *testing.T) {
+	ts, _ := setup(t)
+	big := strings.Repeat("x", maxRequestBody+1024)
+	payload, _ := json.Marshal(map[string]string{"kind": "comment", "body": big})
+	code, _ := do(t, http.MethodPost, ts.URL+"/reply/report", "application/json", string(payload), false)
+	if code != http.StatusRequestEntityTooLarge {
+		t.Errorf("JSON over the request cap = %d, want 413", code)
+	}
+}

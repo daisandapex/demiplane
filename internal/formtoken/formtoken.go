@@ -52,8 +52,13 @@ func Check(key []byte, slug, publishID, tok string) bool {
 	if len(key) == 0 || publishID == "" || len(tok) > 64 {
 		return false
 	}
-	// Strict: a token has one spelling; the unused low bits of the last
-	// character must be zero, as Mint writes them.
+	// One spelling only: exactly the encoded length of a tag (the decoder
+	// skips CR and LF, so the length check is what refuses them), decoded
+	// strictly so the unused low bits of the last character must be zero, as
+	// Mint writes them.
+	if len(tok) != base64.RawURLEncoding.EncodedLen(tagLen) {
+		return false
+	}
 	got, err := base64.RawURLEncoding.Strict().DecodeString(tok)
 	if err != nil || len(got) != tagLen {
 		return false
