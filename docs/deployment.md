@@ -215,6 +215,24 @@ demiplane's own `Dockerfile` follows the same rule: the builder and distroless
 base images are pinned by digest with the human-readable tag left in a comment,
 so a rebuild months later starts from the bytes the build was tested against.
 
+## Upgrading
+
+Every program that writes to a store is a demiplane binary: `serve`, and
+`receive` wherever it runs (an SSH forced command, a cron job, a CI step). Upgrade
+all of them together, and stop the old ones before the new `serve` first opens
+the store.
+
+The first time a binary of this release opens a store, it marks the store as
+upgraded. From then on a binary from 2.0.0 or earlier cannot write to it: its
+publishes, republishes and rebakes fail with `this store has been upgraded; this
+demiplane binary is too old to write to it`, and nothing is changed. (Before this
+check, such a writer could republish a page and leave replies on and its reply
+tokens valid.) Reading and deleting are unaffected.
+
+Rolling back is therefore a restore: back up the store directory before
+upgrading, and to return to an older release, stop demiplane and restore that
+backup. Publishes made after the upgrade are not in it.
+
 ## See also
 
 - [HTTP API](../API.md) — endpoints, publish parameters, auth model

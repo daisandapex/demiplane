@@ -214,7 +214,7 @@ func TestLegacyFileNamesStillServe(t *testing.T) {
 	if err := os.Rename(s.sourceFile("old", art.Version), s.sourceFile("old", "")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`UPDATE artifacts SET blob_gen = '', source_gen = '', modified_at = 0 WHERE slug = 'old'`); err != nil {
+	if _, err := s.db.Exec(`UPDATE artifacts SET blob_gen = '', source_gen = '', modified_at = 0, writer_tag = 'pre-generation' WHERE slug = 'old'`); err != nil {
 		t.Fatal(err)
 	}
 

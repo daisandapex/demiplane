@@ -287,7 +287,7 @@ func (s *Store) swapBody(slug, gen, cur string, size int64) (int64, error) {
 	}
 	var modified int64
 	if err := tx.QueryRow(
-		`UPDATE artifacts SET size = ?, blob_gen = ?, modified_at = ?
+		`UPDATE artifacts SET size = ?, blob_gen = ?, modified_at = ?, writer_tag = lower(hex(randomblob(8)))
 		  WHERE slug = ? AND blob_gen = ? RETURNING modified_at`,
 		size, gen, time.Now().Unix(), slug, cur,
 	).Scan(&modified); err != nil {

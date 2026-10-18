@@ -278,6 +278,10 @@ CREATE TABLE IF NOT EXISTS artifacts (
 		{"modified_at", "ALTER TABLE artifacts ADD COLUMN modified_at INTEGER NOT NULL DEFAULT 0"},
 		// The publish that wrote the row (Artifact.PublishID).
 		{"publish_id", "ALTER TABLE artifacts ADD COLUMN publish_id TEXT NOT NULL DEFAULT ''"},
+		// A fresh value from every write of the row by this version or later
+		// (Put and Rebake), which writers from before it cannot set; the
+		// triggers below refuse their writes (writerTriggers).
+		{"writer_tag", "ALTER TABLE artifacts ADD COLUMN writer_tag TEXT NOT NULL DEFAULT ''"},
 	}
 	for _, col := range added {
 		if err := s.addColumnIfMissing(col.name, col.ddl); err != nil {
@@ -348,6 +352,53 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	} {
 		if _, err := s.db.Exec(q); err != nil {
 			return fmt.Errorf("create listing indexes: %w", err)
+		}
+	}
+	for _, q := range writerTriggers {
+		if _, err := s.db.Exec(q); err != nil {
+			return fmt.Errorf("create writer triggers: %w", err)
+		}
+	}
+	return s.stampSchemaVersion()
+}
+
+// writerTriggers make the store refuse writes from demiplane binaries older
+// than this schema, which share the database file when not every writer was
+// upgraded together (an SSH forced-command receive, say). Their writes do not
+// know the replies and publish_id columns, so they would republish a page
+// with replies still on and every reply token still valid. Every current
+// write of a row sets writer_tag afresh, which older writers cannot:
+//   - an INSERT without it is refused. An upsert fires the INSERT trigger
+//     before resolving the conflict, so an older republish is refused too;
+//   - an UPDATE that replaces the bytes (blob_gen) without a new writer_tag,
+//     which is an older rebake, is refused.
+//
+// Other updates (expiry, migrations) are unaffected.
+var writerTriggers = []string{
+	`CREATE TRIGGER IF NOT EXISTS artifacts_writer_insert BEFORE INSERT ON artifacts
+	  WHEN NEW.writer_tag = ''
+	  BEGIN SELECT RAISE(ABORT, 'demiplane: this store has been upgraded; this demiplane binary is too old to write to it'); END`,
+	`CREATE TRIGGER IF NOT EXISTS artifacts_writer_update BEFORE UPDATE OF blob_gen ON artifacts
+	  WHEN NEW.blob_gen IS NOT OLD.blob_gen AND NEW.writer_tag IS OLD.writer_tag
+	  BEGIN SELECT RAISE(ABORT, 'demiplane: this store has been upgraded; this demiplane binary is too old to write to it'); END`,
+}
+
+// storeSchemaVersion is recorded in the database's user_version. A binary
+// refuses a store stamped with a later version than it knows, so a future
+// incompatible schema can lock out writers from before it the same way.
+const storeSchemaVersion = 1
+
+func (s *Store) stampSchemaVersion() error {
+	var v int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	switch {
+	case v > storeSchemaVersion:
+		return fmt.Errorf("this store was written by a newer demiplane (schema %d, this binary knows %d); upgrade this binary", v, storeSchemaVersion)
+	case v < storeSchemaVersion:
+		if _, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, storeSchemaVersion)); err != nil {
+			return fmt.Errorf("record schema version: %w", err)
 		}
 	}
 	return nil
@@ -826,8 +877,8 @@ type priorGen struct {
 // publish) it refuses with errSlugTaken when the row already exists.
 func (s *Store) swapMeta(a *Artifact, sourceGen string, exclusive bool) (priorGen, error) {
 	const q = `
-INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, source_gen, modified_at, replies, publish_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, source_gen, modified_at, replies, publish_id, writer_tag)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, lower(hex(randomblob(8))))
 ON CONFLICT(slug) DO UPDATE SET
     filename      = excluded.filename,
     content_type  = excluded.content_type,
@@ -849,7 +900,8 @@ ON CONFLICT(slug) DO UPDATE SET
     source_gen    = excluded.source_gen,
     modified_at   = excluded.modified_at,
     replies       = excluded.replies,
-    publish_id    = excluded.publish_id
+    publish_id    = excluded.publish_id,
+    writer_tag    = excluded.writer_tag
 RETURNING modified_at;`
 	tx, err := s.db.Begin()
 	if err != nil {

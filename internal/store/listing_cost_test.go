@@ -23,14 +23,14 @@ func bigStore(t *testing.T, analyze bool) *Store {
 	t.Cleanup(func() { st.Close() })
 	for _, q := range []string{
 		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 20000)
-		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private)
-		 SELECT printf('priv-%05d', i), '', 'text/plain', 1, 1700100000 + i, 'local', 1 FROM n`,
+		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, writer_tag)
+		 SELECT printf('priv-%05d', i), '', 'text/plain', 1, 1700100000 + i, 'local', 1, 't' FROM n`,
 		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 20000)
-		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, series)
-		 SELECT printf('big-%05d', i), '', 'text/plain', 1, 1700050000 + i, 'local', 'big' FROM n`,
+		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, series, writer_tag)
+		 SELECT printf('big-%05d', i), '', 'text/plain', 1, 1700050000 + i, 'local', 'big', 't' FROM n`,
 		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 5)
-		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner)
-		 SELECT printf('solo-%d', i), '', 'text/plain', 1, 1700000000 + i, 'local' FROM n`,
+		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, writer_tag)
+		 SELECT printf('solo-%d', i), '', 'text/plain', 1, 1700000000 + i, 'local', 't' FROM n`,
 	} {
 		if _, err := st.db.Exec(q); err != nil {
 			t.Fatal(err)
@@ -123,13 +123,13 @@ func expiredStore(t *testing.T) *Store {
 	t.Cleanup(func() { st.Close() })
 	for _, q := range []string{
 		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 20000)
-		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, series, expires_at)
+		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, series, expires_at, writer_tag)
 		 SELECT printf('exp-%05d', i), '', 'text/plain', 1, 1700100000 + i, 'local',
-		        CASE WHEN i % 2 = 0 THEN 'big' ELSE '' END, 1 FROM n`,
+		        CASE WHEN i % 2 = 0 THEN 'big' ELSE '' END, 1, 't' FROM n`,
 		`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 300)
-		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, series)
+		 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, series, writer_tag)
 		 SELECT printf('live-%03d', i), '', 'text/plain', 1, 1700000000 + i, 'local',
-		        CASE WHEN i % 3 = 0 THEN 'big' ELSE '' END FROM n`,
+		        CASE WHEN i % 3 = 0 THEN 'big' ELSE '' END, 't' FROM n`,
 	} {
 		if _, err := st.db.Exec(q); err != nil {
 			t.Fatal(err)
