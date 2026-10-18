@@ -17,7 +17,8 @@ import (
 // siteswap.go makes replacing a site crash-safe.
 //
 // Commit replaces a site with two renames: the live tree to a backup name
-// (".tmp-old-…"), then the staging tree to the site's name. Between them the
+// (".tmp-old-…"), then the staging tree to the site's name. (A first
+// publish has only the second, and its record names no backup.) Between them the
 // backup is the only committed copy, and it carries a ".tmp-" name, which
 // the scavenger treats as disposable. So before the first rename Commit
 // records the swap durably in meta.db (site, a fresh id, backup, staging),
@@ -147,7 +148,10 @@ func (s *Store) swapNames() (map[string]bool, error) {
 		if err := rows.Scan(&b, &st); err != nil {
 			return nil, fmt.Errorf("read site swaps: %w", err)
 		}
-		names[b], names[st] = true, true
+		if b != "" {
+			names[b] = true
+		}
+		names[st] = true
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read site swaps: %w", err)
@@ -237,14 +241,19 @@ func (s *Store) settleSwapLocked(site string) error {
 		return s.clearSwap(sw)
 	}
 	var from string
-	if have, err = present(sw.backup); err != nil {
-		return err
-	} else if have {
-		from = sw.backup
-	} else if have, err = present(sw.staging); err != nil {
-		return err
-	} else if have && !s.stagingLive(sw.staging) {
-		from = sw.staging
+	if sw.backup != "" {
+		if have, err = present(sw.backup); err != nil {
+			return err
+		} else if have {
+			from = sw.backup
+		}
+	}
+	if from == "" {
+		if have, err = present(sw.staging); err != nil {
+			return err
+		} else if have && !s.stagingLive(sw.staging) {
+			from = sw.staging
+		}
 	}
 	if from == "" {
 		log.Printf("store: an interrupted site replace left nothing to restore")
@@ -278,7 +287,7 @@ func (s *Store) retireSwapLocked(site string) (bool, error) {
 		return false, err
 	}
 	for _, name := range []string{sw.backup, sw.staging} {
-		if s.stagingLive(name) {
+		if name == "" || s.stagingLive(name) {
 			continue
 		}
 		if err := s.removeLiveTree(filepath.Join(s.siteRoot(), name)); err != nil {

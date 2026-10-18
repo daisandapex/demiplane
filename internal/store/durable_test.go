@@ -205,3 +205,76 @@ func TestReplaceKeepsTheBackupUntilDurable(t *testing.T) {
 	}
 	assertAccounted(t, s)
 }
+
+// TestFirstSitePublishIsRecoverableUntilDurable: a first publish whose
+// install cannot be synced keeps a record, so recovery syncs it rather than
+// the scavenger losing it; one a crash cut off before its install is
+// finished from the complete staged tree, and a delete meanwhile removes
+// only that site's trees.
+func TestFirstSitePublishIsRecoverableUntilDurable(t *testing.T) {
+	s := newQuotaStore(t, 1<<20)
+	restore := failSitesSync(t)
+	if err := publishSiteBody(s, "fresh", "index.html", "v1"); err != nil {
+		t.Fatal(err)
+	}
+	if n := swapRows(t, s); n != 1 {
+		t.Fatalf("%d swap records after a first publish that is not durable, want 1", n)
+	}
+	restore()
+	if _, err := s.Reconcile(time.Now().Add(2 * orphanGrace)); err != nil {
+		t.Fatal(err)
+	}
+	if n := swapRows(t, s); n != 0 {
+		t.Fatalf("%d swap records after recovery", n)
+	}
+	if got := readSite(t, s, "fresh", "index.html"); got != "v1" {
+		t.Fatalf("site = %q, want v1", got)
+	}
+
+	// A crash between the record and the install: the staged tree is
+	// complete and only its record names it.
+	staging := filepath.Join(s.siteRoot(), tempPrefix+"site-crashed")
+	if err := os.MkdirAll(staging, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "index.html"), []byte("staged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO site_swaps (site, id, backup, staging) VALUES ('second', 'x', '', ?)`, filepath.Base(staging)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecountUsage(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Reconcile(time.Now().Add(2 * orphanGrace)); err != nil {
+		t.Fatal(err)
+	}
+	if got := readSite(t, s, "second", "index.html"); got != "staged" {
+		t.Fatalf("site after recovery = %q, want the staged tree", got)
+	}
+
+	// A delete retiring a record that names no backup removes that site's
+	// trees only.
+	if err := os.MkdirAll(staging, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO site_swaps (site, id, backup, staging) VALUES ('second', 'y', '', ?)`, filepath.Base(staging)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteSite("second"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readSite(t, s, "fresh", "index.html"); got != "v1" {
+		t.Fatalf("other site after the delete = %q, want v1", got)
+	}
+	if s.SiteExists("second") {
+		t.Fatal("deleted site still exists")
+	}
+	if n := swapRows(t, s); n != 0 {
+		t.Fatalf("%d swap records after the delete", n)
+	}
+	if err := s.RecountUsage(); err != nil {
+		t.Fatal(err)
+	}
+	assertAccounted(t, s)
+}
