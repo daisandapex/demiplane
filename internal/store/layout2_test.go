@@ -18,6 +18,13 @@ func TestConcurrentFirstOpensOfALegacyStore(t *testing.T) {
 	for round := 0; round < 10; round++ {
 		root := t.TempDir()
 		legacyTree(t, root)
+		// Modes the permission pass repairs, so the openers race through
+		// it as well as the move.
+		for _, p := range []string{"", "blobs", "sources", "sites"} {
+			if err := os.Chmod(filepath.Join(root, p), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
 		const n = 6
 		var wg sync.WaitGroup
 		errs := make([]error, n)

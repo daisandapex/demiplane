@@ -135,13 +135,17 @@ func open(dir string, shared bool) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create store dir: %w", err)
 	}
-	// Permissions are repaired first, as before the layout move: the move
-	// needs a writable root and traversable content directories.
-	if err := tightenStorePerms(dir); err != nil {
-		return nil, err
-	}
 	// The layout move and the schema and secret migrations inspect, then
 	// change, shared state; another process may be opening the store too.
+	// Taking the lock needs only the root and the lock file repaired; the
+	// rest of the permission pass runs under it, so it never inspects a
+	// directory another opener is moving.
+	if err := tightenPerms(dir, storePerms[:1]); err != nil {
+		return nil, err
+	}
+	if err := tightenPerms(dir, []permEntry{{openLockName, 0o600}}); err != nil {
+		return nil, err
+	}
 	unlockOpen, err := lockOpen(dir)
 	if err != nil {
 		return nil, err
@@ -152,6 +156,11 @@ func open(dir string, shared bool) (*Store, error) {
 			unlockOpen()
 		}
 	}()
+	// Permissions are repaired before the layout move too: it needs
+	// traversable content directories.
+	if err := tightenStorePerms(dir); err != nil {
+		return nil, err
+	}
 	// Content directories move under data/ and the old names become marker
 	// files that stop older binaries at open (layout.go).
 	if err := migrateLayout(dir); err != nil {
@@ -225,10 +234,7 @@ func open(dir string, shared bool) (*Store, error) {
 // storePerms lists the store paths that must be owner-only and the mode each
 // must have. Paths that do not exist yet are skipped; they are created
 // owner-only when first needed.
-var storePerms = []struct {
-	name string
-	mode os.FileMode
-}{
+var storePerms = []permEntry{
 	{"", 0o700},
 	{contentDirName, 0o700},
 	{filepath.Join(contentDirName, "blobs"), 0o700},
@@ -248,8 +254,17 @@ var storePerms = []struct {
 // metadata database files to exactly the modes in storePerms, logging each path
 // it changes. Exact rather than masked, so a file left without its owner bits
 // is repaired too instead of failing later.
-func tightenStorePerms(dir string) error {
-	for _, e := range storePerms {
+func tightenStorePerms(dir string) error { return tightenPerms(dir, storePerms) }
+
+// permEntry is a store path and the mode it must have.
+type permEntry struct {
+	name string
+	mode os.FileMode
+}
+
+// tightenPerms is tightenStorePerms for the given entries.
+func tightenPerms(dir string, entries []permEntry) error {
+	for _, e := range entries {
 		p := filepath.Join(dir, e.name)
 		fi, err := os.Stat(p)
 		if os.IsNotExist(err) {
