@@ -701,14 +701,14 @@ func runReceive(args []string) error {
 		return fmt.Errorf("--store-quota must be >= 0 (0 = unlimited)")
 	}
 
-	st, err := store.Open(c.dir)
+	// Shared with the running server: it removes what this replaces (it
+	// knows which old generations its downloads still hold), and sites/ is
+	// its alone, so this process never recovers or scavenges site trees.
+	st, err := store.OpenShared(c.dir)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-	// The running server removes what this replaces: it knows which old
-	// generations its downloads still hold.
-	st.DeferDeletions()
 	if c.storeQuota > 0 {
 		if err := st.SetQuota(c.storeQuota); err != nil {
 			return err

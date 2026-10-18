@@ -4,6 +4,7 @@
 package main
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,5 +73,48 @@ func TestReceiveLeavesReplacedGenerationToServer(t *testing.T) {
 	}
 	if n := blobFiles(t, dir, "notes"); n != 1 {
 		t.Fatalf("%d blob files after the server's sweep, want 1", n)
+	}
+}
+
+// TestReceiveLeavesSitesAlone: receive never recovers an interrupted site
+// replace or scavenges a site tree; those are the server's.
+func TestReceiveLeavesSitesAlone(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+	// A replace interrupted with the site moved aside, as the server would
+	// have recorded it.
+	backup := filepath.Join(dir, "sites", ".tmp-old-site-1")
+	if err := os.MkdirAll(backup, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(backup, "index.html"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(backup, old, old); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "meta.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO site_swaps (site, id, backup, staging) VALUES ('site', 'x', '.tmp-old-site-1', '.tmp-site-1')`); err != nil {
+		t.Fatal(err)
+	}
+	receiveOnce(t, dir, "notes", "one")
+	if _, err := os.Stat(backup); err != nil {
+		t.Fatalf("receive touched the moved-aside site: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sites", "site")); !os.IsNotExist(err) {
+		t.Fatalf("receive restored the site itself: %v", err)
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM site_swaps`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("swap records after receive = %d, %v; want 1", n, err)
 	}
 }

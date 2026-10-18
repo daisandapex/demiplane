@@ -304,6 +304,13 @@ func (w *SiteWriter) Commit() (int, error) {
 	s := w.store
 	unlock := s.locks.lock(siteLockKey(w.site))
 	defer unlock()
+	// An earlier replace of this site that was interrupted is settled first,
+	// so this one starts from the committed site and leaves no older copy
+	// recoverable behind it (siteswap.go).
+	if err := s.settleSwapLocked(w.site); err != nil {
+		w.Abort()
+		return 0, fmt.Errorf("an interrupted replace of this site could not be recovered: %w", err)
+	}
 	// Both renames and the accounting are one quota transition, so a
 	// concurrent usage recount never walks the tree halfway through the swap.
 	// The replaced tree moves to a staging name, owned until it is removed;
@@ -313,7 +320,10 @@ func (w *SiteWriter) Commit() (int, error) {
 	// never scavenged (siteswap.go).
 	s.beginTransition()
 	root := filepath.Dir(w.finalDir)
-	var backup string
+	var (
+		backup string
+		swap   siteSwap
+	)
 	if _, err := os.Stat(w.finalDir); err == nil {
 		backup = filepath.Join(root, tempPrefix+"old-"+strings.TrimPrefix(filepath.Base(w.tmpDir), tempPrefix))
 		s.registerStaging(filepath.Base(backup))
@@ -323,11 +333,19 @@ func (w *SiteWriter) Commit() (int, error) {
 			w.Abort()
 			return 0, fmt.Errorf("stage site replace: %w", err)
 		}
-		if err := s.recordSwap(w.site, filepath.Base(backup), filepath.Base(w.tmpDir)); err != nil {
+		id, err := newGen()
+		if err != nil {
 			return fail(err)
 		}
+		swap = siteSwap{site: w.site, id: id, backup: filepath.Base(backup), staging: filepath.Base(w.tmpDir)}
+		if err := s.recordSwap(swap); err != nil {
+			return fail(err)
+		}
+		if afterSwapRecord != nil {
+			afterSwapRecord()
+		}
 		if err := siteRename(w.finalDir, backup); err != nil {
-			if cerr := s.clearSwap(w.site); cerr != nil {
+			if cerr := s.clearSwap(swap); cerr != nil {
 				log.Printf("store: %s", logsafe.Err(cerr)) // recovery drops it: the site is still in place
 			}
 			return fail(err)
@@ -342,7 +360,7 @@ func (w *SiteWriter) Commit() (int, error) {
 			// stays and recovery restores it at the next Reconcile or start.
 			if rerr := siteRename(backup, w.finalDir); rerr != nil {
 				log.Printf("store: could not restore a site after a failed replace, will retry: %s", logsafe.Err(rerr))
-			} else if cerr := s.clearSwap(w.site); cerr != nil {
+			} else if cerr := s.clearSwap(swap); cerr != nil {
 				log.Printf("store: %s", logsafe.Err(cerr))
 			}
 			s.unregisterStaging(filepath.Base(backup))
@@ -358,7 +376,7 @@ func (w *SiteWriter) Commit() (int, error) {
 		// recovery finds the site in place and drops it.
 		if err := syncDir(root); err != nil {
 			log.Printf("store: could not sync the sites directory: %s", logsafe.Err(err))
-		} else if err := s.clearSwap(w.site); err != nil {
+		} else if err := s.clearSwap(swap); err != nil {
 			log.Printf("store: %s", logsafe.Err(err))
 		}
 	}
@@ -409,6 +427,10 @@ func (w *SiteWriter) Abort() error {
 // siteRename renames during a site swap; a test hook.
 var siteRename = os.Rename
 
+// afterSwapRecord is a test hook run by Commit after it has recorded a swap
+// and before the first rename.
+var afterSwapRecord func()
+
 // afterSiteBackup is a test hook run by Commit after it has moved the live
 // site aside and before it moves the new tree into place.
 var afterSiteBackup func()
@@ -437,8 +459,19 @@ func (s *Store) DeleteSite(site string) error {
 	}
 	unlock := s.locks.lock(siteLockKey(site))
 	defer unlock()
+	// An interrupted replace of this site is retired first: its record goes
+	// durably, then its trees, so recovery can never bring back a copy of a
+	// deleted site (siteswap.go). A site that existed only as such a copy
+	// counts as deleted.
+	retired, err := s.retireSwapLocked(site)
+	if err != nil {
+		return fmt.Errorf("delete site: %w", err)
+	}
 	dir := filepath.Join(s.siteRoot(), site)
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		if retired {
+			return nil
+		}
 		return ErrNotFound
 	}
 	if beforeSiteRemove != nil {

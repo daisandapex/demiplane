@@ -159,6 +159,9 @@ func (s *Store) stagingLive(name string) bool {
 // than orphanGrace as of now, never one a writer in this process owns, and
 // releases exactly what it removed. It returns how many entries it removed.
 func (s *Store) reclaimStagingTrees(now time.Time) (int, error) {
+	if s.shared {
+		return 0, nil // the server's to scavenge (OpenShared)
+	}
 	root := s.siteRoot()
 	ents, err := os.ReadDir(root)
 	if err != nil {

@@ -112,6 +112,9 @@ type Store struct {
 	// deferDeletions leaves removed generations' files to the serving
 	// process (DeferDeletions).
 	deferDeletions bool
+	// shared marks a store opened by a process other than the server
+	// (OpenShared): it leaves sites/ alone.
+	shared bool
 	// formKey signs reply-form submission tokens (secret.go).
 	formKey []byte
 }
@@ -122,6 +125,11 @@ type Store struct {
 // change logged): the database holds capability slugs and password hashes, and
 // the blobs and sources hold the bytes of password-gated artifacts.
 func Open(dir string) (*Store, error) {
+	return open(dir, false)
+}
+
+// open is Open, or OpenShared with shared set.
+func open(dir string, shared bool) (*Store, error) {
 	blobDir := filepath.Join(dir, "blobs")
 	sourceDir := filepath.Join(dir, sourceDirName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -162,7 +170,7 @@ func Open(dir string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open metadata db: %w", err)
 	}
-	s := &Store{root: dir, blobDir: blobDir, sourceDir: sourceDir, db: db}
+	s := &Store{root: dir, blobDir: blobDir, sourceDir: sourceDir, db: db, shared: shared, deferDeletions: shared}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, err
@@ -303,8 +311,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	if _, err := s.db.Exec(pendingDeletionsSchema); err != nil {
 		return fmt.Errorf("create pending deletions table: %w", err)
 	}
-	if _, err := s.db.Exec(siteSwapsSchema); err != nil {
-		return fmt.Errorf("migrate site swaps: %w", err)
+	if err := s.migrateSiteSwaps(); err != nil {
+		return err
 	}
 	if _, err := s.db.Exec(pendingWritesSchema); err != nil {
 		return fmt.Errorf("create pending writes table: %w", err)
