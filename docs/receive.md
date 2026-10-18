@@ -41,7 +41,10 @@ the entry, or a wrapper), never an argument. Nested tar paths flatten to hyphena
 
 `receive` enforces the `--store-quota` the server runs with (recorded in the
 store), or its own `--store-quota` if given. Receives on one store take turns:
-a second waits until the first has finished.
+a second waits until the first has finished, for at most 30 seconds, then
+fails with "another demiplane receive is still running". A receive whose stdin
+sends nothing for 60 seconds gives up, so a stalled publisher cannot hold the
+turn for good.
 
 The binary in `command=` writes to the same store as `serve`, so upgrade it with
 `serve`: once a newer `serve` has opened the store, an older `receive` cannot

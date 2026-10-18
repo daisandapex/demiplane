@@ -174,13 +174,13 @@ func TestServeLockIsExclusive(t *testing.T) {
 // TestReceivesTakeTurns: a second receive waits for the first to finish.
 func TestReceivesTakeTurns(t *testing.T) {
 	root := t.TempDir()
-	unlock, err := LockReceive(root)
+	unlock, err := LockReceive(root, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := make(chan struct{})
 	go func() {
-		u, err := LockReceive(root)
+		u, err := LockReceive(root, 5*time.Second)
 		if err == nil {
 			u()
 		}
@@ -196,5 +196,24 @@ func TestReceivesTakeTurns(t *testing.T) {
 	case <-got:
 	case <-time.After(5 * time.Second):
 		t.Fatal("a second receive never got its turn")
+	}
+}
+
+// TestReceiveLockWaitIsBounded: a receive waiting behind a stuck one gives
+// up after its wait instead of queueing forever.
+func TestReceiveLockWaitIsBounded(t *testing.T) {
+	root := t.TempDir()
+	unlock, err := LockReceive(root, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	start := time.Now()
+	_, err = LockReceive(root, 300*time.Millisecond)
+	if !errors.Is(err, ErrReceiveBusy) {
+		t.Fatalf("LockReceive behind a held lock = %v, want ErrReceiveBusy", err)
+	}
+	if d := time.Since(start); d < 250*time.Millisecond || d > 3*time.Second {
+		t.Fatalf("gave up after %v, want about 300ms", d)
 	}
 }

@@ -5,6 +5,8 @@
 
 package store
 
+import "time"
+
 // openLockName is the open lock's file (openlock_unix.go); unused here but
 // for the permission pass.
 const openLockName = ".open.lock"
@@ -14,6 +16,6 @@ const openLockName = ".open.lock"
 func lockOpen(string) (func(), error) { return func() {}, nil }
 
 // LockReceive and LockServe are no-ops outside Unix (see lockOpen).
-func LockReceive(string) (func(), error) { return func() {}, nil }
+func LockReceive(string, time.Duration) (func(), error) { return func() {}, nil }
 
 func LockServe(string) (func(), error) { return func() {}, nil }

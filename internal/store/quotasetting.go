@@ -16,6 +16,9 @@ const (
 	serveLockName   = ".serve.lock"
 )
 
+// ErrReceiveBusy: another receive held the receive lock for the whole wait.
+var ErrReceiveBusy = errors.New("another demiplane receive is still running on this store; try again")
+
 // ErrStoreServed: another process holds the store's serve lock.
 var ErrStoreServed = errors.New("the store is in use by a running demiplane serve (or another maintenance command)")
 

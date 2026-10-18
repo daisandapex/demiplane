@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/daisandapex/demiplane/internal/store"
 )
@@ -95,5 +96,51 @@ func TestDeleteSiteCommand(t *testing.T) {
 	defer st.Close()
 	if st.SiteExists("demo") {
 		t.Fatal("site still exists after delete-site")
+	}
+}
+
+// TestReceiveGivesUpOnAStalledStdin: a receive whose stdin stops sending
+// gives up (releasing the receive lock) instead of holding it forever.
+func TestReceiveGivesUpOnAStalledStdin(t *testing.T) {
+	dir := t.TempDir()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	w.WriteString("partial")
+	fired := make(chan struct{}, 1)
+	prevStall, prevExit := receiveStall, stallExit
+	receiveStall = 200 * time.Millisecond
+	stallExit = func() {
+		select {
+		case fired <- struct{}{}:
+		default:
+		}
+		w.Close() // in the binary this exits the process
+	}
+	defer func() { receiveStall, stallExit = prevStall, prevExit }()
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer devnull.Close()
+	stdin, stdout := os.Stdin, os.Stdout
+	os.Stdin, os.Stdout = r, devnull
+	defer func() { os.Stdin, os.Stdout = stdin, stdout }()
+	done := make(chan struct{})
+	go func() {
+		runReceive([]string{"--store", dir, "--slug", "stalled"})
+		close(done)
+	}()
+	select {
+	case <-fired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stalled stdin was never given up on")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("receive did not return after giving up")
 	}
 }
