@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"html"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -473,7 +474,21 @@ func parseSubmission(r *http.Request) (kind, body, token string, isJSON bool, er
 			Body  string `json:"body"`
 			Token string `json:"token"`
 		}
-		if derr := json.NewDecoder(r.Body).Decode(&in); derr != nil {
+		dec := json.NewDecoder(r.Body)
+		derr := dec.Decode(&in)
+		if derr == nil {
+			// The whole body counts against the request cap and must hold one
+			// JSON value: read on to its end, so trailing data past the cap is
+			// a 413 and any trailing value is malformed.
+			var extra json.RawMessage
+			if terr := dec.Decode(&extra); terr != io.EOF {
+				derr = terr
+				if derr == nil {
+					derr = errors.New("trailing data after the JSON value")
+				}
+			}
+		}
+		if derr != nil {
 			// Keep the size limit's error, so an oversized JSON body is a
 			// 413 like an oversized form, not a malformed one.
 			var maxErr *http.MaxBytesError

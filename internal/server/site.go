@@ -207,7 +207,7 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 // the byte quota, or the cap on site files and directories.
 func siteQuotaMessage(err error) string {
 	if errors.Is(err, store.ErrSiteEntries) {
-		return "the sites hold the maximum number of files and directories; delete a site"
+		return "the sites hold the maximum number of files and directories; remove a site's directory from the store while the server is stopped"
 	}
 	return quotaMessage
 }

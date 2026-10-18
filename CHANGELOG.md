@@ -282,7 +282,9 @@ All notable changes to demiplane are documented here. The format follows
 - **Upgrade note: each site file and directory counts 4 KiB toward
   `--store-quota`,** and the sites hold at most 100,000 files and directories
   in all. An existing store over either limit keeps serving, but further site
-  publishes get `507` until sites are deleted.
+  publishes get `507` until space is freed. There is no HTTP endpoint that
+  deletes a site yet: stop the server, remove the site's directory under
+  `<store>/sites/`, and start it again (usage is measured at startup).
 - **Upgrade note: each artifact counts 4 KiB toward `--store-quota`,** and
   `?filename=` is capped at 255 bytes. Size the quota with that in mind; a
   store already near its quota may refuse new artifacts with `507`.
@@ -346,7 +348,7 @@ All notable changes to demiplane are documented here. The format follows
 - **Upgrade note: a long bulk rerender streams.** A `POST /rerender` that
   runs over a second answers `200` at once and sends blank lines until its
   report; the JSON report adds `complete`, plus `next` when the sweep stopped
-  early, and `?after=<slug>` resumes a sweep.
+  early, and `?after=<next>` (the returned cursor) resumes a sweep.
 - **Upgrade note: bulk rerender reports are capped.** `POST /rerender` lists
   at most 100 results and 100 failures (new `failed_count` and `truncated`
   fields carry the rest); read the counts for totals. A second sweep while one

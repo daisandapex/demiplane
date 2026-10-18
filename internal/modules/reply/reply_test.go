@@ -540,3 +540,17 @@ func TestJSONOverRequestCapIs413(t *testing.T) {
 		t.Errorf("JSON over the request cap = %d, want 413", code)
 	}
 }
+
+// TestJSONTrailingData: a JSON reply followed by padding past the request cap
+// is a 413, and one followed by a second value is malformed.
+func TestJSONTrailingData(t *testing.T) {
+	ts, _ := setup(t)
+	padded := `{"kind":"approve"}` + strings.Repeat(" ", maxRequestBody+1024)
+	if code, _ := do(t, http.MethodPost, ts.URL+"/reply/report", "application/json", padded, false); code != http.StatusRequestEntityTooLarge {
+		t.Errorf("JSON padded past the request cap = %d, want 413", code)
+	}
+	two := `{"kind":"approve"}{"kind":"defer"}`
+	if code, _ := do(t, http.MethodPost, ts.URL+"/reply/report", "application/json", two, false); code != http.StatusBadRequest {
+		t.Errorf("two JSON values = %d, want 400", code)
+	}
+}
