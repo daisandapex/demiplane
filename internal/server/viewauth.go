@@ -107,7 +107,9 @@ type viewGate struct {
 	// inflight counts each client's attempts waiting for or holding a KDF
 	// slot (passwordClientInflight).
 	inflight map[string]int
-	now      func() time.Time // time source; a field so tests can move it
+	// flights are the verifications in progress, by client and credential.
+	flights map[string]*kdfFlight
+	now     func() time.Time // time source; a field so tests can move it
 }
 
 // passwordClientInflight is how many password checks one client may have
@@ -240,6 +242,46 @@ func (g *viewGate) check(ctx context.Context, r *http.Request, hash string) (res
 		return module.ViewOK, 0
 	}
 	client := limit.ClientKey(r)
+	// Concurrent checks of one credential by one client (a browser fetching
+	// a page's resources in parallel before the password is remembered)
+	// share one verification: one KDF run, one queue place, one result.
+	key := client + "\x00" + string(ck[:])
+	g.mu.Lock()
+	if f, ok := g.flights[key]; ok {
+		g.mu.Unlock()
+		select {
+		case <-f.done:
+			return f.res, f.wait
+		case <-ctx.Done():
+			return module.ViewBusy, time.Second
+		}
+	}
+	f := &kdfFlight{done: make(chan struct{})}
+	if g.flights == nil {
+		g.flights = map[string]*kdfFlight{}
+	}
+	g.flights[key] = f
+	g.mu.Unlock()
+	defer func() {
+		f.res, f.wait = res, wait
+		g.mu.Lock()
+		delete(g.flights, key)
+		g.mu.Unlock()
+		close(f.done)
+	}()
+	return g.verify(ctx, hash, pass, ck, client, now)
+}
+
+// kdfFlight is one client's verification of one credential in progress;
+// identical checks wait for its result (check).
+type kdfFlight struct {
+	done chan struct{}
+	res  module.ViewAccess
+	wait time.Duration
+}
+
+// verify is check's verification, budgets and KDF, for one flight.
+func (g *viewGate) verify(ctx context.Context, hash, pass string, ck [32]byte, client string, now time.Time) (module.ViewAccess, time.Duration) {
 	clientTarget := client + "\x00" + hash
 	// Shared failure budgets refuse only clients with recent completed
 	// failures; an attempt still in flight is not one.
