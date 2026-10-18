@@ -86,9 +86,10 @@ curl -H "Authorization: Bearer $TOKEN" \
 Delete one reply (`204`, `404` for an unknown id) or every reply to a slug
 (`200` with `{"deleted": n}`). Deleting is how replies give back their share of
 `reply_max_per_artifact`, `reply_max_total` and `reply_max_bytes`. Replies also
-go with their artifact: deleting it, or its expiry, deletes them, and an
-hourly pass removes any left for an artifact that no longer exists, so a later
-artifact published under the same slug starts with none.
+go with their artifact: deleting it, or its expiry, deletes them, so a later
+artifact published under the same slug starts with none. A deletion that
+fails is logged and not retried, and replies to artifacts deleted before this
+release stay; this route removes them.
 
 ### `POST /answer/{slug}`: same-origin answer submit (content plane, viewer)
 The **content-origin** submit path for the inline reply box (below). It records a

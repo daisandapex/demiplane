@@ -131,23 +131,16 @@ func (m *Module) ensureStore(host module.Host) {
 		log.Printf("reply module: storage unavailable, serving 503: %s", logsafe.Err(err))
 		return
 	}
-	// An artifact's replies go with it: when its row is deleted (and, for any
-	// deleted while this could not run, at the sweeper's next pass), so a
-	// later artifact published under the same slug starts with none.
+	// An artifact's replies go with it, deleted while its slug is still
+	// locked, so a later artifact published under the slug starts with none.
+	// A deletion that fails is logged and not retried: those replies stay
+	// until DELETE /replies?slug= removes them.
 	rs := m.rs
-	st := host.Store()
-	st.OnRemove(func(slug string) {
+	host.Store().OnRemove(func(slug string) {
 		if _, err := rs.deleteSlug(slug); err != nil {
-			log.Printf("reply: could not remove a deleted artifact's replies, the sweeper will retry: %s", logsafe.Err(err))
+			log.Printf("reply: could not remove a deleted artifact's replies (DELETE /replies?slug= removes them): %s", logsafe.Err(err))
 		}
 	})
-	rs.artifactGone = func(slug string) (bool, error) {
-		_, err := st.LookupPublic(slug)
-		if errors.Is(err, store.ErrNotFound) {
-			return true, nil
-		}
-		return false, err
-	}
 	// Retention (reply_retention, off by default) runs here, never on the
 	// submit path.
 	m.rs.startSweeper(func() time.Duration { return m.admission().lim.Retention }, retentionEvery)

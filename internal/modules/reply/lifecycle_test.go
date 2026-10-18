@@ -37,29 +37,6 @@ func TestDeletedArtifactTakesItsReplies(t *testing.T) {
 	}
 }
 
-// TestOrphanRepliesAreSwept: replies to an artifact deleted while nothing
-// could remove them (an older binary, a crash) go at the sweeper's pass;
-// replies to a live artifact stay.
-func TestOrphanRepliesAreSwept(t *testing.T) {
-	_, m := setup(t)
-	now := time.Now()
-	for _, slug := range []string{"report", "gone"} {
-		if _, err := m.rs.add(slug, "comment", "r", now); err != nil {
-			t.Fatal(err)
-		}
-	}
-	n, err := m.rs.sweepOrphans()
-	if err != nil || n != 1 {
-		t.Fatalf("sweepOrphans = %d, %v; want 1", n, err)
-	}
-	if c := storedCount(t, m, "gone"); c != 0 {
-		t.Fatalf("%d replies left for a missing artifact", c)
-	}
-	if c := storedCount(t, m, "report"); c != 1 {
-		t.Fatalf("%d replies left for a live artifact, want 1", c)
-	}
-}
-
 // TestRepliesCanBeDeleted: the operator frees reply capacity through the
 // bearer-gated API, one reply or a slug's at a time.
 func TestRepliesCanBeDeleted(t *testing.T) {
