@@ -4,10 +4,12 @@
 package server
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -402,9 +404,13 @@ func TestStalledDownloadKeepsReplacedBytesCharged(t *testing.T) {
 	}
 	used, _ := st.Usage()
 	t.Logf("usage with the first generation still being served: %d (quota %d)", used, limit)
-	code, b := do(t, http.MethodPost, ts.URL+"/publish?slug=big", "", body)
-	if code != http.StatusInsufficientStorage {
-		t.Fatalf("replace with an open old generation = %d %q, want 507", code, b)
+	// The server refuses this one partway through the body and closes the
+	// connection without reading the rest, so the request is sent the way a
+	// streaming client sends it: the body from one goroutine while the
+	// response is read from another, so the 507 is seen even if the body
+	// write is cut off.
+	if status := postReadingEarly(t, ts.URL, "/publish?slug=big", body); !strings.Contains(status, " 507 ") {
+		t.Fatalf("replace with an open old generation = %q, want 507", status)
 	}
 	resp.Body.Close()
 	deadline := time.Now().Add(10 * time.Second)
@@ -421,4 +427,26 @@ func TestStalledDownloadKeepsReplacedBytesCharged(t *testing.T) {
 	if code, b := do(t, http.MethodPost, ts.URL+"/publish?slug=big", "", body); code != http.StatusCreated {
 		t.Fatalf("replace after the reader went away = %d %q", code, b)
 	}
+}
+
+// postReadingEarly POSTs body to base+path over a raw connection, writing the
+// body in the background and returning the response status line as soon as
+// it arrives, whether or not the whole body was written.
+func postReadingEarly(t *testing.T, base, path, body string) string {
+	t.Helper()
+	c, err := net.Dial("tcp", strings.TrimPrefix(base, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	go func() {
+		_, _ = fmt.Fprintf(c, "POST %s HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", path, len(body))
+		_, _ = io.WriteString(c, body)
+	}()
+	_ = c.SetReadDeadline(time.Now().Add(30 * time.Second))
+	line, err := bufio.NewReader(c).ReadString('\n')
+	if err != nil {
+		t.Fatalf("no response status: %v", err)
+	}
+	return strings.TrimSpace(line)
 }
