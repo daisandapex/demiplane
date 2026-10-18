@@ -195,16 +195,22 @@ alternative of an origin per artifact, are in [DESIGN.md](DESIGN.md#content-isol
   including another site's sandboxed frame, can therefore read public JS, CSS
   and fonts, much as any page can already run or apply them. Keep secrets out
   of public scripts and stylesheets.
-- **A service worker registered before this release** is removed the next
-  time the browser checks it for an update, which it does when it loads a page
-  in the worker's scope: every service-worker script fetch gets a fixed script
-  that replaces the old worker, deletes Cache Storage, unregisters itself and
-  reloads the pages it controlled. Until the viewer next loads a page on the
-  content origin, the old worker stays installed but idle. Only Cache Storage
-  is cleared; other storage a hostile page wrote under an older release is
-  left in place and is unreachable from sandboxed pages. `Clear-Site-Data` is
-  not sent: with `--unsafe-no-sandbox` pages use storage legitimately, and any
-  page could trigger it.
+- **A service worker registered before this release** is cleaned up
+  eventually, not prevented from acting. Every service-worker script fetch
+  gets a fixed script that replaces the old worker, deletes Cache Storage,
+  unregisters itself and reloads the pages it controlled. The browser fetches
+  it during its update check, which runs after the old worker has handled the
+  navigation that triggered the check. So the first navigation a viewer makes
+  on the content origin after the upgrade is still exposed to the old worker:
+  its URL, so a capability URL, and with cached credentials the response.
+  Until then the old worker stays installed. Moving the content plane to a
+  new origin (new port or host name via `--content-bind` and
+  `--content-base-url`), or viewers clearing site data for the content
+  origin, prevents this; links to the old origin still reach the old worker
+  first. Only Cache Storage is cleared; other storage a hostile page wrote
+  under an older release is left in place and is unreachable from sandboxed
+  pages. `Clear-Site-Data` is not sent: with `--unsafe-no-sandbox` pages use
+  storage legitimately, and any page could trigger it.
 - **Content-plane pages demiplane writes itself** (the `?live` wrapper, the
   themed 404, the reply confirmation) run unsandboxed in the content origin.
   They carry no uploaded script.

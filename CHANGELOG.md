@@ -14,11 +14,15 @@ All notable changes to demiplane are documented here. The format follows
   opaque origin and cannot read other artifacts (with or without the viewer's
   cached credentials) or register a service worker. Public module scripts,
   `crossorigin` stylesheets and fonts stay loadable from sandboxed pages.
-- **Service workers registered before this release remove themselves.** A
-  service-worker script fetch on either plane, at any path, is answered with a
-  fixed script that replaces the registered worker, clears Cache Storage,
-  unregisters itself and reloads the pages it controlled. No URL serves any
-  other worker script.
+- **Service workers registered before this release are removed after the
+  first visit.** A service-worker script fetch on either plane, at any path,
+  is answered with a fixed script that replaces the registered worker, clears
+  Cache Storage, unregisters itself and reloads the pages it controlled. No
+  URL serves any other worker script. The browser installs the replacement
+  only after the old worker has handled the navigation that triggered the
+  check, so on an instance where a hostile page may have registered a worker,
+  the first page a viewer opens after the upgrade is still exposed to it; see
+  the upgrade note.
 - **Private and password-protected responses are not cached or referred.**
   They, their `401` and every `?live` wrapper carry `Cache-Control: private,
   no-store` and `Referrer-Policy: no-referrer`, and protected artifacts carry
@@ -168,6 +172,9 @@ All notable changes to demiplane are documented here. The format follows
   server's sweep removes it. At most 10,000 may be waiting; past that, a
   publish through `receive` that would replace an artifact is refused until
   the server has swept. Deletes are never refused.
+- **An interrupted site replace no longer loses the site.** The replace is
+  recorded before the old site is moved aside, and startup and the hourly
+  reconcile restore the old site (or finish the replace) before any cleanup.
 - **The server no longer releases quota it never counted.** Removing an
   artifact, an old version or a pending deletion that `demiplane receive`
   created after the server last measured its usage no longer lowers the
@@ -267,10 +274,22 @@ All notable changes to demiplane are documented here. The format follows
   `POST /rerender` after upgrading, or republish any page without retained
   source. A tool that posts replies from a browser must send the form's
   `token` field (JSON: `"token"`).
-- **Upgrade note: old service workers are cleaned up on first visit.** A
-  browser that had a worker registered on the content origin removes it the
-  next time it loads a page there, and those pages reload once. No operator
-  action is needed.
+- **Upgrade note: move the content origin if hostile pages may have been
+  published.** Under an affected release, a published page could register a
+  service worker on the content origin. The kill switch removes such a
+  worker eventually, but not before it has handled the first navigation a
+  viewer makes after the upgrade: that worker can read the URL, so a
+  capability URL leaks, and with cached credentials it can read the
+  response, so a password-protected artifact leaks too. For an instance that
+  may have served hostile pages, serve the content plane from a new origin:
+  a new port or host name, set with `--content-bind` and `--content-base-url`
+  (a same-origin instance gains a separate content origin this way). Links to
+  the old origin still reach the old worker first, so send viewers only
+  new-origin links, and republish any private artifact whose old-origin URL
+  may have been opened after the upgrade. If the origin cannot move, viewers
+  must clear site data for the content origin (browser settings, site data
+  for that host and port) before opening confidential pages. Instances that
+  never published untrusted pages need no action.
 - **Upgrade note: markdown input caps.** A `?render=md` document with more
   than 2,097,152 lines, more than 50,000 headings or lists nested deeper than
   64 levels is refused with `413`, as is, with the meta-header on, frontmatter
