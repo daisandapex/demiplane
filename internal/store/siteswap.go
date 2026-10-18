@@ -159,6 +159,11 @@ func (s *Store) swapNames() (map[string]bool, error) {
 // outstanding swaps and before it locks each site.
 var beforeSwapLock func()
 
+// sitesSync makes the renames in the sites directory durable; a test hook.
+// A swap record is cleared only once its outcome is durable, so a power
+// loss cannot undo a restore whose record is gone.
+var sitesSync = syncDir
+
 // recoverSiteSwaps settles every outstanding site swap (see above). A swap
 // it cannot settle yet is logged and kept for the next try. A shared store
 // (OpenShared) leaves them to the server.
@@ -224,6 +229,11 @@ func (s *Store) settleSwapLocked(site string) error {
 		return err
 	}
 	if have {
+		// The site is in place, but the rename that put it there may not be
+		// durable yet (its sync failed earlier).
+		if err := sitesSync(root); err != nil {
+			return fmt.Errorf("sync sites: %w", err)
+		}
 		return s.clearSwap(sw)
 	}
 	var from string
@@ -249,7 +259,7 @@ func (s *Store) settleSwapLocked(site string) error {
 	if err != nil {
 		return fmt.Errorf("restore site: %w", err)
 	}
-	if err := syncDir(root); err != nil {
+	if err := sitesSync(root); err != nil {
 		return fmt.Errorf("restore site: %w", err)
 	}
 	return s.clearSwap(sw)

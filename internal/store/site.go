@@ -360,6 +360,9 @@ func (w *SiteWriter) Commit() (int, error) {
 			// stays and recovery restores it at the next Reconcile or start.
 			if rerr := siteRename(backup, w.finalDir); rerr != nil {
 				log.Printf("store: could not restore a site after a failed replace, will retry: %s", logsafe.Err(rerr))
+			} else if serr := sitesSync(root); serr != nil {
+				// Restored but not durably: recovery syncs, then clears.
+				log.Printf("store: could not sync the sites directory: %s", logsafe.Err(serr))
 			} else if cerr := s.clearSwap(swap); cerr != nil {
 				log.Printf("store: %s", logsafe.Err(cerr))
 			}
@@ -374,7 +377,7 @@ func (w *SiteWriter) Commit() (int, error) {
 	if backup != "" {
 		// The record goes only once both renames are durable; until then
 		// recovery finds the site in place and drops it.
-		if err := syncDir(root); err != nil {
+		if err := sitesSync(root); err != nil {
 			log.Printf("store: could not sync the sites directory: %s", logsafe.Err(err))
 		} else if err := s.clearSwap(swap); err != nil {
 			log.Printf("store: %s", logsafe.Err(err))
