@@ -424,7 +424,7 @@ only in `-tags reply` builds.
 | Request body | non-upload body must arrive within; uploads: grace and longest stall | 30s | `--body-timeout` |
 | Request body | upload average rate after the grace; slower gets `408` | 16 KiB/s | `--upload-min-rate` |
 | Response | write deadline per response; an upload's starts at its longest allowed body time plus this, and tightens to this once the body is read | 60s | `--response-timeout` |
-| Response | extra time for an artifact or site file: size at this rate | 16 KiB/s | `--download-min-rate` |
+| Response | an artifact or site file download's average rate after the response timeout; each write must also go out within the response timeout, so a reader that falls behind or stops is cut | 16 KiB/s | `--download-min-rate` |
 | Request host | `Host` header length; longer gets `400` before routing | 255 bytes | (code) |
 | Listings | artifacts per `/list` response or `/gallery` page / replies per `/replies` response; more via the `?after=` cursor | 200 / 100 | (code) |
 | Listings | index entries one `/list` or `/gallery` page examines (expired ones skipped) | 1,201 | (code) |

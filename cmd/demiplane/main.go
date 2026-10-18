@@ -167,7 +167,7 @@ func runServe(args []string) error {
 	bodyTimeout := fs.Duration("body-timeout", 30*time.Second, "time a request may take to send its body; for uploads, the grace before --upload-min-rate applies and the longest allowed stall (0 = no limit)")
 	uploadMinRate := fs.Int64("upload-min-rate", 16<<10, "minimum average upload rate in bytes/s after --body-timeout (0 = no rate floor)")
 	responseTimeout := fs.Duration("response-timeout", 60*time.Second, "write deadline for each response, plus size / --download-min-rate for artifact bodies; live-reload streams are exempt (0 = none)")
-	downloadMinRate := fs.Int64("download-min-rate", 16<<10, "bytes/s an artifact download is given time for on top of --response-timeout (0 = no allowance for size)")
+	downloadMinRate := fs.Int64("download-min-rate", 16<<10, "bytes/s an artifact download must average after --response-timeout; each write must also go out within --response-timeout (0 = whole body due within --response-timeout)")
 	maxConns := fs.Int("max-conns", 1024, "open connections per listener; further connections wait (0 = unlimited)")
 	maxConnsPerClient := fs.Int("max-conns-per-client", 64, "open connections per client address per listener; further ones are closed (0 = unlimited)")
 	maxRequests := fs.Int("max-requests", 256, "requests in progress per listener; the excess gets 503 (0 = unlimited)")

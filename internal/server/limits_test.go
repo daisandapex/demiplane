@@ -212,7 +212,9 @@ func TestBodyDeadlineLiftsAfterTheBody(t *testing.T) {
 
 func TestSlowReaderIsCutAfterItsAllowance(t *testing.T) {
 	s, st := limitServer(t, Config{Requests: RequestLimits{
-		ResponseTimeout: 200 * time.Millisecond,
+		// The timeout is also the longest one write may wait (pacedWriter);
+		// on loopback a full socket can pause about 200ms before it drains.
+		ResponseTimeout: time.Second,
 		DownloadMinRate: 32 << 20, // 32 MiB/s: a 32 MiB body gets about 1s more
 	}})
 	big := bytes.Repeat([]byte("q"), 32<<20)
@@ -479,5 +481,45 @@ func TestSubscribedStreamLeavesAdmission(t *testing.T) {
 	r2.Body.Close()
 	if r2.StatusCode != http.StatusOK {
 		t.Fatalf("GET with a stream open and one request slot = %d, want 200", r2.StatusCode)
+	}
+}
+
+// TestStalledReaderIsCutDespiteALongAllowance: a download's allowance at the
+// minimum rate does not let a reader that has stopped reading hold its
+// connection (and admission slot) for the whole allowance: each write must
+// make progress within the response timeout.
+func TestStalledReaderIsCutDespiteALongAllowance(t *testing.T) {
+	s, st := limitServer(t, Config{Requests: RequestLimits{
+		ResponseTimeout: time.Second,
+		DownloadMinRate: 1 << 10, // 1 KiB/s: hours of allowance for this body
+	}})
+	big := bytes.Repeat([]byte("q"), 32<<20)
+	if _, err := st.Put(store.PutOptions{Slug: "big", Filename: "big.bin"}, bytes.NewReader(big)); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(s.ContentHandler())
+	t.Cleanup(ts.Close)
+	c, err := net.Dial("tcp", ts.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprintf(c, "GET /big HTTP/1.1\r\nHost: x\r\n\r\n")
+	time.Sleep(3 * time.Second) // stop reading
+	_ = c.SetReadDeadline(time.Now().Add(20 * time.Second))
+	got, _ := io.Copy(io.Discard, bufio.NewReader(c))
+	if got >= int64(len(big)) {
+		t.Fatalf("a reader that stalled still received all %d bytes", got)
+	}
+
+	// A reader that keeps up receives everything.
+	resp, err := http.Get(ts.URL + "/big")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, _ := io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if n != int64(len(big)) {
+		t.Fatalf("a prompt reader got %d of %d bytes", n, len(big))
 	}
 }

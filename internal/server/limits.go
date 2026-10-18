@@ -274,18 +274,52 @@ func refuseBusy(w http.ResponseWriter, msg string) {
 	http.Error(w, msg, http.StatusServiceUnavailable)
 }
 
-// extendWriteDeadline gives a response of size bytes time to reach a client
-// reading at the minimum download rate, on top of the base response timeout.
-func (s *Server) extendWriteDeadline(w http.ResponseWriter, size int64) {
+// pacedWriter gives a response of size bytes time to reach a client reading
+// at the minimum download rate, on top of the base response timeout, and no
+// more: like bodyDeadline for uploads, the write deadline moves with
+// progress. Before byte n+1 goes out, it is start + timeout + (n+1)/rate,
+// and never more than timeout after now, so a reader that falls below the
+// rate (after the base timeout) or stops reading is cut instead of holding
+// its connection and admission slot for the whole allowance.
+type pacedWriter struct {
+	http.ResponseWriter
+	rc      *http.ResponseController
+	start   time.Time
+	timeout time.Duration
+	rate    int64
+	n       int64
+}
+
+func (p *pacedWriter) Write(b []byte) (int, error) {
+	budget := time.Duration(float64(p.n+int64(len(b))) / float64(p.rate) * float64(time.Second))
+	d := p.start.Add(p.timeout + budget)
+	if stall := time.Now().Add(p.timeout); stall.Before(d) {
+		d = stall
+	}
+	_ = p.rc.SetWriteDeadline(d)
+	n, err := p.ResponseWriter.Write(b)
+	p.n += int64(n)
+	return n, err
+}
+
+// Unwrap lets http.ResponseController reach the connection.
+func (p *pacedWriter) Unwrap() http.ResponseWriter { return p.ResponseWriter }
+
+// pacedDownload returns the writer a download of size bytes is sent
+// through (pacedWriter). Without a response timeout it is w; without a
+// minimum rate the whole body is due one timeout from now.
+func (s *Server) pacedDownload(w http.ResponseWriter, size int64) http.ResponseWriter {
 	l := s.reqLimits
 	if l.ResponseTimeout <= 0 {
-		return
+		return w
 	}
-	d := l.ResponseTimeout
-	if l.DownloadMinRate > 0 && size > 0 {
-		d += time.Duration(float64(size) / float64(l.DownloadMinRate) * float64(time.Second))
+	rc := http.NewResponseController(w)
+	if l.DownloadMinRate <= 0 || size <= 0 {
+		_ = rc.SetWriteDeadline(time.Now().Add(l.ResponseTimeout))
+		return w
 	}
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(d))
+	_ = rc.SetWriteDeadline(time.Now().Add(l.ResponseTimeout))
+	return &pacedWriter{ResponseWriter: w, rc: rc, start: time.Now(), timeout: l.ResponseTimeout, rate: l.DownloadMinRate}
 }
 
 // bodyDeadline enforces the body limits on reads. With rate == 0 the whole

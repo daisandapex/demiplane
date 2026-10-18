@@ -899,11 +899,11 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Time to send the body to a slow but honest reader, and no more.
-	s.extendWriteDeadline(w, art.Size)
+	pw := s.pacedDownload(w, art.Size)
 	// ServeContent handles Range requests, conditional GETs, and keeps the
 	// content-type we set above.
 	singleRangeOnly(r)
-	http.ServeContent(w, r, art.Filename, lastModified, f)
+	http.ServeContent(pw, r, art.Filename, lastModified, f)
 }
 
 // isEntityTag reports whether an If-Range value is an entity tag rather than

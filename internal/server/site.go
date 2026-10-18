@@ -392,9 +392,10 @@ func (s *Server) serveSiteFile(w http.ResponseWriter, r *http.Request, site, rel
 		w.Header().Set("Content-Disposition",
 			fmt.Sprintf("attachment; filename=%q", sanitizeFilename(path.Base(rel))))
 	}
+	pw := w
 	if fi, err := f.Stat(); err == nil {
-		s.extendWriteDeadline(w, fi.Size())
+		pw = s.pacedDownload(w, fi.Size())
 	}
 	singleRangeOnly(r)
-	http.ServeContent(w, r, path.Base(rel), mod, f)
+	http.ServeContent(pw, r, path.Base(rel), mod, f)
 }

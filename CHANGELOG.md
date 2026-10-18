@@ -57,7 +57,8 @@ All notable changes to demiplane are documented here. The format follows
   budgets, once spent, refuse only clients that failed recently, so other
   clients' wrong guesses cannot lock a viewer out. A verified password stays
   remembered while it is in use (`--password-*` flags). Request bodies
-  have deadlines (uploads a minimum rate), responses have write deadlines,
+  have deadlines (uploads a minimum rate), responses have write deadlines
+  (downloads a minimum rate, and a reader that stops is cut),
   and requests and connections in progress are capped per listener and per
   client. Markdown rendering bounds table width, table cells and output size,
   runs in linear time, stops when the client goes away, and runs at bounded
