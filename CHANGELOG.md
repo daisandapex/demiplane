@@ -179,6 +179,12 @@ All notable changes to demiplane are documented here. The format follows
 - **Multipart publish headers are limited to 16 KiB.** At most 16 KiB may
   precede a multipart publish's file part body (preamble, earlier form
   fields and the part's headers); more is refused with `431`.
+- **`POST /rerender` no longer reveals private capability slugs.** It
+  reported every artifact it rebaked by slug, private ones included, so on
+  an instance without a bearer token any client that could reach the control
+  plane could list private artifacts' capability URLs. Private artifacts are
+  still rebaked but reported as a one-way `slug#…` tag with `"private": true`,
+  and the resume cursor is an opaque number. Affects 2.0.0.
 - **Bulk rerender is bounded.** `POST /rerender` reads the store a page at a
   time, lists at most 100 results and 100 failures, stops when its request
   ends, and runs one sweep at a time (another gets `409`). It refuses a
@@ -334,6 +340,9 @@ All notable changes to demiplane are documented here. The format follows
 - **The browse index shows a large series as `(100+)`,** or `(N+)` when its
   size was not fully counted, and the landing no longer states the total
   number of artifacts; the browse footer reads "More in the gallery".
+- **Upgrade note: bulk rerender cursors changed.** The `next` cursor and
+  `?after=` are now an opaque number, not a slug; a slug in `?after=` gets
+  `400`, so start a sweep from an earlier version again without `?after=`.
 - **Upgrade note: a long bulk rerender streams.** A `POST /rerender` that
   runs over a second answers `200` at once and sends blank lines until its
   report; the JSON report adds `complete`, plus `next` when the sweep stopped

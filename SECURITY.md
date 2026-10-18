@@ -472,7 +472,10 @@ Notes on the limits:
   publish may send at most 16 KiB before its file part's body (`431`
   otherwise), so part headers are never held beyond that, and only the
   filename is kept while the body streams.
-- **Bulk rerender.** `POST /rerender` is the one response that outlives
+- **Bulk rerender.** It rebakes private artifacts too but never names them:
+  they are counted and appear only as a one-way tag, and its resume cursor is
+  an opaque number, so the report cannot disclose a capability slug.
+  `POST /rerender` is the one response that outlives
   `--response-timeout`: it may run for up to 30 minutes, writing a newline
   every second, plus up to 10 seconds to send its report. Each of its writes
   (keep-alive or report) must complete within 10 seconds, or the sweep stops and frees its lock and admission
