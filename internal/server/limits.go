@@ -171,8 +171,9 @@ func (c *cappedWriteDeadline) SetWriteDeadline(t time.Time) error {
 // Unwrap lets http.ResponseController reach the connection's other methods.
 func (c *cappedWriteDeadline) Unwrap() http.ResponseWriter { return c.ResponseWriter }
 
-// ReadFrom passes io.Copy through to the connection's ReadFrom, so
-// downloads keep the sendfile path under --write-timeout.
+// ReadFrom passes io.Copy through to the wrapped writer's ReadFrom. (Artifact
+// and site downloads go through pacedWriter, which has none, so they do not
+// use sendfile.)
 func (c *cappedWriteDeadline) ReadFrom(src io.Reader) (int64, error) {
 	if rf, ok := c.ResponseWriter.(io.ReaderFrom); ok {
 		return rf.ReadFrom(src)

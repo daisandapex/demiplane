@@ -288,7 +288,7 @@ All notable changes to demiplane are documented here. The format follows
   `DEMIPLANE_TOKEN`. A working directory of `/` disables `path` publishing unless
   `/` is set explicitly.
 - **The store is owner-only.** The store root, `data/` with `blobs/`,
-  `sources/` and `sites/` in it, the marker files, `.open.lock` and `meta.db`
+  `sources/` and `sites/` in it, the marker files, `.open.lock`, `.serve.lock` and `meta.db`
   with its `-wal` and `-shm` files are created or tightened to `0700`/`0600`
   at startup, and each change is logged.
 - **A republish never serves new bytes under the previous metadata.** Each

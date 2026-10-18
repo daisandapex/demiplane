@@ -392,8 +392,8 @@ inherits the posture above and was reviewed adversarially before release.
   flight, in this process or in SSH receive; an intent is reclaimed only after
   24 hours, and a write whose intent was reclaimed fails instead of committing.
 - **Store permissions.** The store root, `data/` with `blobs/`, `sources/` and
-  `sites/` in it, and the metadata database (`meta.db` and its `-wal`/`-shm`
-  files) are owner-only (directories `0700`, files `0600`; the marker files
+  `sites/` in it, the lock files `.open.lock` and `.serve.lock`, and the
+  metadata database (`meta.db` and its `-wal`/`-shm` files) are owner-only (directories `0700`, files `0600`; the marker files
   at the old directory names are `0700`, the mode 2.0.0 gives those names). The database holds capability slugs and
   password hashes. At startup demiplane sets any of these whose mode differs to
   those modes and logs each change.

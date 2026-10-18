@@ -104,7 +104,7 @@ idempotently (see the reply module's `ensureStore`). The literal-first rule stil
 holds, and note `POST /{slug}` (one segment) does **not** collide with a
 control-plane `POST /reply/{slug}` (two segments) in the combined build.
 
-Worked example: `internal/modules/reply` `POST /{slug}` — the same-origin answer
+Worked example: `internal/modules/reply` `POST /answer/{slug}` — the same-origin answer
 submit for the `?reply=question` inline reply box.
 
 ### Beyond routes — the cmd-side listener seam (the TLS module)

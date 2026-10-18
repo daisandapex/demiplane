@@ -232,8 +232,8 @@ func (s *Server) ContentHandler() http.Handler {
 	// than GET /{slug}, so ServeMux prefers them.
 	s.mountCoreContentRoutes(mux)
 	// Content-origin module routes (e.g. the reply module's same-origin
-	// POST /{slug} answer submit) mount alongside. POST /{slug} coexists with the
-	// GET /{slug} catch-all (method-distinct) and never shadows it.
+	// POST /answer/{slug} answer submit) mount alongside, literal-first, so
+	// they never shadow the GET /{slug} catch-all.
 	s.mountContentRouteModules(mux)
 	mux.HandleFunc("GET /{slug}", s.handleGet)
 	// The bare content root has no landing on this plane (the landing lives on the
