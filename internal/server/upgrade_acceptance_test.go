@@ -17,10 +17,12 @@ import (
 )
 
 // TestUpgradeListTraversal is the upgrade acceptance check for /list paging:
-// 201 live artifacts (published in a burst, so many share a second) behind
-// 1,300 newer expired ones the sweeper has not removed. Following `next`
+// 201 live artifacts (published in bursts, so many share a second), with
+// 1,150 expired ones the sweeper has not removed between the newest 100 and
+// the oldest 101. The first page examines its budget of entries and returns
+// the 100 newest with `next` (a short, non-empty page); following `next`
 // until it is absent lists every live artifact exactly once and no expired
-// one, through short and empty pages.
+// one.
 func TestUpgradeListTraversal(t *testing.T) {
 	if testing.Short() {
 		t.Skip("publishes 1,500 artifacts")
@@ -30,18 +32,23 @@ func TestUpgradeListTraversal(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	const live, expired = 201, 1300
-	for i := 0; i < live; i++ {
-		if _, err := st.Put(store.PutOptions{Slug: fmt.Sprintf("live-%04d", i)}, strings.NewReader("x")); err != nil {
+	const old, expired, recent = 101, 1150, 100
+	const live = old + recent
+	put := func(slug string, ttl time.Duration) {
+		if _, err := st.Put(store.PutOptions{Slug: slug, TTL: ttl}, strings.NewReader("x")); err != nil {
 			t.Fatal(err)
 		}
+	}
+	for i := 0; i < old; i++ {
+		put(fmt.Sprintf("live-old-%04d", i), 0)
 	}
 	for i := 0; i < expired; i++ {
-		if _, err := st.Put(store.PutOptions{Slug: fmt.Sprintf("gone-%04d", i), TTL: time.Second}, strings.NewReader("x")); err != nil {
-			t.Fatal(err)
-		}
+		put(fmt.Sprintf("gone-%04d", i), time.Second)
 	}
-	time.Sleep(1100 * time.Millisecond)
+	time.Sleep(1100 * time.Millisecond) // the expired batch lapses
+	for i := 0; i < recent; i++ {
+		put(fmt.Sprintf("live-new-%04d", i), 0)
+	}
 	h := New(st, Config{}).Handler()
 	seen := map[string]int{}
 	short, empty := 0, 0
@@ -90,8 +97,8 @@ func TestUpgradeListTraversal(t *testing.T) {
 			t.Fatalf("%s listed %d times", slug, c)
 		}
 	}
-	if short+empty == 0 {
-		t.Error("no short or empty page carried next; the fixture did not exercise them")
+	if short == 0 {
+		t.Error("no short, non-empty page carried next; the fixture did not exercise it")
 	}
 	t.Logf("%d short and %d empty pages with next", short, empty)
 }
