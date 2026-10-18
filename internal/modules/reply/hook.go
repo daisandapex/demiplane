@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -253,6 +254,20 @@ func runHook(h hookConfig, rep Reply, payload []byte) {
 	}
 }
 
+// hookBaseEnv is the environment an exec hook inherits: the server's, less
+// its own DEMIPLANE_* variables, so the bearer token (DEMIPLANE_TOKEN) and
+// the rest of the server's configuration never reach the hook, its children
+// or its logged output.
+func hookBaseEnv() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "DEMIPLANE_") {
+			env = append(env, kv)
+		}
+	}
+	return env
+}
+
 // runHookExec runs the exec action: `/bin/sh -c <cmdline>` with the reply JSON
 // on stdin and DEMIPLANE_REPLY_{ID,SLUG,KIND,BODY} in the environment, in its
 // own process group. Errors (spawn failure, non-zero exit, timeout) are logged.
@@ -263,7 +278,7 @@ func runHookExec(cmdline string, timeout time.Duration, rep Reply, payload []byt
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", cmdline)
 	cmd.Stdin = bytes.NewReader(payload)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(hookBaseEnv(),
 		"DEMIPLANE_REPLY_ID="+strconv.FormatInt(rep.ID, 10),
 		"DEMIPLANE_REPLY_SLUG="+rep.Slug,
 		"DEMIPLANE_REPLY_KIND="+rep.Kind,

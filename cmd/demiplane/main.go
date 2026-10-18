@@ -745,5 +745,9 @@ func resolveToken(tokenFile string) (string, error) {
 		}
 		return tok, nil
 	}
-	return strings.TrimSpace(os.Getenv("DEMIPLANE_TOKEN")), nil
+	tok := strings.TrimSpace(os.Getenv("DEMIPLANE_TOKEN"))
+	// Out of the environment once read, so nothing the server starts (a
+	// reply hook, its children) inherits it.
+	os.Unsetenv("DEMIPLANE_TOKEN")
+	return tok, nil
 }

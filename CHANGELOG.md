@@ -8,7 +8,10 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
-
+- **Reply hooks no longer see the bearer token.** An exec hook inherited
+  the server's whole environment, `DEMIPLANE_TOKEN` included; the server
+  now drops the token from its environment once read, and hooks get none of
+  its `DEMIPLANE_*` variables.
 - **Published pages are isolated from each other.** HTML, SVG and XML are
   served in a CSP sandbox without `allow-same-origin`, so each page runs in an
   opaque origin and cannot read other artifacts (with or without the viewer's

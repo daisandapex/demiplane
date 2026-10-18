@@ -27,3 +27,16 @@ func TestExitMessageRedactsPaths(t *testing.T) {
 		t.Errorf("fatal line lost its cause: %s", got)
 	}
 }
+
+// TestResolveTokenClearsTheEnvironment: a token taken from DEMIPLANE_TOKEN
+// leaves the process environment, so nothing the server starts inherits it.
+func TestResolveTokenClearsTheEnvironment(t *testing.T) {
+	t.Setenv("DEMIPLANE_TOKEN", " tok ")
+	got, err := resolveToken("")
+	if err != nil || got != "tok" {
+		t.Fatalf("resolveToken = %q, %v", got, err)
+	}
+	if v, ok := os.LookupEnv("DEMIPLANE_TOKEN"); ok {
+		t.Fatalf("DEMIPLANE_TOKEN still set to %q", v)
+	}
+}

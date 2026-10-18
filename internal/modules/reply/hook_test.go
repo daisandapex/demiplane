@@ -365,3 +365,24 @@ func TestHookStdinHeldByChildDoesNotWedgeWorker(t *testing.T) {
 	}
 	assertProcessGone(t, pidFile)
 }
+
+// TestHookExecOmitsDemiplaneEnvironment: the exec hook does not inherit the
+// server's own DEMIPLANE_* variables, the bearer token among them; it still
+// gets the reply's.
+func TestHookExecOmitsDemiplaneEnvironment(t *testing.T) {
+	t.Setenv("DEMIPLANE_TOKEN", "server-bearer-secret")
+	t.Setenv("DEMIPLANE_URL", "http://control")
+	envFile := filepath.Join(t.TempDir(), "env.txt")
+	runHookExec(`env > "`+envFile+`"`, 10*time.Second, Reply{ID: 7, Slug: "s", Kind: "comment"}, []byte("{}"), false)
+	b, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := string(b)
+	if strings.Contains(env, "server-bearer-secret") || strings.Contains(env, "DEMIPLANE_URL=") {
+		t.Fatalf("hook environment carries the server's DEMIPLANE_* variables:\n%s", env)
+	}
+	if !strings.Contains(env, "DEMIPLANE_REPLY_ID=7") || !strings.Contains(env, "PATH=") {
+		t.Fatalf("hook environment lost the reply or PATH:\n%s", env)
+	}
+}

@@ -137,7 +137,9 @@ reply_hook_url  = http://127.0.0.1:9099/reply-event
 
 - **exec** — run via `/bin/sh -c`; the reply
   `{id, slug, kind, body, created_at, status}` arrives as JSON on **stdin** and
-  as `DEMIPLANE_REPLY_ID/SLUG/KIND/BODY` env vars. It runs in its own process
+  as `DEMIPLANE_REPLY_ID/SLUG/KIND/BODY` env vars. It inherits the server's
+  environment except the server's own `DEMIPLANE_*` variables (the bearer
+  token among them), which it never sees. It runs in its own process
   group, killed when the shell exits or after `reply_hook_timeout` (default
   `5m`), so long-running work must detach (as the `systemd-run` example does,
   or with `setsid`). Output is read as it streams and only the first 512 bytes
