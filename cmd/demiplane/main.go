@@ -24,6 +24,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -86,6 +87,10 @@ func main() {
 		if err := runReceive(os.Args[2:]); err != nil {
 			log.Fatal(exitMessage(err))
 		}
+	case "delete-site":
+		if err := runDeleteSite(os.Args[2:]); err != nil {
+			log.Fatal(exitMessage(err))
+		}
 	case "mcp":
 		if err := runMCP(os.Args[2:]); err != nil {
 			log.Fatal(err)
@@ -119,6 +124,7 @@ Usage:
   demiplane serve   --bind <addr> --store <dir> [--base-url <url>] [--token-file <path>]
                     [--theme <name>] [--css <file>] [--header] [--footer] [--footer-link <url>] [--meta-header]
   demiplane receive --store <dir> [--slug <name>|--untar] [--base-url <url>] [--ttl <dur>] [--private]
+  demiplane delete-site --store <dir> <name>
   demiplane mcp     [--url <control-url>] [--token-file <path>]
   demiplane publish <file> [--url <control-url>] [--token-file <path>] [--slug <name>] [--watch] [--open]
   demiplane version
@@ -127,6 +133,9 @@ Commands:
   serve     Run the HTTP server.
   receive   Ingest an artifact from stdin into the store (designed to run as an
             SSH forced command for pubkey-auth publish; --untar for directory sync).
+  delete-site
+            Delete a site from the store, with the server stopped: its files,
+            and any copy an interrupted replace left for recovery.
   mcp       Run a stdio MCP server (JSON-RPC 2.0 over stdin/stdout) that exposes
             publish/list/delete/get as tools to any MCP-speaking harness (Claude
             Code, Cursor, Cline, Windsurf, Zed, Continue). Thin client of the
@@ -304,12 +313,22 @@ func runServe(args []string) error {
 		}
 	}
 
+	// One server per store: it alone recovers, scavenges and writes sites.
+	unlockServe, err := store.LockServe(*dir)
+	if err != nil {
+		return err
+	}
+	defer unlockServe()
 	st, err := store.Open(*dir)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
 	if err := applyStoreQuota(st, *storeQuota); err != nil {
+		return err
+	}
+	// Recorded for `demiplane receive`, which enforces the same quota.
+	if err := st.SaveQuotaSetting(*storeQuota); err != nil {
 		return err
 	}
 
@@ -701,6 +720,13 @@ func runReceive(args []string) error {
 		return fmt.Errorf("--store-quota must be >= 0 (0 = unlimited)")
 	}
 
+	// One receive at a time, from before it measures usage until it exits,
+	// so concurrent receives cannot each spend the same remaining quota.
+	unlock, err := store.LockReceive(c.dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	// Shared with the running server: it removes what this replaces (it
 	// knows which old generations its downloads still hold), and sites/ is
 	// its alone, so this process never recovers or scavenges site trees.
@@ -709,8 +735,15 @@ func runReceive(args []string) error {
 		return err
 	}
 	defer st.Close()
-	if c.storeQuota > 0 {
-		if err := st.SetQuota(c.storeQuota); err != nil {
+	// The server's quota applies unless --store-quota sets one here.
+	quota := c.storeQuota
+	if quota == 0 {
+		if quota, err = st.QuotaSetting(); err != nil {
+			return err
+		}
+	}
+	if quota > 0 {
+		if err := st.SetQuota(quota); err != nil {
 			return err
 		}
 	}
@@ -750,4 +783,39 @@ func resolveToken(tokenFile string) (string, error) {
 	// reply hook, its children) inherits it.
 	os.Unsetenv("DEMIPLANE_TOKEN")
 	return tok, nil
+}
+
+// runDeleteSite deletes a site from a store no server is running on. It
+// takes the serve lock, so it refuses while a server holds the store, and
+// deletes through the store, so an interrupted replace's copy goes too
+// (removing the directory by hand would leave that copy for recovery to
+// restore at the next start).
+func runDeleteSite(args []string) error {
+	fs := flag.NewFlagSet("delete-site", flag.ContinueOnError)
+	dir := fs.String("store", "", "store directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *dir == "" || fs.NArg() != 1 {
+		return fmt.Errorf("usage: demiplane delete-site --store <dir> <name>")
+	}
+	name := fs.Arg(0)
+	unlock, err := store.LockServe(*dir)
+	if errors.Is(err, store.ErrStoreServed) {
+		return fmt.Errorf("delete-site: stop the server first: %w", err)
+	}
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	st, err := store.Open(*dir)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	if err := st.DeleteSite(name); err != nil {
+		return fmt.Errorf("delete-site: %w", err)
+	}
+	fmt.Printf("deleted site %s\n", name)
+	return nil
 }

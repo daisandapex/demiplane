@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestConcurrentFirstOpensOfALegacyStore: processes starting together
@@ -149,4 +150,51 @@ func TestOpenRepairsPermissionsBeforeMoving(t *testing.T) {
 	}
 	s.Close()
 	assertMarkers(t, root)
+}
+
+// TestServeLockIsExclusive: a second server (or a maintenance command) on a
+// store a server holds is refused at once.
+func TestServeLockIsExclusive(t *testing.T) {
+	root := t.TempDir()
+	unlock, err := LockServe(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LockServe(root); !errors.Is(err, ErrStoreServed) {
+		t.Fatalf("second LockServe = %v, want ErrStoreServed", err)
+	}
+	unlock()
+	unlock2, err := LockServe(root)
+	if err != nil {
+		t.Fatalf("LockServe after release: %v", err)
+	}
+	unlock2()
+}
+
+// TestReceivesTakeTurns: a second receive waits for the first to finish.
+func TestReceivesTakeTurns(t *testing.T) {
+	root := t.TempDir()
+	unlock, err := LockReceive(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan struct{})
+	go func() {
+		u, err := LockReceive(root)
+		if err == nil {
+			u()
+		}
+		close(got)
+	}()
+	select {
+	case <-got:
+		t.Fatal("a second receive did not wait for the first")
+	case <-time.After(300 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case <-got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a second receive never got its turn")
+	}
 }

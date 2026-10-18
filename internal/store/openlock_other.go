@@ -12,3 +12,8 @@ const openLockName = ".open.lock"
 // lockOpen is a no-op outside Unix, which the releases do not target; there
 // concurrent first opens of a store that needs migrating are not serialized.
 func lockOpen(string) (func(), error) { return func() {}, nil }
+
+// LockReceive and LockServe are no-ops outside Unix (see lockOpen).
+func LockReceive(string) (func(), error) { return func() {}, nil }
+
+func LockServe(string) (func(), error) { return func() {}, nil }

@@ -249,6 +249,8 @@ var storePerms = []permEntry{
 	{sourceDirName, markerMode},
 	{"sites", markerMode},
 	{openLockName, 0o600},
+	{receiveLockName, 0o600},
+	{serveLockName, 0o600},
 	{"meta.db", 0o600},
 	{"meta.db-wal", 0o600},
 	{"meta.db-shm", 0o600},

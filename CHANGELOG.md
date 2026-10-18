@@ -8,6 +8,15 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- **`demiplane receive` enforces the server's storage quota.** `serve`
+  records its `--store-quota` in the store and `receive` applies it unless
+  given its own; receives also take turns, so concurrent ones cannot each
+  spend the same remaining space. Before, a `receive` without its own
+  `--store-quota` ignored the quota.
+- **One server per store.** `serve` holds a lock on the store and a second
+  `serve` (or `demiplane delete-site`) on the same store is refused, since
+  only one process may recover, scavenge and write sites. `demiplane
+  delete-site` deletes a site with the server stopped.
 - **Replies go with their artifact and can be deleted.** Deleting an
   artifact (or its expiry) deletes its replies, so a later artifact published
   under the same slug neither lists them nor starts part-way to its reply
@@ -346,9 +355,10 @@ All notable changes to demiplane are documented here. The format follows
   `--store-quota`,** and the sites hold at most 100,000 files and directories
   in all. An existing store over either limit keeps serving, but further site
   publishes get `507` until space is freed. There is no HTTP endpoint that
-  deletes a site yet: stop the server, remove the site's directory under
-  `<store>/data/sites/` (not the `<store>/sites` marker file), and start it
-  again (usage is measured at startup).
+  deletes a site yet: stop the server, run `demiplane delete-site --store
+  <dir> <name>`, and start it again (usage is measured at startup). Do not
+  remove the directory by hand: a copy an interrupted replace left behind
+  would be restored at the next start.
 - **Upgrade note: each artifact counts 4 KiB toward `--store-quota`,** and
   `?filename=` is capped at 255 bytes. Size the quota with that in mind; a
   store already near its quota may refuse new artifacts with `507`.

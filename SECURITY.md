@@ -564,9 +564,12 @@ Notes on the limits:
   charged until startup or the hourly reconcile removes them, an hour after
   they were last written; a cleanup releases only what it actually removed.
   `demiplane receive` runs as a separate process and enforces the quota
-  against its own writes; a running `serve` learns of them at its next
-  recount (every `--sweep-interval`), so across processes the store can
-  briefly exceed the quota by what the other process wrote since. Until then
+  `serve` recorded in the store (or its own `--store-quota`) against its own
+  writes, measured when it starts; receives take turns, one at a time. A
+  running `serve` learns of a receive's writes at its next recount (every
+  `--sweep-interval`), so across processes the store can briefly exceed the
+  quota by what one receive wrote since, at most its `--max-upload` (100 MiB
+  by default; unbounded with `--max-upload 0`). Until then
   the server never releases space for something it has not counted, so
   removing an artifact or version that `receive` wrote cannot lower its
   usage below what it holds; it may over-count until the recount, never

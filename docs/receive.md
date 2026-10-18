@@ -39,6 +39,10 @@ view password comes from the `DEMIPLANE_PASSWORD` environment variable (`environ
 the entry, or a wrapper), never an argument. Nested tar paths flatten to hyphenated slugs
 (`css/style.css` → `css-style.css`), and re-syncing overwrites in place.
 
+`receive` enforces the `--store-quota` the server runs with (recorded in the
+store), or its own `--store-quota` if given. Receives on one store take turns:
+a second waits until the first has finished.
+
 The binary in `command=` writes to the same store as `serve`, so upgrade it with
 `serve`: once a newer `serve` has opened the store, an older `receive` cannot
 open it ([Upgrading](./deployment.md#upgrading)).
