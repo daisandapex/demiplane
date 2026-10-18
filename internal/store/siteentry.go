@@ -167,10 +167,16 @@ func (s *Store) reclaimStagingTrees(now time.Time) (int, error) {
 		}
 		return 0, fmt.Errorf("scan site staging trees: %w", err)
 	}
+	// A tree an outstanding site swap names may be the last committed copy
+	// of a site (siteswap.go).
+	swapping, err := s.swapNames()
+	if err != nil {
+		return 0, err
+	}
 	cutoff := now.Add(-orphanGrace)
 	removed := 0
 	for _, e := range ents {
-		if !strings.HasPrefix(e.Name(), tempPrefix) || s.stagingLive(e.Name()) {
+		if !strings.HasPrefix(e.Name(), tempPrefix) || s.stagingLive(e.Name()) || swapping[e.Name()] {
 			continue
 		}
 		fi, err := e.Info()

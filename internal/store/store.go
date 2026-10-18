@@ -171,8 +171,14 @@ func Open(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	// Staging trees a crash left behind; younger ones are counted below and
+	// A site replace a crash interrupted is finished or rolled back first,
+	// so its trees are never mistaken for leftovers (siteswap.go). Staging
+	// trees a crash left behind go next; younger ones are counted below and
 	// reclaimed by a later Reconcile.
+	if err := s.recoverSiteSwaps(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if _, err := s.reclaimStagingTrees(time.Now()); err != nil {
 		db.Close()
 		return nil, err
@@ -292,6 +298,9 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	// generation.go.
 	if _, err := s.db.Exec(pendingDeletionsSchema); err != nil {
 		return fmt.Errorf("create pending deletions table: %w", err)
+	}
+	if _, err := s.db.Exec(siteSwapsSchema); err != nil {
+		return fmt.Errorf("migrate site swaps: %w", err)
 	}
 	if _, err := s.db.Exec(pendingWritesSchema); err != nil {
 		return fmt.Errorf("create pending writes table: %w", err)
