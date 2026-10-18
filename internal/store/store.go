@@ -135,6 +135,23 @@ func open(dir string, shared bool) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("create store dir: %w", err)
 	}
+	// Permissions are repaired first, as before the layout move: the move
+	// needs a writable root and traversable content directories.
+	if err := tightenStorePerms(dir); err != nil {
+		return nil, err
+	}
+	// The layout move and the schema and secret migrations inspect, then
+	// change, shared state; another process may be opening the store too.
+	unlockOpen, err := lockOpen(dir)
+	if err != nil {
+		return nil, err
+	}
+	locked := true
+	defer func() {
+		if locked {
+			unlockOpen()
+		}
+	}()
 	// Content directories move under data/ and the old names become marker
 	// files that stop older binaries at open (layout.go).
 	if err := migrateLayout(dir); err != nil {
@@ -184,6 +201,8 @@ func open(dir string, shared bool) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	unlockOpen()
+	locked = false
 	// A site replace a crash interrupted is finished or rolled back first,
 	// so its trees are never mistaken for leftovers (siteswap.go). Staging
 	// trees a crash left behind go next; younger ones are counted below and
@@ -219,6 +238,7 @@ var storePerms = []struct {
 	{"blobs", markerMode},
 	{sourceDirName, markerMode},
 	{"sites", markerMode},
+	{openLockName, 0o600},
 	{"meta.db", 0o600},
 	{"meta.db-wal", 0o600},
 	{"meta.db-shm", 0o600},

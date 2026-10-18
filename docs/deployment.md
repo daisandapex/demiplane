@@ -232,10 +232,16 @@ a binary could republish a page and leave replies on and its reply tokens
 valid.) The database refuses older writers' row changes too, as a second line.
 
 The move is a rename within the store directory, so it is quick whatever the
-store holds, and an interrupted one finishes at the next open. If an older binary
-recreated an old directory in the meantime, an empty one is removed; one that
-holds files stops the open with a message naming both directories, and its
-files have to be moved into `data/` by hand.
+store holds. Each directory's move is synced to disk before its marker is
+written, so a crash or power loss at any point leaves either the old directory
+or the new one, and an interrupted move finishes at the next open. Processes
+starting together (`serve` and a `receive`) take turns through it, holding
+`.open.lock` in the store directory. If an older binary recreated an old
+directory in the meantime, an empty one is removed; one that holds files stops
+the open with a message naming both directories, and its files have to be
+moved into `data/` by hand. A marker whose directory under `data/` is missing
+also stops the open: restore that directory from a backup, or create it empty
+to start without its content.
 
 Rolling back is therefore a restore: back up the store directory before
 upgrading, and to return to an older release, stop demiplane and restore that
@@ -243,8 +249,8 @@ backup. Publishes made after the upgrade are not in it.
 
 The store directory holds `meta.db` (with its `-wal` and `-shm` files), `data/`
 (`blobs/` for artifact bytes, `sources/` for retained markdown, `sites/` for
-site trees), `modules/` (module storage, such as replies) and the three marker
-files. All of it is owner-only.
+site trees), `modules/` (module storage, such as replies), `.open.lock` and the
+three marker files. All of it is owner-only.
 
 ## See also
 

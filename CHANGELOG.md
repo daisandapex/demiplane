@@ -255,9 +255,10 @@ All notable changes to demiplane are documented here. The format follows
   identity, are refused whether the token came from a file or from
   `DEMIPLANE_TOKEN`. A working directory of `/` disables `path` publishing unless
   `/` is set explicitly.
-- **The store is owner-only.** The store root, `blobs/`, `sources/`, `sites/`
-  and `meta.db` with its `-wal` and `-shm` files are created or tightened to
-  `0700`/`0600` at startup, and each change is logged.
+- **The store is owner-only.** The store root, `data/` with `blobs/`,
+  `sources/` and `sites/` in it, the marker files, `.open.lock` and `meta.db`
+  with its `-wal` and `-shm` files are created or tightened to `0700`/`0600`
+  at startup, and each change is logged.
 - **A republish never serves new bytes under the previous metadata.** Each
   write goes to a new file and the metadata row names the file it describes, so
   adding a password, making a page private or changing its expiry takes effect
@@ -328,7 +329,8 @@ All notable changes to demiplane are documented here. The format follows
   in all. An existing store over either limit keeps serving, but further site
   publishes get `507` until space is freed. There is no HTTP endpoint that
   deletes a site yet: stop the server, remove the site's directory under
-  `<store>/sites/`, and start it again (usage is measured at startup).
+  `<store>/data/sites/` (not the `<store>/sites` marker file), and start it
+  again (usage is measured at startup).
 - **Upgrade note: each artifact counts 4 KiB toward `--store-quota`,** and
   `?filename=` is capped at 255 bytes. Size the quota with that in mind; a
   store already near its quota may refuse new artifacts with `507`.

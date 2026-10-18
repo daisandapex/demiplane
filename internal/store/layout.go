@@ -38,22 +38,39 @@ Upgrade every program that writes to it, or restore a backup taken before the
 upgrade to go back (see docs/deployment.md, "Upgrading").
 `
 
+// layoutSync makes the renames inside a directory durable; a test hook.
+var layoutSync = syncDir
+
 // migrateLayout moves the legacy content directories under contentDirName
 // and puts a marker at each old name. It is idempotent and resumes a move a
-// crash interrupted: a directory is renamed (atomic) before its marker is
-// written (temp file, then rename), so after a crash either the old
-// directory is still there or the new one is and only the marker is missing.
+// crash interrupted. Each step is durable before the next: the directory is
+// renamed and both its old and new parents synced, and only then is the
+// marker installed (a uniquely named temp file, renamed, the root synced).
+// So after a crash either the old directory is still there, or the new one
+// is and only the marker may be missing; a marker never stands without its
+// directory, and one that does means content went missing, which stops the
+// open. The caller holds the store's open lock (openlock.go), so concurrent
+// first opens do not race through it.
 func migrateLayout(root string) error {
 	data := filepath.Join(root, contentDirName)
 	if err := os.MkdirAll(data, 0o700); err != nil {
 		return fmt.Errorf("create %s: %w", data, err)
+	}
+	if err := layoutSync(root); err != nil {
+		return fmt.Errorf("store layout: sync %s: %w", root, err)
 	}
 	for _, name := range legacyContentDirs {
 		old, cur := filepath.Join(root, name), filepath.Join(data, name)
 		fi, err := os.Lstat(old)
 		switch {
 		case err == nil && fi.Mode().IsRegular():
-			// Already a marker.
+			// Already a marker: its directory must be there.
+			if _, err := os.Lstat(cur); errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("store layout: %s is missing (the store was upgraded and %s is its marker); restore it from a backup, or create it empty to start without that content", cur, old)
+			} else if err != nil {
+				return fmt.Errorf("inspect %s: %w", cur, err)
+			}
+			continue
 		case err == nil && fi.IsDir():
 			if _, err := os.Lstat(cur); err == nil {
 				// Both exist: an older binary recreated the old directory
@@ -67,35 +84,39 @@ func migrateLayout(root string) error {
 			} else if err := os.Rename(old, cur); err != nil {
 				return fmt.Errorf("move %s to %s: %w", old, cur, err)
 			}
-			if err := writeMarker(root, name); err != nil {
-				return err
-			}
 		case err == nil:
 			return fmt.Errorf("store layout: %s is neither a directory nor a demiplane marker", old)
 		case errors.Is(err, fs.ErrNotExist):
-			if err := writeMarker(root, name); err != nil {
-				return err
-			}
+			// A new store, or a move whose marker a crash cut off.
 		default:
 			return fmt.Errorf("inspect %s: %w", old, err)
 		}
 		if err := os.MkdirAll(cur, 0o700); err != nil {
 			return fmt.Errorf("create %s: %w", cur, err)
 		}
+		for _, dir := range []string{data, root} {
+			if err := layoutSync(dir); err != nil {
+				return fmt.Errorf("store layout: sync %s: %w", dir, err)
+			}
+		}
+		if err := writeMarker(root, name); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // writeMarker puts the marker for a legacy content directory at
-// <root>/<name>, atomically.
+// <root>/<name>, atomically and durably.
 func writeMarker(root, name string) error {
 	final := filepath.Join(root, name)
-	tmp := filepath.Join(root, "."+name+".marker-tmp")
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, markerMode)
+	f, err := os.CreateTemp(root, "."+name+".marker-*")
 	if err != nil {
-		return fmt.Errorf("write store marker: %w", err)
+		return fmt.Errorf("write store marker %s: %w", final, err)
 	}
-	if _, err := fmt.Fprintf(f, markerNote, name, contentDirName); err == nil {
+	tmp := f.Name()
+	_, err = fmt.Fprintf(f, markerNote, name, contentDirName)
+	if err == nil {
 		err = f.Sync()
 	}
 	if cerr := f.Close(); err == nil {
@@ -111,9 +132,8 @@ func writeMarker(root, name string) error {
 		os.Remove(tmp)
 		return fmt.Errorf("write store marker %s: %w", final, err)
 	}
-	if d, err := os.Open(root); err == nil {
-		_ = d.Sync()
-		d.Close()
+	if err := layoutSync(root); err != nil {
+		return fmt.Errorf("write store marker %s: sync: %w", final, err)
 	}
 	return nil
 }
