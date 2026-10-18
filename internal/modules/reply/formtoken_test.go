@@ -79,7 +79,7 @@ func TestBrowserSubmissionsNeedTheTargetsToken(t *testing.T) {
 			{"opaque origin, no token", null, "", http.StatusForbidden},
 			{"opaque origin, token for another slug", null, otherSlug, http.StatusForbidden},
 			{"opaque origin, token from another publish", null, stale, http.StatusForbidden},
-			{"opaque origin, tampered token", null, good[:len(good)-2] + "AA", http.StatusForbidden},
+			{"opaque origin, tampered token", null, tamper(good), http.StatusForbidden},
 			{"same-origin browser post, no token", sameOrigin, "", http.StatusForbidden},
 			{"opaque origin, the target's token", null, good, http.StatusCreated},
 			{"same-origin browser post, the target's token", sameOrigin, good, http.StatusCreated},
@@ -329,4 +329,14 @@ func postAnswerNoT(ts *httptest.Server, path string, hdr map[string]string, fiel
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(b)
+}
+
+// tamper changes the token's first character, so the tampered token always
+// differs from the original (overwriting a fixed suffix could reproduce it).
+func tamper(tok string) string {
+	c := byte('A')
+	if tok[0] == 'A' {
+		c = 'B'
+	}
+	return string(c) + tok[1:]
 }

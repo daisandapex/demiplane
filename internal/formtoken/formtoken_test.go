@@ -41,3 +41,22 @@ func TestMintAndCheck(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckRefusesNonCanonicalSpelling: the same tag written with different
+// unused low bits in its last character is refused; a token has one
+// spelling.
+func TestCheckRefusesNonCanonicalSpelling(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	tok := Mint(key, "s", "0123456789abcdef0123456789abcdef")
+	if !Check(key, "s", "0123456789abcdef0123456789abcdef", tok) {
+		t.Fatal("minted token refused")
+	}
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	last := strings.IndexByte(alphabet, tok[len(tok)-1])
+	for d := 1; d < 16; d++ {
+		alt := tok[:len(tok)-1] + string(alphabet[last^d])
+		if Check(key, "s", "0123456789abcdef0123456789abcdef", alt) {
+			t.Errorf("non-canonical spelling %q accepted", alt)
+		}
+	}
+}
