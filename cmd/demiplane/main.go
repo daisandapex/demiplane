@@ -27,7 +27,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -36,7 +35,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -328,10 +326,6 @@ func runServe(args []string) error {
 	}
 	defer st.Close()
 	if err := applyStoreQuota(st, *storeQuota); err != nil {
-		return err
-	}
-	// Recorded for `demiplane receive`, which enforces the same quota.
-	if err := st.SaveQuotaSetting(*storeQuota); err != nil {
 		return err
 	}
 
@@ -653,15 +647,14 @@ func tokenAdvice(token string) string {
 // DEMIPLANE_PASSWORD env var so it never lands in the process argument list.
 // receiveFlags holds the parsed `receive` command flags.
 type receiveFlags struct {
-	dir        string
-	baseURL    string
-	slug       string
-	filename   string
-	private    bool
-	ttl        string
-	untar      bool
-	maxUpload  int64
-	storeQuota int64
+	dir       string
+	baseURL   string
+	slug      string
+	filename  string
+	private   bool
+	ttl       string
+	untar     bool
+	maxUpload int64
 }
 
 // newReceiveFlagSet registers the `receive` flags onto a fresh FlagSet bound to
@@ -679,12 +672,11 @@ func newReceiveFlagSet() (*flag.FlagSet, *receiveFlags) {
 	fs.StringVar(&c.ttl, "ttl", "", "auto-expire after a duration, e.g. 30m, 2h, 7d")
 	fs.BoolVar(&c.untar, "untar", false, "read a tar stream from stdin and publish each file (directory sync)")
 	fs.Int64Var(&c.maxUpload, "max-upload", defaultMaxUpload, "cap total stdin bytes (default 100 MiB; 0 = unlimited)")
-	fs.Int64Var(&c.storeQuota, "store-quota", 0, storeQuotaUsage)
 	return fs, c
 }
 
-// storeQuotaUsage documents --store-quota, shared by serve and receive.
-const storeQuotaUsage = "aggregate store size cap in bytes across artifacts, retained sources and sites, including in-flight uploads (0 = unlimited, the default; for receive, 0 = the quota serve recorded in the store)"
+// storeQuotaUsage documents serve's --store-quota.
+const storeQuotaUsage = "aggregate store size cap in bytes across artifacts, retained sources and sites, including in-flight uploads, enforced on this server's writes (0 = unlimited, the default)"
 
 // applyStoreQuota sets the aggregate store quota and logs the measured usage.
 func applyStoreQuota(st *store.Store, limit int64) error {
@@ -712,24 +704,6 @@ func runReceive(args []string) error {
 		return err
 	}
 
-	if c.storeQuota < 0 {
-		return fmt.Errorf("--store-quota must be >= 0 (0 = unlimited)")
-	}
-
-	// One receive at a time, from before it measures usage until it exits,
-	// so concurrent receives cannot each spend the same remaining quota.
-	unlock, err := store.LockReceive(c.dir, receiveLockWait)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	// A stdin that stops sending would hold the lock for good, so a stall
-	// ends the process (and releases the lock); its partial write is the
-	// server's reconcile to clean up.
-	in := &progressReader{r: os.Stdin}
-	in.touch()
-	stopWatch := watchStall(in, receiveStall)
-	defer stopWatch()
 	// Shared with the running server: it removes what this replaces (it
 	// knows which old generations its downloads still hold), and sites/ is
 	// its alone, so this process never recovers or scavenges site trees.
@@ -738,18 +712,10 @@ func runReceive(args []string) error {
 		return err
 	}
 	defer st.Close()
-	// The server's quota applies unless --store-quota sets one here.
-	quota := c.storeQuota
-	if quota == 0 {
-		if quota, err = st.QuotaSetting(); err != nil {
-			return err
-		}
-	}
-	if quota > 0 {
-		if err := st.SetQuota(quota); err != nil {
-			return err
-		}
-	}
+	// No --store-quota here: a separate process cannot see what the server
+	// holds (open downloads of removed files) or what other receives are
+	// writing, so it could not keep the quota. The server enforces it on its
+	// own writes and counts these at its next recount (SECURITY.md).
 
 	opts := transport.ReceiveOptions{
 		PutOptions: store.PutOptions{
@@ -763,57 +729,7 @@ func runReceive(args []string) error {
 		Untar:     c.untar,
 		MaxUpload: c.maxUpload,
 	}
-	return transport.Receive(st, opts, in, os.Stdout)
-}
-
-// receiveLockWait is how long a receive waits behind another; receiveStall
-// how long its stdin may send nothing before it gives up.
-const receiveLockWait = 30 * time.Second
-
-var receiveStall = 60 * time.Second
-
-// stallExit ends a receive whose stdin stalled (a test hook).
-var stallExit = func() {
-	log.Print("receive: stdin sent nothing for too long; giving up")
-	os.Exit(1)
-}
-
-// progressReader records when it last returned data.
-type progressReader struct {
-	r    io.Reader
-	last atomic.Int64
-}
-
-func (p *progressReader) touch() { p.last.Store(time.Now().UnixNano()) }
-
-func (p *progressReader) Read(b []byte) (int, error) {
-	n, err := p.r.Read(b)
-	if n > 0 {
-		p.touch()
-	}
-	return n, err
-}
-
-// watchStall calls stallExit once p has returned nothing for stall, until
-// the returned stop is called.
-func watchStall(p *progressReader, stall time.Duration) (stop func()) {
-	done := make(chan struct{})
-	go func() {
-		t := time.NewTicker(stall / 4)
-		defer t.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-t.C:
-				if time.Since(time.Unix(0, p.last.Load())) > stall {
-					stallExit()
-					return
-				}
-			}
-		}
-	}()
-	return func() { close(done) }
+	return transport.Receive(st, opts, os.Stdin, os.Stdout)
 }
 
 // resolveToken returns the bearer token from --token-file (preferred) or the

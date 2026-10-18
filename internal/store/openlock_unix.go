@@ -6,12 +6,10 @@
 package store
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
-	"time"
 )
 
 // openLockName is the file whose lock serializes the start of Open across
@@ -24,28 +22,6 @@ const openLockName = ".open.lock"
 // returns its release.
 func lockOpen(root string) (func(), error) {
 	return lockFile(filepath.Join(root, openLockName), true)
-}
-
-// LockReceive takes the store's receive lock, waiting up to wait while
-// another `demiplane receive` holds it (ErrReceiveBusy after that), and
-// returns its release. A receive holds it from before it opens the store
-// (and measures usage for the quota) until it exits, so concurrent receives
-// cannot each spend the same remaining quota.
-func LockReceive(root string, wait time.Duration) (func(), error) {
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		return nil, fmt.Errorf("create store dir: %w", err)
-	}
-	deadline := time.Now().Add(wait)
-	for {
-		unlock, err := lockFile(filepath.Join(root, receiveLockName), false)
-		if !errors.Is(err, ErrStoreServed) {
-			return unlock, err
-		}
-		if time.Now().After(deadline) {
-			return nil, ErrReceiveBusy
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
 }
 
 // LockServe takes the store's serve lock without waiting, and returns its

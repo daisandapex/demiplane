@@ -39,22 +39,13 @@ func TestReceiveDefaultMaxUploadBounded(t *testing.T) {
 	}
 }
 
-// TestStoreQuotaDefaultUnlimited pins the documented default: no aggregate
-// quota unless the operator sets one.
-func TestStoreQuotaDefaultUnlimited(t *testing.T) {
-	fs, c := newReceiveFlagSet()
-	if err := fs.Parse(nil); err != nil {
-		t.Fatalf("parse defaults: %v", err)
-	}
-	if c.storeQuota != 0 {
-		t.Errorf("default --store-quota = %d, want 0 (unlimited)", c.storeQuota)
-	}
-	fs2, c2 := newReceiveFlagSet()
-	if err := fs2.Parse([]string{"--store-quota=1048576"}); err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if c2.storeQuota != 1<<20 {
-		t.Errorf("--store-quota = %d, want 1048576", c2.storeQuota)
+// TestReceiveHasNoStoreQuota: receive takes no --store-quota. A separate
+// process cannot see what the server holds or what other receives write,
+// so it could not keep one; the quota is serve's (SECURITY.md).
+func TestReceiveHasNoStoreQuota(t *testing.T) {
+	fs, _ := newReceiveFlagSet()
+	if fs.Lookup("store-quota") != nil {
+		t.Fatal("receive registers --store-quota")
 	}
 }
 

@@ -8,12 +8,11 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
-- **`demiplane receive` enforces the server's storage quota.** `serve`
-  records its `--store-quota` in the store and `receive` applies it unless
-  given its own; receives also take turns (waiting at most 30 seconds, and
-  giving up on a stdin silent for 60 seconds), so concurrent ones cannot each
-  spend the same remaining space. Before, a `receive` without its own
-  `--store-quota` ignored the quota.
+- **`--store-quota` is the server's.** It bounds what `serve` writes;
+  `demiplane receive` has no quota of its own (a separate process cannot see
+  what the server holds open or what other receives write) and is bounded per
+  run by `--max-upload` only. `serve` counts a receive's writes at its next
+  recount. Use filesystem quotas to bound SSH publishing.
 - **One server per store.** `serve` holds a lock on the store and a second
   `serve` (or `demiplane delete-site`) on the same store is refused, since
   only one process may recover, scavenge and write sites. `demiplane

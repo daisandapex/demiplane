@@ -250,8 +250,8 @@ backup. Publishes made after the upgrade are not in it.
 The store directory holds `meta.db` (with its `-wal` and `-shm` files), `data/`
 (`blobs/` for artifact bytes, `sources/` for retained markdown, `sites/` for
 site trees), `modules/` (module storage, such as replies), the lock files
-`.open.lock`, `.serve.lock` (held by the running `serve`) and `.receive.lock`,
-and the three marker files. All of it is owner-only.
+`.open.lock` and `.serve.lock` (held by the running `serve`), and the three
+marker files. All of it is owner-only.
 
 ## See also
 

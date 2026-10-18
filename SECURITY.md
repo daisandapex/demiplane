@@ -443,7 +443,7 @@ only in `-tags reply` builds.
 | Rendering | series members a page navigates (its tree and prev/next row); a larger series renders without them | 1,000 | (code) |
 | Rendering | frontmatter rendered as the meta-header: fields / block size / key / value; over it `413` | 256 / 64 KiB / 256 B / 8 KiB | (code) |
 | Rendering | renders at once; one that waits 5s gets `503` | GOMAXPROCS, at most 4 | `--render-concurrency` |
-| Storage | bytes of artifacts, retained sources and sites, including in-flight uploads, scratch and extracted archive bytes, removed files a download still holds open, and abandoned site staging trees, plus 4 KiB per artifact for its metadata, 4 KiB per site file or directory and 4 KiB per replaced version waiting to be removed; over it `507` | unlimited | `--store-quota` |
+| Storage | bytes of artifacts, retained sources and sites, including in-flight uploads, scratch and extracted archive bytes, removed files a download still holds open, and abandoned site staging trees, plus 4 KiB per artifact for its metadata, 4 KiB per site file or directory and 4 KiB per replaced version waiting to be removed; over it the server's writes get `507` (`receive` is not bound by it, see below) | unlimited | `--store-quota` |
 | Storage | replaced or deleted versions waiting for the server to remove them; past it a replacing write is refused (`507`, or an error from `receive`) | 10,000 | (code) |
 | Storage | site files and directories in all, sites being published included; over it `507` | 100,000 | (code) |
 | Metadata | filename hint length; longer is `400` | 255 bytes | (code) |
@@ -564,13 +564,15 @@ Notes on the limits:
   without limit when no server is running. Leftovers of a failed site publish or a crash stay
   charged until startup or the hourly reconcile removes them, an hour after
   they were last written; a cleanup releases only what it actually removed.
-  `demiplane receive` runs as a separate process and enforces the quota
-  `serve` recorded in the store (or its own `--store-quota`) against its own
-  writes, measured when it starts; receives take turns, one at a time. A
-  running `serve` learns of a receive's writes at its next recount (every
-  `--sweep-interval`), so across processes the store can briefly exceed the
-  quota by what one receive wrote since, at most its `--max-upload` (100 MiB
-  by default; unbounded with `--max-upload 0`). Until then
+  **`--store-quota` bounds the server's own writes only.** `demiplane
+  receive` runs as a separate process and does not enforce it: it cannot see
+  what the server holds (removed files that downloads still have open) or what
+  other receives are writing. Each receive is bounded by its `--max-upload`
+  (100 MiB by default; an `--untar` stream by the 512 MiB it may expand to),
+  but receives are not limited in number, so a holder of a publishing key can
+  fill the disk; use filesystem quotas for that. A running `serve` learns of
+  a receive's writes at its next recount (every `--sweep-interval`) and then
+  refuses its own writes past the quota. Until then
   the server never releases space for something it has not counted, so
   removing an artifact or version that `receive` wrote cannot lower its
   usage below what it holds; it may over-count until the recount, never
