@@ -245,8 +245,11 @@ All notable changes to demiplane are documented here. The format follows
   `/reply/{slug}` and `/answer/{slug}` now answer `404` unless the artifact's
   latest publish used `?reply=form` (new: the reply form, page unchanged) or
   `?reply=question`. Pages published with an inline reply box before this
-  release keep accepting answers (migrated from their retained render spec);
-  for any other page you collect replies on, republish it with `?reply=form`.
+  release stay reply-enabled (migrated from their retained render spec), but
+  their baked forms carry no submission token, so browser answers to them are
+  refused until the page is rebaked (`POST /rerender`) or republished (see
+  "rebake reply pages" below); for any other page you collect replies on,
+  republish it with `?reply=form`.
   A republish without `?reply` turns replies off. Replying to a
   password-protected page now needs its password.
 - **Reply retention is off by default.** Existing replies are kept. Set
