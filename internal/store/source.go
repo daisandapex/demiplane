@@ -161,49 +161,64 @@ func (s *Store) Source(slug string) (SourceRecord, error) {
 	}, nil
 }
 
-const qSlugPage = `SELECT slug, expires_at FROM artifacts
-  WHERE owner = ? AND slug > ?
-  ORDER BY slug ASC LIMIT ?`
+// SweepEntry is one artifact in a walk of everything stored: its rowid (the
+// walk's position), slug, and whether it is private.
+type SweepEntry struct {
+	RowID   int64
+	Slug    string
+	Private bool
+}
 
-// SlugPage returns, in slug order, up to limit of owner's unexpired slugs
-// after the slug after ("" = from the first). Unlike List it includes PRIVATE
-// artifacts and returns names only: it exists for maintenance sweeps over
-// everything stored (the bulk rebake), where excluding private pages would
-// quietly leave them on an old rendering forever, and where nothing is shown
-// to a reader. It examines at most limit index entries, skipping expired ones,
-// so a page may be short; next is the slug to continue after, or "" when the
-// walk is done.
-func (s *Store) SlugPage(ctx context.Context, owner, after string, limit int) (slugs []string, next string, err error) {
+// INDEXED BY: with statistics the planner may walk the table by rowid and
+// filter owner afterwards; the owner index keeps the owner in the seek.
+const qSweepPage = `SELECT rowid, slug, private, expires_at FROM artifacts INDEXED BY idx_artifacts_owner
+  WHERE owner = ? AND rowid > ?
+  ORDER BY rowid LIMIT ?`
+
+// SweepPage returns, in rowid order, up to limit of owner's unexpired
+// artifacts after rowid after (0 = from the first). Unlike List it includes
+// PRIVATE artifacts: it exists for maintenance sweeps over everything stored
+// (the bulk rebake), where excluding private pages would quietly leave them
+// on an old rendering forever. The position is a rowid, not a slug, so a
+// caller can hand it out as a resume cursor without revealing a private
+// slug; a republish keeps an artifact's rowid. It examines at most limit
+// index entries, skipping expired ones, so a page may be short; next is the
+// rowid to continue after, or 0 when the walk is done.
+func (s *Store) SweepPage(ctx context.Context, owner string, after int64, limit int) (entries []SweepEntry, next int64, err error) {
 	if limit < 1 {
 		limit = 1
 	}
-	rows, err := s.db.QueryContext(ctx, qSlugPage, owner, after, limit)
+	rows, err := s.db.QueryContext(ctx, qSweepPage, owner, after, limit)
 	if err != nil {
-		return nil, "", fmt.Errorf("list slugs: %w", err)
+		return nil, 0, fmt.Errorf("list artifacts: %w", err)
 	}
 	defer rows.Close()
 	now := time.Now().Unix()
 	examined := 0
-	last := ""
+	var last int64
 	for rows.Next() {
-		var slug string
-		var expires int64
-		if err := rows.Scan(&slug, &expires); err != nil {
-			return nil, "", fmt.Errorf("scan slug: %w", err)
+		var (
+			e       SweepEntry
+			private int
+			expires int64
+		)
+		if err := rows.Scan(&e.RowID, &e.Slug, &private, &expires); err != nil {
+			return nil, 0, fmt.Errorf("scan artifact: %w", err)
 		}
 		examined++
-		last = slug
+		last = e.RowID
+		e.Private = private != 0
 		if !expired(expires, now) {
-			slugs = append(slugs, slug)
+			entries = append(entries, e)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("iterate slugs: %w", err)
+		return nil, 0, fmt.Errorf("iterate artifacts: %w", err)
 	}
 	if examined == limit {
 		next = last
 	}
-	return slugs, next, nil
+	return entries, next, nil
 }
 
 // ReplaceBody swaps an existing artifact's bytes in place and returns its

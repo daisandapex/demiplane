@@ -25,7 +25,7 @@ func listingQueriesForTest() map[string]listingQuery {
 		"series members": {qSeriesMembers, []any{"local", "big", seriesCountExamine}, []string{"private=? AND series=?"}},
 		"list ties":      {qListTies, []any{"local", 1700050100, "big-00100", 201}, []string{"private=? AND created_at=? AND slug>?"}},
 		"list older":     {qListOlder, []any{"local", 1700050100, 201}, []string{"private=? AND created_at<?"}},
-		"slug page":      {qSlugPage, []any{"local", "big-00100", 500}, []string{"owner=? AND slug>?"}},
+		"sweep page":     {qSweepPage, []any{"local", 100, 500}, []string{"owner=? AND rowid>?"}},
 		"series slugs":   {qSeriesSlugs, []any{"local", "big", "big-00001", 50}, []string{"private=? AND series=?"}},
 	}
 }

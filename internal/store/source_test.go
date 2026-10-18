@@ -234,10 +234,10 @@ func TestReplaceBodyMissingSlug(t *testing.T) {
 	}
 }
 
-// TestSlugPageIncludesPrivateAndExcludesExpired: the bulk-rebake candidate list.
+// TestSweepPageIncludesPrivateAndExcludesExpired: the bulk-rebake candidate list.
 // Private pages must be included — excluding them would strand every private
 // page on an old rendering — and expired ones must not be.
-func TestSlugPageIncludesPrivateAndExcludesExpired(t *testing.T) {
+func TestSweepPageIncludesPrivateAndExcludesExpired(t *testing.T) {
 	s := newTestStore(t)
 	pub, err := s.Put(PutOptions{Slug: "public-page", Source: []byte(markdownSource)},
 		bytes.NewReader([]byte("<h1>a</h1>")))
@@ -257,14 +257,19 @@ func TestSlugPageIncludesPrivateAndExcludesExpired(t *testing.T) {
 
 	// Pages of one walk the store across page boundaries.
 	var slugs []string
-	after := ""
+	var after int64
 	for {
-		page, next, err := s.SlugPage(context.Background(), DefaultOwner, after, 1)
+		page, next, err := s.SweepPage(context.Background(), DefaultOwner, after, 1)
 		if err != nil {
-			t.Fatalf("SlugPage: %v", err)
+			t.Fatalf("SweepPage: %v", err)
 		}
-		slugs = append(slugs, page...)
-		if next == "" {
+		for _, e := range page {
+			slugs = append(slugs, e.Slug)
+			if e.Private != (e.Slug == priv.Slug) {
+				t.Errorf("%s: Private = %v", e.Slug, e.Private)
+			}
+		}
+		if next == 0 {
 			break
 		}
 		after = next
@@ -274,13 +279,13 @@ func TestSlugPageIncludesPrivateAndExcludesExpired(t *testing.T) {
 		seen[slug] = true
 	}
 	if !seen[pub.Slug] {
-		t.Error("public artifact missing from SlugPage")
+		t.Error("public artifact missing from SweepPage")
 	}
 	if !seen[priv.Slug] {
-		t.Error("private artifact missing from SlugPage — it would never be rebaked")
+		t.Error("private artifact missing from SweepPage — it would never be rebaked")
 	}
 	if seen[gone.Slug] {
-		t.Error("expired artifact listed in SlugPage")
+		t.Error("expired artifact listed in SweepPage")
 	}
 }
 

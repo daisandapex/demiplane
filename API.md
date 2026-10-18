@@ -514,7 +514,10 @@ is no version history, no diff, and no editor.
 
 The sweep's counts (`rerendered`, `skipped`, `failed_count`) cover every
 artifact, but `results` and `failed` each list at most 100 entries; `truncated`
-is `true` when either list was cut. One sweep runs at a time: a `POST /rerender`
+is `true` when either list was cut. The sweep rebakes private artifacts too, but
+never reports a capability slug: a private artifact appears in `results` with
+`"private": true` and a tag in place of its slug (`slug#` and twelve hex digits
+of a hash of the slug), and under that tag in `failed`. One sweep runs at a time: a `POST /rerender`
 while another is running gets `409`.
 
 A sweep that runs longer than a second sends its `200` status and then a newline
@@ -523,11 +526,11 @@ every second until the report, so the response may start with blank lines
 disconnects, or stops reading so that a keep-alive or the report cannot be
 sent within 10 seconds, stops the sweep partway; pages already rebaked stay
 rebaked. A sweep
-also stops after 30 minutes: then `complete` is `false` and `next` is a
-continuation cursor, the slug after which the next sweep starts (everything up
-to and including it was rebaked or examined, or it is the `after` the sweep
-was given if it finished nothing), and `POST /rerender?after=<next>` carries
-on from there. The report itself may take up to 10 seconds more to send. `complete` is also `false`, with an `error`, if reading the store failed
+also stops after 30 minutes: then `complete` is `false` and `next` is an
+opaque continuation cursor (a number, not a slug): everything up to it was
+rebaked or examined, or it is the `after` the sweep was given if it finished
+nothing, and `POST /rerender?after=<next>` carries on from there. Any other
+`after` value gets `400`. The report itself may take up to 10 seconds more to send. `complete` is also `false`, with an `error`, if reading the store failed
 after the status was sent.
 
 Without `Accept: application/json` both routes answer in plain text.

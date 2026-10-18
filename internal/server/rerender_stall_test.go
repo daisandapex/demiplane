@@ -138,11 +138,13 @@ func TestResumedSweepReportsWhereItStopped(t *testing.T) {
 		}
 		return out.Complete, out.Next
 	}
-	if complete, next := sweep("/rerender?after=b-live"); complete || next != "b-live" {
-		t.Errorf("resumed sweep that finished nothing: complete=%v next=%q, want next \"b-live\"", complete, next)
+	// The cursor is the store's rowid: the five expired artifacts are rows 1-5,
+	// b-live row 6.
+	if complete, next := sweep("/rerender?after=6"); complete || next != "6" {
+		t.Errorf("resumed sweep that finished nothing: complete=%v next=%q, want next \"6\"", complete, next)
 	}
-	if complete, next := sweep("/rerender"); complete || next != "a-gone-4" {
-		t.Errorf("sweep stopped after an expired-only page: complete=%v next=%q, want \"a-gone-4\"", complete, next)
+	if complete, next := sweep("/rerender"); complete || next != "5" {
+		t.Errorf("sweep stopped after an expired-only page: complete=%v next=%q, want \"5\"", complete, next)
 	}
 }
 

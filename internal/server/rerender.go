@@ -11,7 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
+	"strconv"
 	"sync"
 	"time"
 
@@ -118,6 +118,9 @@ type rerenderResult struct {
 	Reason string `json:"reason,omitempty"`
 	// Size is the rebaked page's byte length; 0 on a skip.
 	Size int64 `json:"size,omitempty"`
+	// Private marks a private artifact in a bulk report, where Slug is then a
+	// tag ("slug#…"), not the capability slug.
+	Private bool `json:"private,omitempty"`
 }
 
 const noSourceReason = "no retained markdown source (published before source retention, or not a ?render=md page)"
@@ -200,10 +203,16 @@ func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST /rerender takes no request body", http.StatusBadRequest)
 		return
 	}
-	after := r.URL.Query().Get("after")
-	if len(after) > 255 {
-		http.Error(w, "after is not a slug", http.StatusBadRequest)
-		return
+	// ?after= is the opaque resume cursor a stopped sweep reported (a rowid,
+	// never a slug: the sweep covers private artifacts).
+	var after int64
+	if v := r.URL.Query().Get("after"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			http.Error(w, "after is not a resume cursor from an earlier sweep", http.StatusBadRequest)
+			return
+		}
+		after = n
 	}
 	if !s.bulkRerender.TryLock() {
 		http.Error(w, "a rerender of every artifact is already running; try again when it finishes", http.StatusConflict)
@@ -234,14 +243,14 @@ func (s *Server) handleRerenderAll(w http.ResponseWriter, r *http.Request) {
 		failed                       = map[string]string{}
 		rerendered, skipped, failedN int
 		truncated, listFailed        bool
-		// done is where a later sweep resumes: the last slug this one
+		// done is where a later sweep resumes: the last artifact this one
 		// finished with, or past a fully examined page; it starts at after.
 		done = after
 	)
 	stoppedEarly := func() bool { return errors.Is(ctx.Err(), context.DeadlineExceeded) }
 walk:
 	for {
-		slugs, next, err := s.store.SlugPage(ctx, store.DefaultOwner, after, rerenderPage)
+		entries, next, err := s.store.SweepPage(ctx, store.DefaultOwner, after, rerenderPage)
 		if err != nil {
 			if ctx.Err() != nil {
 				if stoppedEarly() {
@@ -254,7 +263,14 @@ walk:
 			listFailed = true
 			break walk
 		}
-		for _, slug := range slugs {
+		for _, e := range entries {
+			slug := e.Slug
+			// A private artifact's slug is its capability secret: the report
+			// names it by a tag that cannot be turned back into the slug.
+			shown := slug
+			if e.Private {
+				shown = logsafe.Slug(slug)
+			}
 			if ctx.Err() != nil {
 				if stoppedEarly() {
 					break walk
@@ -282,11 +298,11 @@ walk:
 				}
 				failedN++
 				if len(failed) < rerenderListMax {
-					failed[slug] = reason
+					failed[shown] = reason
 				} else {
 					truncated = true
 				}
-				done = slug
+				done = e.RowID
 				continue
 			}
 			if res.Rerendered {
@@ -294,14 +310,15 @@ walk:
 			} else {
 				skipped++
 			}
+			res.Slug, res.Private = shown, e.Private
 			if len(results) < rerenderListMax {
 				results = append(results, res)
 			} else {
 				truncated = true
 			}
-			done = slug
+			done = e.RowID
 		}
-		if next == "" {
+		if next == 0 {
 			break
 		}
 		after, done = next, next // the whole page, expired entries included, is behind us
@@ -330,7 +347,7 @@ walk:
 			"complete":     complete,
 		}
 		if !complete {
-			report["next"] = done
+			report["next"] = strconv.FormatInt(done, 10)
 		}
 		if listFailed {
 			report["error"] = "listing the store failed; see the server log"
@@ -354,7 +371,7 @@ walk:
 	case listFailed:
 		fmt.Fprintf(w, "stopped: listing the store failed; see the server log\n")
 	case !complete:
-		fmt.Fprintf(w, "stopped at the %v sweep limit; resume with POST /rerender?after=%s\n", rerenderSweepMax, url.QueryEscape(done))
+		fmt.Fprintf(w, "stopped at the %v sweep limit; resume with POST /rerender?after=%d\n", rerenderSweepMax, done)
 	}
 }
 
