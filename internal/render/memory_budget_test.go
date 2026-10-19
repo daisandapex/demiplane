@@ -22,15 +22,18 @@ import (
 
 // The tests here render hostile documents in a child process (the test binary
 // re-run with memChildEnv set) so each render's memory can be read in
-// isolation. The child reports MemStats.Sys, the memory the process took from
-// the OS, which covers garbage the collector had not yet reclaimed and is
-// unaffected by the race detector's allocation counting.
+// isolation. The child reports MemStats.Sys: address space obtained by the Go
+// runtime, including idle/released heap spans, stacks and runtime metadata.
+// This conservatively includes transient heap growth, but is not process RSS
+// and does not include the race detector's native allocations. Fix the child's
+// GC policy and scheduler size below so host settings do not change the
+// collector's headroom or the number of per-P caches and GC workers.
 
 const (
 	memChildEnv   = "DEMIPLANE_RENDER_MEM_CHILD"  // payload name
 	memBudgetEnv  = "DEMIPLANE_RENDER_MEM_BUDGET" // output budget, bytes
 	maxRenderSize = 8 << 20                       // the server's input cap
-	memConstant   = 64 << 20                      // runtime, test binary, the input and its copy
+	memConstant   = 64 << 20                      // runtime, input generation and its render copy
 	memPerBudget  = 8                             // k: see TestRenderMemoryProperty
 )
 
@@ -234,9 +237,14 @@ func renderInChild(t *testing.T, name string, budget int) memResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRenderMemChild$", "-test.count=1")
-	// GOMEMLIMIT keeps a runaway child from taking the machine down; a render
-	// within its bound never comes near it.
-	cmd.Env = append(os.Environ(), memChildEnv+"="+name, memBudgetEnv+"="+strconv.Itoa(budget), "GOMEMLIMIT=1GiB")
+	// The bound assumes the default GC growth target. Render is synchronous;
+	// one P also removes concurrent GC/allocator scheduling as a function of
+	// the host CPU count or cgroup quota. Keep the same Sys bound, including
+	// retained address space from transient heap growth.
+	// GOMEMLIMIT is only a soft backstop, well above every asserted bound;
+	// it must not be lowered to make an unbounded render pass.
+	cmd.Env = append(os.Environ(), memChildEnv+"="+name, memBudgetEnv+"="+strconv.Itoa(budget),
+		"GOMEMLIMIT=1GiB", "GOGC=100", "GOMAXPROCS=1")
 	out, err := cmd.Output()
 	if ctx.Err() != nil {
 		t.Fatalf("%s: child render did not finish in 3m", name)
@@ -312,10 +320,12 @@ func TestMetaHeaderHonoursRenderBudget(t *testing.T) {
 // of the output are alive at once: the body (built first, because the page
 // head names the rail it produces), the page it is moved into, and the
 // finished document with the colophon size filled in. Buffer growth adds a
-// quarter to the first two, and the collector lets the heap reach twice its
-// live size before it runs, so about 7x is the worst the accounting allows.
-// The constant holds what the budget does not cover: the runtime and test
-// binary, the input (at most 8 MiB) and the render's one string copy of it.
+// quarter to the first two. With the child's fixed GOGC=100, the collector
+// targets roughly twice the live heap; k leaves room beyond those copies and
+// that target. Sys also counts retained idle spans and runtime metadata, so
+// this checks transient growth as well as memory still live after Render.
+// The constant holds what the budget does not cover: runtime overhead, input
+// generation (at most 8 MiB of input), its line index and string copy.
 // TestRenderMemoryAtDefaultBudget renders the documents sized to fill the
 // 32 MiB default budget with inline formatting, one at a time, and holds
 // each to the same bound at that budget.
