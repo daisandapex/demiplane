@@ -510,6 +510,10 @@ func (s *Store) DeleteSite(site string) error {
 	}
 	unlock := s.locks.lock(siteLockKey(site))
 	defer unlock()
+	return s.deleteSiteLocked(site)
+}
+
+func (s *Store) deleteSiteLocked(site string) error {
 	// An interrupted replace of this site is retired first: its record goes
 	// durably, then its trees, so recovery can never bring back a copy of a
 	// deleted site (siteswap.go). A site that existed only as such a copy

@@ -45,6 +45,8 @@ const genAttempts = 8
 // Artifact is the metadata record for one stored file. PasswordHash is never
 // serialized to clients — callers that emit JSON build their own view types.
 type Artifact struct {
+	Pinned       bool
+	Revision     string
 	Slug         string
 	Filename     string
 	ContentType  string
@@ -340,11 +342,16 @@ CREATE TABLE IF NOT EXISTS artifacts (
 		// (Put and Rebake), which writers from before it cannot set; the
 		// triggers below refuse their writes (writerTriggers).
 		{"writer_tag", "ALTER TABLE artifacts ADD COLUMN writer_tag TEXT NOT NULL DEFAULT ''"},
+		{"pinned", "ALTER TABLE artifacts ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, col := range added {
 		if err := s.addColumnIfMissing(col.name, col.ddl); err != nil {
 			return err
 		}
+	}
+	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS management_policy (id INTEGER PRIMARY KEY CHECK(id=1), default_ttl INTEGER NOT NULL);
+UPDATE artifacts SET writer_tag = lower(hex(randomblob(16))) WHERE writer_tag = '';`); err != nil {
+		return err
 	}
 	// Rows written before publish identifiers get one each. Pages baked
 	// before then carry no token bound to it and need a rebake to take
@@ -514,6 +521,7 @@ type PutOptions struct {
 	// as is. Set at most one of Password and PasswordHash. A server hashes
 	// under its KDF concurrency limit and passes the hash here.
 	PasswordHash string
+	TTLSet       bool          // distinguishes explicit never from absence
 	TTL          time.Duration // 0 = never expires; >0 sets expires_at = now+TTL
 	Series       string        // explicit series family (validated upstream); "" = none
 	// Source is the ORIGINAL document the stored bytes were rendered from, kept
@@ -682,7 +690,7 @@ func (s *Store) Put(opts PutOptions, r io.Reader) (Artifact, error) {
 			return Artifact{}, err
 		}
 		unlock := s.locks.lock(slug)
-		prior, err := s.swapMeta(&art, sourceGen, !named)
+		prior, err := s.swapMeta(&art, sourceGen, !named, opts.TTLSet || opts.TTL != 0)
 		if errors.Is(err, errSlugTaken) && attempt < genAttempts {
 			unlock()
 			moved, merr := s.moveGeneratedWrite(slug, gen, sourceGen, opts.Private)
@@ -969,7 +977,7 @@ type priorGen struct {
 // the row named before, read in the same transaction, so the caller removes
 // exactly the files this write replaced. With exclusive set (a generated
 // publish) it refuses with errSlugTaken when the row already exists.
-func (s *Store) swapMeta(a *Artifact, sourceGen string, exclusive bool) (priorGen, error) {
+func (s *Store) swapMeta(a *Artifact, sourceGen string, exclusive, ttlSet bool) (priorGen, error) {
 	const q = `
 INSERT INTO artifacts (slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, source_gen, modified_at, replies, publish_id, writer_tag)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, lower(hex(randomblob(8))))
@@ -996,7 +1004,7 @@ ON CONFLICT(slug) DO UPDATE SET
     replies       = excluded.replies,
     publish_id    = excluded.publish_id,
     writer_tag    = excluded.writer_tag
-RETURNING modified_at;`
+RETURNING modified_at, writer_tag;`
 	tx, err := s.db.Begin()
 	if err != nil {
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
@@ -1008,8 +1016,11 @@ RETURNING modified_at;`
 	if err := endWrite(tx, a.Slug, a.Version); err != nil {
 		return priorGen{}, err
 	}
+	// A generated write can retry under a new slug after a collision.
+	// Do not carry the colliding row's pin into that fresh namespace.
+	a.Pinned = false
 	var p priorGen
-	err = tx.QueryRow(`SELECT blob_gen, source_gen FROM artifacts WHERE slug = ?`, a.Slug).Scan(&p.blobGen, &p.sourceGen)
+	err = tx.QueryRow(`SELECT blob_gen, source_gen, pinned FROM artifacts WHERE slug = ?`, a.Slug).Scan(&p.blobGen, &p.sourceGen, &a.Pinned)
 	switch {
 	case err == nil:
 		p.exists = true
@@ -1021,6 +1032,21 @@ RETURNING modified_at;`
 		// A generated publish never replaces a row; rolling back keeps its
 		// write intent.
 		return priorGen{}, errSlugTaken
+	}
+	if a.Pinned {
+		if ttlSet {
+			return priorGen{}, ErrPinned
+		}
+		a.ExpiresAt = time.Time{}
+	} else if !ttlSet {
+		var d int64
+		err := tx.QueryRow(`SELECT default_ttl FROM management_policy WHERE id=1`).Scan(&d)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return priorGen{}, err
+		}
+		if d > 0 {
+			a.ExpiresAt = time.Now().UTC().Add(time.Duration(d))
+		}
 	}
 	// A new row takes its metadata allowance from the quota (quota.go), and
 	// so does the pending deletion a replaced row leaves. The transaction
@@ -1060,7 +1086,7 @@ RETURNING modified_at;`
 		a.Slug, a.Filename, a.ContentType, a.Size, a.CreatedAt.Unix(), a.Owner,
 		boolToInt(a.Private), a.PasswordHash, unixOrZero(a.ExpiresAt), a.Series, a.RenderSpec,
 		a.Version, sourceGen, unixOrZero(a.ModifiedAt), boolToInt(a.Replies), a.PublishID,
-	).Scan(&modified); err != nil {
+	).Scan(&modified, &a.Revision); err != nil {
 		return priorGen{}, fmt.Errorf("upsert metadata: %w", err)
 	}
 	s.beginTransition()
@@ -1161,10 +1187,10 @@ func (s *Store) lookup(slug string) (Artifact, error) {
 		replies  int
 	)
 	err := s.db.QueryRow(
-		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, modified_at, replies, publish_id
+		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, modified_at, replies, publish_id, pinned, writer_tag
 		   FROM artifacts WHERE slug = ?`,
 		slug,
-	).Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec, &a.Version, &modified, &replies, &a.PublishID)
+	).Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec, &a.Version, &modified, &replies, &a.PublishID, &a.Pinned, &a.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Artifact{}, ErrNotFound
 	}
@@ -1336,7 +1362,7 @@ func (s *Store) List(owner string) ([]Artifact, error) {
 }
 
 // scanArtifact reads List's columns followed by any additional scan destinations.
-func scanArtifact(rows *sql.Rows, extra ...any) (Artifact, error) {
+func scanArtifact(rows interface{ Scan(...any) error }, extra ...any) (Artifact, error) {
 	var (
 		a       Artifact
 		created int64

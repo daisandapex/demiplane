@@ -46,6 +46,7 @@ import (
 	"github.com/daisandapex/demiplane/v3/internal/store"
 	"github.com/daisandapex/demiplane/v3/internal/theme"
 	"github.com/daisandapex/demiplane/v3/internal/transport"
+	ttlparse "github.com/daisandapex/demiplane/v3/internal/ttl"
 )
 
 // moduleTLS is the native-TLS listener seam, installed by the build-tagged
@@ -97,6 +98,18 @@ func main() {
 		if err := runMCP(os.Args[2:]); err != nil {
 			log.Fatal(err)
 		}
+	case "delete":
+		fi, _ := os.Stdin.Stat()
+		interactive := fi != nil && fi.Mode()&os.ModeCharDevice != 0
+		if err := runDelete(os.Args[2:], os.Stdout, os.Stdin, interactive); err != nil && !errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(clientExitCode(err))
+		}
+	case "ttl", "pin", "unpin":
+		if err := runPatch(os.Args[1], os.Args[2:], os.Stdout); err != nil && !errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(clientExitCode(err))
+		}
 	case "list":
 		if err := runList(os.Args[2:], os.Stdout); err != nil && !errors.Is(err, flag.ErrHelp) {
 			log.Print(err)
@@ -133,6 +146,9 @@ Usage:
                     [--theme <name>] [--css <file>] [--header] [--footer] [--footer-link <url>] [--meta-header]
   demiplane receive --store <dir> [--slug <name>|--untar] [--base-url <url>] [--ttl <dur>] [--private]
   demiplane list [--url <control-url>] [--token-file <path>] [--all] [--json]
+  demiplane delete [slugs...] [--match GLOB] [--all] [--yes] [--confirm-host HOST] [--url URL] [--token-file FILE]
+  demiplane ttl <slug> <duration|none> [--url URL] [--token-file FILE]
+  demiplane pin|unpin <slug> [--url URL] [--token-file FILE]
   demiplane delete-site [--url <control-url>] [--token-file <path>] <name>
   demiplane delete-site --store <dir> <name>
   demiplane mcp     [--url <control-url>] [--token-file <path>]
@@ -179,6 +195,7 @@ func runServe(args []string) error {
 	allowedHosts := fs.String("allowed-hosts", "", "comma-separated Host values to serve (host or host:port); others get 421. The --base-url and --content-base-url hosts are always included. Empty = any Host")
 	trustedProxy := fs.String("trusted-proxy", "", "comma-separated IPs or CIDRs of reverse proxies whose X-Forwarded-For names the client for per-client limits; empty = the TCP peer is the client")
 	tokenFile := fs.String("token-file", "", "file holding the bearer token for publish/delete/list; overrides DEMIPLANE_TOKEN")
+	defaultTTL := fs.String("default-ttl", "0", "default artifact expiry: 0 (off), or 1m through 365d; sites excluded")
 	sweep := fs.Duration("sweep-interval", time.Minute, "how often to reap past-TTL artifacts")
 	browse := fs.Bool("browse", false, "serve an HTML index of non-private artifacts at GET /")
 	maxUpload := fs.Int64("max-upload", defaultMaxUpload, "max publish body size in bytes (default 100 MiB; 0 = unlimited)")
@@ -217,6 +234,10 @@ func runServe(args []string) error {
 	}
 	if *dir == "" {
 		return fmt.Errorf("--store is required")
+	}
+	policyTTL, err := ttlparse.Management(*defaultTTL)
+	if err != nil {
+		return fmt.Errorf("--default-ttl: %w", err)
 	}
 	hosts, err := server.ParseHostList(*allowedHosts)
 	if err != nil {
@@ -335,6 +356,9 @@ func runServe(args []string) error {
 		return err
 	}
 	defer st.Close()
+	if err := st.SetDefaultTTL(policyTTL); err != nil {
+		return err
+	}
 	if err := applyStoreQuota(st, *storeQuota); err != nil {
 		return err
 	}
@@ -735,6 +759,7 @@ func runReceive(args []string) error {
 			Private:  c.private,
 			Password: os.Getenv("DEMIPLANE_PASSWORD"),
 			TTL:      ttl,
+			TTLSet:   c.ttl != "",
 		},
 		BaseURL:   c.baseURL,
 		Untar:     c.untar,

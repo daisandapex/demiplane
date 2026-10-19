@@ -160,6 +160,41 @@ public listing omits it, and `list --all` refuses responses without it.
 Public listing metadata is allowlisted and excludes next destinations, render
 specs, hashes and reply credentials. Public listing/gallery eligibility is unchanged.
 
+### Revision-bound owner mutations (3.1)
+
+`PATCH /{slug}` and `POST /manage/delete` require a configured valid token and
+reject cross-origin writes in both split and combined deployments. They are
+absent from the content listener. All responses, including early refusals, carry
+`Cache-Control: private, no-store`. The configured control origin is authoritative
+behind a proxy; forwarded origin headers do not grant write permission.
+
+Owner manifests contain confidential identifiers. The server returns opaque
+revisions and a normalized control-origin instance identity. Clients freeze
+kind, identifier, revision and selection time, and the server rejects mismatched
+instances and invalid envelopes before mutation. It accepts no deletion filters.
+The revision and current pin are rechecked atomically at deletion. Concurrent
+republish or metadata changes cause skips. Sites use the same lock as their
+atomic tree replacements. A same-named artifact is independent. Retained sources
+follow the existing durable artifact deletion queue. Out-of-band site edits are
+unsupported. Per-item failures use fixed reasons; logs/errors never echo private
+capability URLs. Manifests themselves are privileged output and must be protected.
+
+CLI delete is a dry run unless `--yes` is given. Broad selections, including
+wildcard/filter equivalents of delete-all, additionally require interactive host
+typing or `--confirm-host`. MCP `delete_many` defaults to dry run and requires
+both the returned revision manifest and `confirm_host` for a real run. Existing
+single-item MCP `delete` keeps its immediate behavior. Confirmation is a client
+safeguard, not a second credential: a bearer holder may submit an explicit HTTP
+manifest directly. No server-side filter evaluation occurs.
+
+Pinning clears expiry and 3.1 writers reject explicit TTL while pinned.
+Default TTL is a persisted store policy set by serve, so independent SSH receive
+processes apply it. Explicit zero/none opts out. Sites are outside expiry policy.
+Pins are honored only by 3.1+: a 3.0 sweeper cannot expire a pin because its
+expiry uses the existing zero/no-expiry sentinel, but 3.0 writers can set expiry
+without enforcing pins. The additive migration permits older binaries to open
+the store; mixed-version writing does not guarantee retention.
+
 ## Content isolation between artifacts
 
 Every artifact and site is served from the one content origin, so the origin

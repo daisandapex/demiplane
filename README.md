@@ -152,7 +152,7 @@ no capability slugs.
 site deletion and cannot be combined with `--url` or `--token-file`.
 Flag parsing errors omit supplied values and URL environment defaults and exit
 with status 2. Publish failures retain status 1.
-A management 403 includes token configuration advice.
+The `list` and `delete-site` clients include token configuration advice on 403.
 
 Owner listing and remote site deletion require a configured server token and a
 valid bearer, even on an otherwise open server. Owner responses are private and
@@ -168,6 +168,60 @@ On the split content listener, GET and HEAD `/` redirect with `302` to an
 explicit valid HTTP(S) `--base-url` on a different host or non-default port.
 Unsafe or looping destinations keep the themed 404. Unknown slugs and the
 combined-origin landing page keep their existing behavior.
+
+### Expiry, pins, and bulk deletion (3.1)
+
+```sh
+demiplane ttl report 7d --url http://127.0.0.1:8080 --token-file ./token
+demiplane ttl report none --token-file ./token
+demiplane pin report --token-file ./token
+demiplane unpin report --token-file ./token
+# Preview: count, total bytes, and every selected identifier and revision.
+demiplane delete --match 'draft-*' --older-than 24h --token-file ./token
+# Execute exactly the manifest printed by this invocation.
+demiplane delete --match 'draft-*' --older-than 24h --yes --confirm-host 127.0.0.1 --token-file ./token
+demiplane delete --all --yes --confirm-host 127.0.0.1 --token-file ./token
+```
+
+Management requires a configured valid token. TTL changes set expiry to **now
+plus** the duration, from `1m` through `365d`; `none` or `0` clears expiry.
+Pinning clears expiry. A pinned slug refuses any explicitly supplied TTL,
+including never-expire values, until unpinned. Republishing without TTL keeps
+its pin. Unknown or expired slugs return 404 without changing anything.
+
+`serve --default-ttl 7d` sets a persistent default for HTTP, SSH receive (including
+untar artifact ingestion), and MCP publishes. The default is `0` (off); starting
+serve with `0` clears the stored policy. Only absent TTL on unpinned artifacts
+uses the default. Explicit `ttl=0` or `ttl=none` means never expires. Sites still
+reject TTL and are outside the default policy. Pins are honored only by 3.1+:
+the additive default-false database column preserves 3.0 compatibility, and a
+pinned artifact has the existing zero/no-expiry sentinel so a 3.0 sweeper leaves
+it alone. A 3.0 writer does not enforce pins and can set an expiry again.
+
+`delete` lists all owner pages, then selects locally. `--match` matches identifiers;
+`--older-than` is a positive Go duration measured from publication time;
+`--series` matches exactly; `--type` matches a MIME prefix. Filters intersect.
+Named slugs are unioned with the filter set. Artifacts are eligible by default;
+`--sites` adds sites, and `--all` includes both kinds. `--sites` alone is not a
+selector; no selector selects nothing.
+Pins are excluded from every selection unless `--include-pinned` is present.
+`--all` with other filters still intersects those filters. Sites have no series
+or MIME type, so those filters exclude them.
+
+Deletion is a dry run unless `--yes` is supplied. Every filter-based real run,
+including `--all`, also requires typing the server hostname interactively or
+passing `--confirm-host HOST` (hostname only, without a port). Named-only deletion
+needs `--yes` but no host confirmation. A new invocation creates a new preview;
+within one invocation the printed revision manifest is exactly what is submitted.
+Changed or newly pinned items are skipped atomically, never silently replaced by
+new selections. Empty selections print `nothing to delete` and exit 0. Per-item
+failures, skips, or missing items exit 1; invalid flags exit 2. Retained sources
+are removed with artifacts; a same-named site is independent.
+
+MCP adds `delete_many` (dry run defaults true), `set_ttl`, and `pin`. A real
+`delete_many` call requires the returned manifest, including revisions, and
+`confirm_host`. `pin` takes `pinned:false` to unpin. Existing MCP `delete` remains
+an immediate, single-slug operation. See [API.md](API.md#post-managedelete).
 
 ## How it compares
 

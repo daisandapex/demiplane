@@ -16,9 +16,9 @@ type OwnerArtifact struct {
 }
 
 // OwnerArtifacts returns a page of unexpired artifacts, including private ones,
-// in rowid order. It uses existing metadata without changing the store format.
+// in rowid order, with pin state and the current opaque write revision.
 func (s *Store) OwnerArtifacts(ctx context.Context, owner string, after int64, limit int) ([]OwnerArtifact, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, replies, rowid
+	rows, err := s.db.QueryContext(ctx, `SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, replies, rowid, pinned, writer_tag
  FROM artifacts WHERE owner = ? AND rowid > ? AND (expires_at = 0 OR expires_at > ?)
  ORDER BY rowid LIMIT ?`, owner, after, time.Now().Unix(), limit)
 	if err != nil {
@@ -28,7 +28,10 @@ func (s *Store) OwnerArtifacts(ctx context.Context, owner string, after int64, l
 	var out []OwnerArtifact
 	for rows.Next() {
 		var a OwnerArtifact
-		a.Artifact, err = scanArtifact(rows, &a.RowID)
+		var pinned bool
+		var revision string
+		a.Artifact, err = scanArtifact(rows, &a.RowID, &pinned, &revision)
+		a.Pinned, a.Revision = pinned, revision
 		if err != nil {
 			return nil, err
 		}

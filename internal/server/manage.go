@@ -21,7 +21,14 @@ import (
 // control-origin write check also applies in the legacy combined topology.
 func (s *Server) requireOwner(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.isCrossOriginWrite(r) {
+		originMismatch := false
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+			if origin := r.Header.Get("Origin"); origin != "" {
+				normalized, ok := normalizeOrigin(origin)
+				originMismatch = !ok || normalized != s.controlOrigin(r)
+			}
+		}
+		if originMismatch || s.isCrossOriginWrite(r) {
 			http.Error(w, "cross-origin write rejected", http.StatusForbidden)
 			return
 		}
@@ -83,7 +90,9 @@ func (s *Server) handleOwnerList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for i, a := range arts {
-			items = append(items, artifactListItem(a.Artifact, base))
+			item := artifactListItem(a.Artifact, base)
+			item.Pinned, item.Revision = a.Pinned, a.Revision
+			items = append(items, item)
 			if i == listPageSize-1 {
 				artifactCursor = "artifact:" + strconv.FormatInt(a.RowID, 10)
 			}
@@ -99,13 +108,21 @@ func (s *Server) handleOwnerList(w http.ResponseWriter, r *http.Request) {
 			if phase == "site" && name <= after {
 				continue
 			}
-			items = append(items, listItem{Slug: name, URL: base + "/" + name + "/", Filename: name, Owner: store.DefaultOwner, Kind: "site", Render: "raw"})
+			meta, err := s.store.SiteMetadata(name)
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				managementFailure(w, err)
+				return
+			}
+			items = append(items, listItem{Revision: meta.Revision, Size: meta.Size, CreatedAt: meta.CreatedAt.Format(time.RFC3339Nano), Slug: name, URL: base + "/" + name + "/", Filename: name, Owner: store.DefaultOwner, Kind: "site", Render: "raw"})
 			if len(items) > listPageSize {
 				break
 			}
 		}
 	}
-	resp := map[string]any{"owner": true}
+	resp := map[string]any{"owner": true, "instance": s.controlOrigin(r)}
 	if len(items) > listPageSize {
 		items = items[:listPageSize]
 		last := items[len(items)-1]

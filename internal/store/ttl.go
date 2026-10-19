@@ -11,6 +11,6 @@ import (
 
 // ParseTTL parses a human time-to-live string into a positive duration. See
 // ttl.Parse for the accepted forms: Go duration syntax plus a decimal "<n>d"
-// day suffix, at least ttl.Min. An empty string means "no TTL" and returns
+// day suffix, at least ttl.Min. Empty, "0", and "none" mean no TTL and return
 // (0, nil); every other accepted input is a duration that expires.
 func ParseTTL(s string) (time.Duration, error) { return ttl.Parse(s) }

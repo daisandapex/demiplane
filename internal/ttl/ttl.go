@@ -41,14 +41,13 @@ var maxNS = new(big.Rat).SetInt64(math.MaxInt64)
 //
 // It accepts Go duration syntax ("30m", "2h", "90s", "1h30m") plus a day
 // suffix Go's time.ParseDuration lacks: "<n>d" means n*24h, with n a plain
-// decimal ("7d", "0.5d"). Only the empty string means "no TTL" and returns
-// (0, nil); a value of only whitespace is an error, not a silent "no expiry".
-// Every other input either yields a duration in [Min, MaxInt64 ns] or an
-// error, so an accepted non-empty TTL always produces an artifact that
-// expires. Surrounding whitespace on a real value is ignored. A string longer
+// decimal ("7d", "0.5d"). The empty string means "no TTL" and returns
+// (0, nil), as do explicit "0" and "none"; a value of only whitespace is an error, not a silent "no expiry".
+// Every other non-empty input either yields a duration in [Min, MaxInt64 ns] or an
+// error. Surrounding whitespace on a real value is ignored. A string longer
 // than MaxLen bytes is refused before it is parsed.
 func Parse(s string) (time.Duration, error) {
-	if s == "" {
+	if s == "" || s == "0" || s == "none" {
 		return 0, nil
 	}
 	if len(s) > MaxLen {
@@ -88,6 +87,19 @@ func Parse(s string) (time.Duration, error) {
 	}
 	if d < Min {
 		return 0, fmt.Errorf("ttl %q is shorter than the %s minimum", s, Min)
+	}
+	return d, nil
+}
+
+// Management parses a TTL policy, bounded to one minute through 365 days.
+// Zero and none clear the policy; absence is handled separately by callers.
+func Management(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, fmt.Errorf("ttl is required")
+	}
+	d, err := Parse(s)
+	if err != nil || (d != 0 && (d < time.Minute || d > 365*24*time.Hour)) {
+		return 0, fmt.Errorf("ttl must be 0, none, or between 1m and 365d")
 	}
 	return d, nil
 }

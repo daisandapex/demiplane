@@ -129,6 +129,7 @@ func receiveTar(st *store.Store, opts ReceiveOptions, in io.Reader, out io.Write
 			Filename:     path.Base(hdr.Name),
 			PasswordHash: opts.PasswordHash,
 			TTL:          opts.TTL,
+			TTLSet:       opts.TTLSet,
 		}, &store.BudgetReader{R: tr, Remaining: &budget})
 		if err != nil {
 			// The entry name is the slug of the artifact it would replace,

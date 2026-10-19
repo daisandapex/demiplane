@@ -188,7 +188,7 @@ func TestManageOwnerList(t *testing.T) {
 		t.Fatal(found)
 	}
 	site := found["site-only"]
-	if site.Kind != "site" || site.URL != "https://content.test/site-only/" || site.Render != "raw" || site.Reply || site.Private || site.Password || site.ExpiresAt != "" || site.Series != "" || site.CreatedAt != "" || site.Size != 0 || site.ContentType != "" {
+	if site.Kind != "site" || site.URL != "https://content.test/site-only/" || site.Render != "raw" || site.Reply || site.Private || site.Password || site.ExpiresAt != "" || site.Series != "" || site.CreatedAt == "" || site.Size != 10 || site.Revision == "" || site.ContentType != "" {
 		t.Fatal(site)
 	}
 	for _, cursor := range []string{"bad-secret", "site:..", "evil:secret", "artifact:"} {

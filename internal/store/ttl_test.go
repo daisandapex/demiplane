@@ -25,7 +25,7 @@ func TestParseTTL(t *testing.T) {
 		{"1d", 24 * time.Hour, false},
 		{"0.5d", 12 * time.Hour, false},
 		{"  2h  ", 2 * time.Hour, false},
-		{"0", 0, true},
+		{"0", 0, false},
 		{"-5m", 0, true},
 		{"0d", 0, true},
 		{"-1d", 0, true},

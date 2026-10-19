@@ -8,6 +8,21 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Added
 
+- Owner-only `PATCH /{slug}` to set/clear TTL (1m through 365d) and pin/unpin,
+  with atomic publish/sweeper coordination and no-store responses.
+- Persistent artifact pins and an idempotent additive migration. Pins clear
+  expiry, allowing 3.0 sweepers to leave them alone; pin enforcement needs 3.1+.
+- `serve --default-ttl` (off by default), persisted for HTTP, SSH receive and MCP
+  artifact publishes. Explicit zero/none opts out. Sites remain outside expiry.
+- Revision-bearing owner inventory and `POST /manage/delete` for exact manifests,
+  reporting deleted, changed/pinned, missing and failed entries independently.
+- Dry-run-first `demiplane delete` with intersecting client-side filters, named
+  slug union, pagination, pin exclusion, and host confirmation for broad runs.
+  Real runs submit the displayed revisions and skip concurrent changes.
+- `demiplane ttl`, `pin`, `unpin`; MCP `delete_many` (dry run by default, explicit
+  revision manifest and host confirmation for execution), `set_ttl`, and `pin`.
+  Existing MCP `delete` remains immediate and single-slug.
+
 - `demiplane list` with publish-compatible URL/token flags, a human table,
   `--json`, automatic pagination, and `--all` owner inventory.
 - Allowlisted listing facts: resource kind, render mode, reply enabled, series,
@@ -24,9 +39,13 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Changed
 
+- Owner site entries report aggregate regular-file size and publication timestamp
+  for client-side selection; public listing behavior is unchanged.
+
 - Startup inventory explicitly counts unexpired artifacts including private,
   plus published sites, matching owner inventory. Public list/gallery selection
-  is unchanged. No store schema or layout changes.
+  is unchanged. The directory layout is unchanged; pin metadata and default expiry
+  policy use additive SQLite schema changes.
 
 ### Fixed
 

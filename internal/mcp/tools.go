@@ -41,7 +41,7 @@ type tool struct {
 // harness surfaces to the model.
 func toolDefs() []tool {
 	str := map[string]any{"type": "string"}
-	return []tool{
+	return append(manageToolDefs(), []tool{
 		{
 			Name: "publish",
 			Description: "Publish content to demiplane and get back a shareable URL. Supply either " +
@@ -96,7 +96,7 @@ func toolDefs() []tool {
 				},
 			},
 		},
-	}
+	}...)
 }
 
 // callTool dispatches a tools/call to the matching handler. A missing/unknown
@@ -105,6 +105,8 @@ func toolDefs() []tool {
 // password is ever placed in an error.
 func callTool(ctx context.Context, c *Client, name string, args json.RawMessage) (*toolResult, *rpcError) {
 	switch name {
+	case "delete_many", "set_ttl", "pin":
+		return callManage(ctx, c, name, args)
 	case "publish":
 		return callPublish(ctx, c, args)
 	case "list":

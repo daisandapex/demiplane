@@ -42,7 +42,7 @@ func TestParse(t *testing.T) {
 		{"2562047h", 2562047 * time.Hour, false},
 		{"2562048h", 0, true},
 		// Zero, negative and malformed input.
-		{"0", 0, true},
+		{"0", 0, false},
 		{"-5m", 0, true},
 		{"0d", 0, true},
 		{"-1d", 0, true},

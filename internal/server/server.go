@@ -262,7 +262,7 @@ func (s *Server) ContentHandler() http.Handler {
 func (s *Server) wrapListener(guarded http.Handler) http.Handler {
 	next := s.withRequestDeadlines(withSecurityHeaders(boundHost(s.hostPolicy(canonicalPaths(s.withAdmission(guarded))))))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("all") == "1" {
+		if r.URL.Query().Get("all") == "1" || r.Method == http.MethodPatch || r.URL.Path == "/manage/delete" {
 			w.Header().Set("Cache-Control", "private, no-store")
 		}
 		next.ServeHTTP(w, r)
@@ -294,6 +294,8 @@ func (s *Server) registerControlRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /publish", s.requireAuth(s.handlePublish))
 	mux.HandleFunc("GET /list", s.routeList)
 	mux.HandleFunc("DELETE /sites/{name}", s.requireOwner(s.handleDeleteSite))
+	mux.HandleFunc("PATCH /{slug}", s.requireOwner(s.handlePatch))
+	mux.HandleFunc("POST /manage/delete", s.requireOwner(s.handleBulkDelete))
 	mux.HandleFunc("DELETE /{slug}", s.requireAuth(s.handleDelete))
 	// Human + agent surfaces. These literal paths win over GET /{slug} (more
 	// specific), and "docs"/"help"/"llms.txt" are reserved slug names so an
@@ -758,6 +760,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		Private:      private,
 		PasswordHash: passwordHash,
 		TTL:          ttl,
+		TTLSet:       q.Has("ttl"),
 		Series:       series,
 		// nil on a non-rendered publish, which also DROPS any source retained at
 		// this slug by an earlier rendered publish (store.Put).
@@ -771,6 +774,10 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			http.Error(w, "upload exceeds the configured size limit", http.StatusRequestEntityTooLarge)
+			return
+		}
+		if errors.Is(err, store.ErrPinned) {
+			http.Error(w, store.ErrPinned.Error(), http.StatusConflict)
 			return
 		}
 		if errors.Is(err, store.ErrQuota) {
@@ -1122,6 +1129,8 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 // listItem is one entry in the GET /list response. The password hash is never
 // included — only whether a password gate exists.
 type listItem struct {
+	Pinned      bool   `json:"pinned,omitempty"`
+	Revision    string `json:"revision,omitempty"`
 	Kind        string `json:"kind"`
 	Render      string `json:"render"`
 	Reply       bool   `json:"reply"`
