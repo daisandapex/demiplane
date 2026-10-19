@@ -6,6 +6,8 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-19
+
 ### Breaking
 
 - **The module path is now `github.com/daisandapex/demiplane/v3`.** Install
