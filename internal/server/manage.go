@@ -6,8 +6,10 @@ package server
 import (
 	"errors"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,7 +35,6 @@ func (s *Server) requireOwner(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) routeList(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("all") == "1" {
-		w.Header().Set("Cache-Control", "private, no-store")
 		s.requireOwner(s.handleOwnerList)(w, r)
 		return
 	}
@@ -55,24 +56,37 @@ func artifactListItem(a store.Artifact, base string) listItem {
 
 func (s *Server) handleOwnerList(w http.ResponseWriter, r *http.Request) {
 	phase, after := "artifact", ""
+	var rowID int64
 	if cursor := r.URL.Query().Get("after"); cursor != "" {
 		var ok bool
 		phase, after, ok = strings.Cut(cursor, ":")
-		if !ok || (phase != "artifact" && phase != "site") || store.ValidateNamedSlug(after) != nil {
+		valid := false
+		if phase == "artifact" {
+			var err error
+			rowID, err = strconv.ParseInt(after, 10, 64)
+			valid = err == nil && rowID > 0 && strconv.FormatInt(rowID, 10) == after
+		} else if phase == "site" {
+			valid = store.ValidateNamedSlug(after) == nil
+		}
+		if !ok || !valid {
 			http.Error(w, "bad after cursor", http.StatusBadRequest)
 			return
 		}
 	}
 	items := make([]listItem, 0, listPageSize+1)
 	base := s.contentBase(r)
+	var artifactCursor string
 	if phase == "artifact" {
-		arts, err := s.store.OwnerArtifacts(r.Context(), store.DefaultOwner, after, listPageSize+1)
+		arts, err := s.store.OwnerArtifacts(r.Context(), store.DefaultOwner, rowID, listPageSize+1)
 		if err != nil {
 			managementFailure(w, err)
 			return
 		}
-		for _, a := range arts {
-			items = append(items, artifactListItem(a, base))
+		for i, a := range arts {
+			items = append(items, artifactListItem(a.Artifact, base))
+			if i == listPageSize-1 {
+				artifactCursor = "artifact:" + strconv.FormatInt(a.RowID, 10)
+			}
 		}
 	}
 	if len(items) <= listPageSize {
@@ -95,7 +109,11 @@ func (s *Server) handleOwnerList(w http.ResponseWriter, r *http.Request) {
 	if len(items) > listPageSize {
 		items = items[:listPageSize]
 		last := items[len(items)-1]
-		resp["next"] = last.Kind + ":" + last.Slug
+		if last.Kind == "artifact" {
+			resp["next"] = artifactCursor
+		} else {
+			resp["next"] = "site:" + last.Slug
+		}
 	}
 	resp["artifacts"], resp["count"] = items, len(items)
 	writeJSON(w, http.StatusOK, resp)
@@ -154,7 +172,10 @@ func redirectHostsDiffer(destination, content string) bool {
 	}
 	du, _ := url.Parse(destination)
 	cu, _ := url.Parse(content)
-	return !strings.EqualFold(du.Host, cu.Host)
+	du.Scheme, cu.Scheme = "http", "http"
+	dest, _ = redirectHost(du.String())
+	host, _ = redirectHost(cu.String())
+	return dest != host
 }
 
 func redirectHost(raw string) (string, bool) {
@@ -168,9 +189,19 @@ func redirectHost(raw string) (string, bool) {
 	}
 	// Ignore scheme when comparing the destination with the content host.
 	host := strings.ToLower(u.Hostname())
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	}
 	port := u.Port()
+	if port != "" {
+		n, err := strconv.ParseUint(port, 10, 16)
+		if err != nil {
+			return "", false
+		}
+		port = strconv.FormatUint(n, 10)
+	}
 	if port != "" && !(u.Scheme == "http" && port == "80") && !(u.Scheme == "https" && port == "443") {
-		host += ":" + port
+		host = net.JoinHostPort(host, port)
 	}
 	return host, true
 }

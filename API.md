@@ -104,10 +104,8 @@ as `text/plain` followed by a newline. With `Accept: application/json`:
   "private": false,
   "password": false,
   "expires_at": "",
-      "series": "",
-      "kind": "artifact",
-      "render": "raw",
-      "reply": false
+  "series": "",
+  "replies": false
 }
 ```
 
@@ -372,18 +370,19 @@ absent.
 ### Owner inventory: GET /list?all=1
 
 Requires a configured and valid bearer token, including on an otherwise open
-instance. Owner responses, including authentication and handler errors, use
-`Cache-Control: private, no-store`. The response has the same `artifacts`,
+instance. Owner responses, including early admission and host-policy refusals,
+authentication and handler errors, use `Cache-Control: private, no-store`.
+The response has the same `artifacts`,
 `count`, and optional `next` envelope, including private artifacts and published
 sites. Expired artifacts, staging directories, backups, tombstones, symlinks
 and non-directory site entries are excluded.
 
-Pages contain at most 200 entries, artifacts first in slug order, then sites in
+Pages contain at most 200 entries, artifacts first in row ID order, then sites in
 name order. Pass `next` back as `after` while retaining `all=1`. Owner cursors
-are `artifact:<slug>` or `site:<name>`; malformed cursors return `400` without
-echoing the input. `count` is the page count. Pagination is not a snapshot under
-concurrent writes. Owner cursors may contain capability slugs: treat them as
-secrets and keep query strings out of proxy access logs.
+are `artifact:<rowid>` (a positive integer) or `site:<name>`; malformed cursors
+return `400` without echoing the input. `count` is the page count. Pagination
+is not a snapshot under concurrent writes. Artifact cursors contain no capability slug; clients should
+treat continuation cursors as opaque values.
 
 Sites remain public and have no stored publication facts: `kind=site`,
 `render=raw`, `reply=false`, `private=false`, `password=false`, empty `series`,
@@ -475,8 +474,9 @@ Control-plane site deletion through the store's transactional `DeleteSite`.
 Requires a configured valid token: `403` with configuration advice when no
 server token is set, `401` for missing/wrong bearer otherwise. Returns `204`
 with no body on success, `404` for an absent site, `400` for an invalid name,
-and generic `500` for storage failure. A site and an artifact with the same
-name are independent: deleting either preserves the other's bytes.
+and generic `500` for storage failure, including errors inspecting the site.
+A site and an artifact with the same name are independent: deleting either
+preserves the other's bytes.
 
 The existing control-origin write checks apply, including in combined mode:
 `Sec-Fetch-Site: same-site` or `cross-site`, foreign Origin, and `Origin: null`
@@ -492,6 +492,9 @@ demiplane delete-site --url "$CTRL" --token-file ~/.config/demiplane/token demo
 demiplane delete-site --store ./store demo
 ```
 
+Remote `delete-site` requires `--url` or `DEMIPLANE_URL`; without either, use
+`--store` for offline deletion. A bare site name is a usage error.
+
 ## Content-plane GET and HEAD /
 
 An explicit valid HTTP(S) `--base-url` redirects the split content root with
@@ -499,8 +502,8 @@ An explicit valid HTTP(S) `--base-url` redirects the split content root with
 credentials, missing or malformed hosts, non-HTTP(S) schemes, or the same host
 as the advertised content origin or direct request are refused with the
 existing themed `404`. Host comparison ignores case and normalizes default
-ports; different non-default ports remain distinct. A scheme change alone on
-the same default host is refused. Without `--base-url`, root remains the themed
+ports, numeric port spellings, and IP literals; different non-default ports
+remain distinct. A scheme change alone on the same default host is refused. Without `--base-url`, root remains the themed
 `404`. Unknown slugs remain themed `404`; the combined-origin root stays its
 normal landing page. The redirect is public and independent of bearer tokens.
 

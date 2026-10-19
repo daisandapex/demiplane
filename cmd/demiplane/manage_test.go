@@ -278,7 +278,7 @@ func TestManageCLIHelp(t *testing.T) {
 		}
 	}
 	help := captureManageStderr(t, usage)
-	for _, text := range []string{"demiplane list", "demiplane delete-site --url", "demiplane delete-site --store", "offline", "--all", "--json"} {
+	for _, text := range []string{"demiplane list", "demiplane delete-site [--url", "demiplane delete-site --store", "offline", "--all", "--json"} {
 		if !strings.Contains(help, text) {
 			t.Fatalf("missing %q", text)
 		}
@@ -339,6 +339,115 @@ func TestManageStartupInventory(t *testing.T) {
 	for _, a := range page.Artifacts {
 		if a.Private && strings.Contains(banner, a.Slug) {
 			t.Fatal("banner leaked capability")
+		}
+	}
+}
+
+// Use a subprocess so a regression to flag.ExitOnError is also observable.
+func TestClientFlagSecrets(t *testing.T) {
+	if command := os.Getenv("DEMIPLANE_TEST_FLAG_COMMAND"); command != "" {
+		args := strings.Split(os.Getenv("DEMIPLANE_TEST_FLAG_ARGS"), "\n")
+		var err error
+		switch command {
+		case "list":
+			err = runList(args, io.Discard)
+		case "delete-site":
+			err = runDeleteSite(args)
+		case "publish":
+			err = runPublish(args)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		return
+	}
+	secret := "https://secret-token@control.test/private-capability"
+	for _, command := range []string{"list", "delete-site", "publish"} {
+		boolean := "all"
+		if command == "publish" {
+			boolean = "private"
+		}
+		for _, args := range []string{"--bogus", "--" + secret, "--" + boolean + "=" + secret, "--help", "--url\n" + secret + "\n--bogus"} {
+			t.Run(command+"/"+strings.Split(args, "\n")[0], func(t *testing.T) {
+				c := exec.Command(os.Args[0], "-test.run=^TestClientFlagSecrets$")
+				c.Env = append(os.Environ(), "DEMIPLANE_TEST_FLAG_COMMAND="+command, "DEMIPLANE_TEST_FLAG_ARGS="+args, "DEMIPLANE_URL="+secret)
+				output, err := c.CombinedOutput()
+				if len(output) == 0 {
+					t.Fatalf("missing help/error: %v", err)
+				}
+				for _, value := range []string{secret, "secret-token", "private-capability", "http://", "https://"} {
+					if strings.Contains(string(output), value) {
+						t.Errorf("diagnostic leaked %q: %s", value, output)
+					}
+				}
+				if args == "--help" && !strings.Contains(string(output), "-url") {
+					t.Fatalf("help missing: %s", output)
+				}
+			})
+		}
+	}
+}
+
+func TestManageAllRequiresOwnerFields(t *testing.T) {
+	for _, jsonOutput := range []bool{false, true} {
+		t.Run(fmt.Sprint(jsonOutput), func(t *testing.T) {
+			useManageTransport(t, func(r *http.Request) (*http.Response, error) {
+				return manageResponse(r, 200, `{"artifacts":[{"slug":"public","url":"https://content.test/public"}],"count":1}`), nil
+			})
+			var out bytes.Buffer
+			args := []string{"--all"}
+			if jsonOutput {
+				args = append(args, "--json")
+			}
+			err := runList(args, &out)
+			if err == nil || !strings.Contains(err.Error(), "server does not support --all; upgrade it") || out.Len() != 0 {
+				t.Fatalf("error=%v output=%s", err, &out)
+			}
+		})
+	}
+}
+
+func TestManageForbiddenAdvice(t *testing.T) {
+	useManageTransport(t, func(r *http.Request) (*http.Response, error) {
+		return manageResponse(r, 403, "configure a token; secret-untrusted-body"), nil
+	})
+	for _, err := range []error{runList([]string{"--all"}, io.Discard), deleteRemoteSite("https://control.test", "", "demo")} {
+		if err == nil || !strings.Contains(err.Error(), "configure a token") || strings.Contains(err.Error(), "secret-untrusted-body") {
+			t.Fatalf("advice: %v", err)
+		}
+	}
+}
+
+func TestDeleteSiteRequiresDestination(t *testing.T) {
+	t.Setenv("DEMIPLANE_URL", "")
+	calls := 0
+	useManageTransport(t, func(r *http.Request) (*http.Response, error) {
+		calls++
+		return manageResponse(r, 204, ""), nil
+	})
+	for _, args := range [][]string{{"demo"}, {"--url", "", "demo"}, {"--token-file", "unused", "demo"}} {
+		err := runDeleteSite(args)
+		if err == nil || !strings.Contains(err.Error(), "usage:") {
+			t.Errorf("args=%v: %v", args, err)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("unsolicited remote deletes: %d", calls)
+	}
+}
+
+func TestDeleteSiteHelpURLDefault(t *testing.T) {
+	output := captureManageStderr(t, usage)
+	if !strings.Contains(output, "delete-site [--url <control-url>]") || !strings.Contains(output, "DEMIPLANE_URL") {
+		t.Fatalf("help does not explain optional URL: %s", output)
+	}
+}
+
+func TestClientURLValidationSecrets(t *testing.T) {
+	for _, value := range []string{"https://%secret-token/private-capability", "secret-token://control.test/private-capability", "https:///secret-token/private-capability"} {
+		_, err := resolveBaseURL(value)
+		if err == nil || strings.Contains(err.Error(), "secret-token") || strings.Contains(err.Error(), "private-capability") {
+			t.Errorf("unsafe/missing URL error: %v", err)
 		}
 	}
 }

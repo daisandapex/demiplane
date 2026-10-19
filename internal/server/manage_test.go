@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -480,5 +482,139 @@ func TestManageContentRedirect(t *testing.T) {
 		if r.Code != 200 || r.Header().Get("Location") != "" {
 			t.Fatal("combined root changed")
 		}
+	}
+}
+
+func TestManageEquivalentRedirectAuthorities(t *testing.T) {
+	for _, tc := range [][2]string{
+		{"http://localhost:08081/", "http://localhost:8081"},
+		{"http://localhost:00080/", "http://localhost"},
+		{"https://localhost:00443/", "https://localhost"},
+		{"http://[0:0:0:0:0:0:0:1]:8081/", "http://[::1]:8081"},
+		{"http://[0:0:0:0:0:0:0:1]:0443/", "https://[::1]:443"},
+	} {
+		t.Run(tc[0], func(t *testing.T) {
+			if redirectHostsDiffer(tc[0], tc[1]) {
+				t.Errorf("equivalent authorities differ: %v", tc)
+			}
+			s := New(manageStore(t), Config{BaseURL: tc[0], ContentBaseURL: tc[1]})
+			rec := httptest.NewRecorder()
+			s.ContentHandler().ServeHTTP(rec, httptest.NewRequest("GET", tc[1]+"/", nil))
+			if rec.Code != 404 || rec.Header().Get("Location") != "" {
+				t.Fatalf("redirect loop: %d %v", rec.Code, rec.Header())
+			}
+		})
+	}
+}
+
+func TestManageEarlyRefusalNoStore(t *testing.T) {
+	s := New(manageStore(t), Config{AllowedHosts: []string{"allowed.test"}, Requests: RequestLimits{MaxRequests: 1}})
+	for name, h := range map[string]http.Handler{"control": s.ControlHandler(), "content": s.ContentHandler(), "combined": s.Handler()} {
+		t.Run(name, func(t *testing.T) {
+			rec := manageRequest(h, "GET", "/list?all=1", "", nil)
+			if rec.Code != 421 || rec.Header().Get("Cache-Control") != "private, no-store" {
+				t.Fatalf("host refusal: %d %v", rec.Code, rec.Header())
+			}
+		})
+	}
+	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	h := s.wrapListener(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(entered); <-release }))
+	go func() {
+		defer close(done)
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "http://allowed.test/", nil))
+	}()
+	<-entered
+	defer func() { close(release); <-done }()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "http://allowed.test/list?all=1", nil))
+	if rec.Code != 503 || rec.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatalf("admission refusal: %d %v", rec.Code, rec.Header())
+	}
+}
+
+func TestManageOwnerCursorNoCapability(t *testing.T) {
+	st := manageStore(t)
+	slugs := make([]string, listPageSize+1)
+	for i := range slugs {
+		slugs[i] = managePut(t, st, store.PutOptions{Private: true}).Slug
+	}
+	h := New(st, Config{AuthToken: "owner"}).ControlHandler()
+	page := manageDecode(t, manageRequest(h, "GET", "/list?all=1", "owner", nil))
+	id, err := strconv.ParseInt(strings.TrimPrefix(page.Next, "artifact:"), 10, 64)
+	if err != nil || id <= 0 {
+		t.Fatalf("cursor is not an opaque row ID: %q", page.Next)
+	}
+	for i, item := range page.Artifacts {
+		if item.Slug != slugs[i] {
+			t.Fatalf("row order at %d: %s != %s", i, item.Slug, slugs[i])
+		}
+		if strings.Contains(page.Next, item.Slug) {
+			t.Fatalf("capability in cursor: %s", page.Next)
+		}
+	}
+	next := manageDecode(t, manageRequest(h, "GET", "/list?all=1&after="+page.Next, "owner", nil))
+	if next.Count != 1 || next.Artifacts[0].Slug != slugs[listPageSize] || next.Next != "" {
+		t.Fatalf("bad continuation: %+v", next)
+	}
+	for _, cursor := range []string{"artifact:secret-capability", "artifact:-1", "artifact:0", "artifact:9223372036854775808", "artifact:01"} {
+		if r := manageRequest(h, "GET", "/list?all=1&after="+cursor, "owner", nil); r.Code != 400 {
+			t.Fatalf("accepted %s: %d", cursor, r.Code)
+		}
+	}
+}
+
+func TestManageDeleteSiteStatPermission(t *testing.T) {
+	st := manageStore(t)
+	manageSite(t, st, "demo")
+	dir := filepath.Join(st.Root(), "data", "sites")
+	if err := os.Chmod(dir, 0400); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0700)
+	if _, err := os.Stat(filepath.Join(dir, "demo")); !os.IsPermission(err) {
+		t.Skip("host permits stat through non-searchable directory")
+	}
+	rec := manageRequest(New(st, Config{AuthToken: "owner"}).ControlHandler(), "DELETE", "/sites/demo", "owner", nil)
+	if rec.Code != 500 || rec.Body.String() != "internal error\n" {
+		t.Fatalf("stat failure: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestPublishDocumentedResponse(t *testing.T) {
+	doc, err := os.ReadFile("../../API.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, response, ok := strings.Cut(string(doc), "### Response")
+	if !ok {
+		t.Fatal("missing publish response")
+	}
+	_, example, ok := strings.Cut(response, "```json\n")
+	if !ok {
+		t.Fatal("missing publish JSON")
+	}
+	example, _, _ = strings.Cut(example, "```")
+	var documented map[string]any
+	if err := json.Unmarshal([]byte(example), &documented); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "http://control.test/publish?slug=reports", strings.NewReader("<p>report</p>"))
+	req.Header.Set("Accept", "application/json")
+	rec := httptest.NewRecorder()
+	New(manageStore(t), Config{}).ControlHandler().ServeHTTP(rec, req)
+	if rec.Code != 201 {
+		t.Fatalf("publish: %d %s", rec.Code, rec.Body)
+	}
+	var actual map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &actual); err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range documented {
+		if fmt.Sprintf("%T", actual[key]) != fmt.Sprintf("%T", value) {
+			t.Errorf("documented %s (%T), handler sends %T", key, value, actual[key])
+		}
+	}
+	if len(actual) != len(documented) {
+		t.Errorf("documented %d fields, handler sends %d", len(documented), len(actual))
 	}
 }

@@ -490,6 +490,9 @@ var beforeBackupRemove func()
 // beforeSiteRemove is a test hook run by DeleteSite before it removes the tree.
 var beforeSiteRemove func()
 
+// siteStat permits failure injection at the delete inspection boundary.
+var siteStat = os.Stat
+
 // SiteExists reports whether the named site has been published.
 func (s *Store) SiteExists(site string) bool {
 	if ValidateNamedSlug(site) != nil {
@@ -516,7 +519,11 @@ func (s *Store) DeleteSite(site string) error {
 		return fmt.Errorf("delete site: %w", err)
 	}
 	dir := filepath.Join(s.siteRoot(), site)
-	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+	fi, err := siteStat(dir)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("delete site: %w", err)
+	}
+	if os.IsNotExist(err) || !fi.IsDir() {
 		if retired {
 			return nil
 		}

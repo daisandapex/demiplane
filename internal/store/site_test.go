@@ -5,10 +5,12 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -247,5 +249,41 @@ func TestNewSiteWriterReservedName(t *testing.T) {
 	defer st.Close()
 	if _, err := st.NewSiteWriter("docs"); err == nil {
 		t.Errorf("NewSiteWriter(docs) succeeded, want reserved-name rejection")
+	}
+}
+
+func TestDeleteSiteStatFailure(t *testing.T) {
+	for _, retired := range []bool{false, true} {
+		for _, failure := range []error{syscall.EACCES, syscall.EIO} {
+			t.Run(fmt.Sprintf("retired=%t/%v", retired, failure), func(t *testing.T) {
+				st, err := Open(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer st.Close()
+				if err := publishSiteBody(st, "site", "index.html", "still here"); err != nil {
+					t.Fatal(err)
+				}
+				if retired {
+					if _, err := st.db.Exec(`INSERT INTO site_swaps (site, backup, staging) VALUES ('site', '.tmp-old-gone', '.tmp-gone')`); err != nil {
+						t.Fatal(err)
+					}
+				}
+				siteStat = func(path string) (os.FileInfo, error) {
+					return nil, &os.PathError{Op: "stat", Path: path, Err: failure}
+				}
+				defer func() { siteStat = os.Stat }()
+				err = st.DeleteSite("site")
+				if !errors.Is(err, failure) {
+					t.Errorf("DeleteSite = %v, want %v", err, failure)
+				}
+				if got := readSite(t, st, "site", "index.html"); got != "still here" {
+					t.Fatal(got)
+				}
+				if n := swapRows(t, st); n != 0 {
+					t.Fatalf("swap not retired: %d", n)
+				}
+			})
+		}
 	}
 }

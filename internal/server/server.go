@@ -254,13 +254,19 @@ func (s *Server) ContentHandler() http.Handler {
 }
 
 // wrapListener is the middleware every listener's handler sits behind, in
-// order: body and write deadlines (before anything can answer, so refusals
+// order: owner no-store policy, body and write deadlines (before anything can answer, so refusals
 // are bounded too), the baseline headers and the service-worker refusal, the
 // Host length cap and the accepted-host policy, path canonicalization, then admission, which counts
 // only requests that will be routed. The cross-origin guard and the mux are
 // inside. One call per listener: admission counts are per listener.
 func (s *Server) wrapListener(guarded http.Handler) http.Handler {
-	return s.withRequestDeadlines(withSecurityHeaders(boundHost(s.hostPolicy(canonicalPaths(s.withAdmission(guarded))))))
+	next := s.withRequestDeadlines(withSecurityHeaders(boundHost(s.hostPolicy(canonicalPaths(s.withAdmission(guarded))))))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("all") == "1" {
+			w.Header().Set("Cache-Control", "private, no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Handler returns a single combined handler that serves BOTH the control plane

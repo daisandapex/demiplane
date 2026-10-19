@@ -150,13 +150,13 @@ mode, including rejecting `Origin: null`. Both routes are absent from the
 content listener. Owner GET requests follow the existing read policy, with no
 CORS permission and no Origin-based replacement for token authentication.
 
-Owner inventory and its handler/authentication errors carry
-`Cache-Control: private, no-store`. Inventory includes capability URLs, so treat
-its output and owner pagination cursors as secrets. The server and management
-clients do not echo these into diagnostic errors. Configure external proxy
-access logs to omit query strings containing owner cursors. Public listing
-metadata is allowlisted and excludes next destinations, render specs, hashes
-and reply credentials. Public listing/gallery eligibility is unchanged.
+Owner inventory and all refusals, including admission and host-policy errors,
+carry `Cache-Control: private, no-store`. Inventory includes capability URLs,
+so treat its output as secret. Artifact pagination cursors contain numeric row IDs, not
+capability slugs. Management clients do not echo response bodies into errors;
+client flag diagnostics omit supplied values and URL environment defaults.
+Public listing metadata is allowlisted and excludes next destinations, render
+specs, hashes and reply credentials. Public listing/gallery eligibility is unchanged.
 
 ## Content isolation between artifacts
 

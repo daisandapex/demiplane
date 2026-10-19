@@ -28,6 +28,19 @@ All notable changes to demiplane are documented here. The format follows
   plus published sites, matching owner inventory. Public list/gallery selection
   is unchanged. No store schema or layout changes.
 
+### Fixed
+
+- Site deletion surfaces inspection failures instead of claiming success or absence.
+- Client flag errors and help omit URL environment defaults and supplied values,
+  including invalid boolean values, for `list`, `delete-site`, and `publish`.
+- Content-root loop checks normalize numeric ports and IPv6 literals.
+- Owner listing uses no-store even on early admission and host-policy refusals;
+  artifact cursors use row IDs instead of capability slugs.
+- `list --all` rejects older public entries without owner metadata. Management
+  403 errors include token configuration advice. Remote site deletion requires
+  an explicit URL flag or environment value; offline `--store` still works.
+- Correct the publish response example to match its `series` and `replies` fields.
+
 ## [3.0.0] - 2026-10-19
 
 ### Breaking

@@ -59,11 +59,11 @@ func TestOwnerInventory(t *testing.T) {
 	if err != nil || strings.Join(names, ",") != "demo" {
 		t.Fatalf("%v %v", names, err)
 	}
-	arts, err := s.OwnerArtifacts(context.Background(), DefaultOwner, "", 10)
+	arts, err := s.OwnerArtifacts(context.Background(), DefaultOwner, 0, 10)
 	if err != nil || len(arts) != 2 {
 		t.Fatalf("%v %v", arts, err)
 	}
-	if arts[0].Slug > arts[1].Slug {
+	if arts[0].RowID >= arts[1].RowID {
 		t.Fatal("wrong ordering")
 	}
 	seen := map[string]bool{}
@@ -73,7 +73,7 @@ func TestOwnerInventory(t *testing.T) {
 	if !seen[pub.Slug] || !seen[priv.Slug] {
 		t.Fatal("missing artifact")
 	}
-	next, err := s.OwnerArtifacts(context.Background(), DefaultOwner, arts[0].Slug, 1)
+	next, err := s.OwnerArtifacts(context.Background(), DefaultOwner, arts[0].RowID, 1)
 	if err != nil || len(next) != 1 || next[0].Slug != arts[1].Slug {
 		t.Fatalf("%v %v", next, err)
 	}
@@ -92,7 +92,7 @@ func TestOwnerInventory(t *testing.T) {
 	if err != nil || len(names) != 1 {
 		t.Fatalf("reopen: %v %v", names, err)
 	}
-	arts, err = s.OwnerArtifacts(context.Background(), DefaultOwner, "", 10)
+	arts, err = s.OwnerArtifacts(context.Background(), DefaultOwner, 0, 10)
 	if err != nil || len(arts) != 2 {
 		t.Fatalf("reopen: %v %v", arts, err)
 	}

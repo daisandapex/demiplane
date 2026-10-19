@@ -1335,15 +1335,15 @@ func (s *Store) List(owner string) ([]Artifact, error) {
 	return scanArtifacts(rows)
 }
 
-// scanArtifact reads one row of List's columns.
-func scanArtifact(rows *sql.Rows) (Artifact, error) {
+// scanArtifact reads List's columns followed by any additional scan destinations.
+func scanArtifact(rows *sql.Rows, extra ...any) (Artifact, error) {
 	var (
 		a       Artifact
 		created int64
 		expires int64
 		private int
 	)
-	if err := rows.Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec, &a.Replies); err != nil {
+	if err := rows.Scan(append([]any{&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec, &a.Replies}, extra...)...); err != nil {
 		return Artifact{}, fmt.Errorf("scan artifact: %w", err)
 	}
 	a.CreatedAt = time.Unix(created, 0).UTC()

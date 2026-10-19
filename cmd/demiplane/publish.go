@@ -45,9 +45,9 @@ const watchInterval = 500 * time.Millisecond
 // (via resolveToken) and is sent as an Authorization header — never argv, never
 // printed. The view password comes from DEMIPLANE_PASSWORD only.
 func runPublish(args []string) error {
-	fs := flag.NewFlagSet("publish", flag.ExitOnError)
+	fs := flag.NewFlagSet("publish", flag.ContinueOnError)
 	var (
-		urlFlag   = fs.String("url", os.Getenv("DEMIPLANE_URL"), "control-plane base URL of the target instance (env DEMIPLANE_URL; default "+defaultControlURL+")")
+		urlFlag   = fs.String("url", "", "control-plane base URL of the target instance (env DEMIPLANE_URL; default local control listener)")
 		tokenFile = fs.String("token-file", "", "file holding the bearer token; overrides DEMIPLANE_TOKEN")
 		slug      = fs.String("slug", "", "named slug (overwrites in place); empty lets the server generate one")
 		private   = fs.Bool("private", false, "mint an unguessable capability URL instead of a public slug")
@@ -73,9 +73,10 @@ Flags:
 `)
 		fs.PrintDefaults()
 	}
-	if err := fs.Parse(args); err != nil {
+	if err := parseClientFlags(fs, args); err != nil {
 		return err
 	}
+	resolveURLFlag(fs, urlFlag)
 
 	base, err := resolveBaseURL(*urlFlag)
 	if err != nil {
@@ -164,13 +165,13 @@ func resolveBaseURL(v string) (string, error) {
 	v = strings.TrimRight(v, "/")
 	u, err := url.Parse(v)
 	if err != nil {
-		return "", fmt.Errorf("--url %q: %w", v, err)
+		return "", fmt.Errorf("invalid --url")
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", fmt.Errorf("--url %q: must be an http or https URL", v)
+		return "", fmt.Errorf("--url: must be an http or https URL")
 	}
 	if u.Host == "" {
-		return "", fmt.Errorf("--url %q: missing host", v)
+		return "", fmt.Errorf("--url: missing host")
 	}
 	return v, nil
 }

@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,6 +17,38 @@ import (
 
 	"github.com/daisandapex/demiplane/v3/internal/store"
 )
+
+// parseClientFlags suppresses flag's diagnostics, which echo arbitrary values
+// and unknown flag names. Help is printed only from static flag definitions.
+func parseClientFlags(fs *flag.FlagSet, args []string) error {
+	output := fs.Output()
+	usage := fs.Usage
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
+	err := fs.Parse(args)
+	fs.SetOutput(output)
+	fs.Usage = usage
+	if errors.Is(err, flag.ErrHelp) {
+		fs.Usage()
+		return flag.ErrHelp
+	}
+	if err != nil {
+		return fmt.Errorf("%s: invalid flags; use --help", fs.Name())
+	}
+	return nil
+}
+
+func resolveURLFlag(fs *flag.FlagSet, value *string) {
+	explicit := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "url" {
+			explicit = true
+		}
+	})
+	if !explicit {
+		*value = os.Getenv("DEMIPLANE_URL")
+	}
+}
 
 // Keep transport errors and untrusted response bodies out of errors: they can
 // contain owner capability URLs, pagination cursors or credentials.
@@ -34,6 +67,9 @@ func managementRequest(client *http.Client, method, endpoint, token string, stat
 	}
 	if resp.StatusCode != status {
 		resp.Body.Close()
+		if resp.StatusCode == http.StatusForbidden {
+			return nil, fmt.Errorf("management: server returned status 403; configure a token on the server and supply it with --token-file or DEMIPLANE_TOKEN; cross-origin requests are also refused")
+		}
 		return nil, fmt.Errorf("management: server returned status %d", resp.StatusCode)
 	}
 	return resp, nil
@@ -59,13 +95,14 @@ func managementClient(rawURL, tokenFile string) (*http.Client, string, string, e
 
 func runList(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
-	rawURL := fs.String("url", os.Getenv("DEMIPLANE_URL"), "control-plane URL (env DEMIPLANE_URL; default "+defaultControlURL+")")
+	rawURL := fs.String("url", "", "control-plane URL (env DEMIPLANE_URL; default local control listener)")
 	tokenFile := fs.String("token-file", "", "bearer token file; overrides DEMIPLANE_TOKEN")
 	all := fs.Bool("all", false, "owner inventory including private artifacts and sites; requires configured token")
 	asJSON := fs.Bool("json", false, "print JSON instead of a human table")
-	if err := fs.Parse(args); err != nil {
+	if err := parseClientFlags(fs, args); err != nil {
 		return err
 	}
+	resolveURLFlag(fs, rawURL)
 	if fs.NArg() != 0 {
 		return fmt.Errorf("usage: demiplane list [--url URL] [--token-file FILE] [--all] [--json]")
 	}
@@ -93,6 +130,16 @@ func runList(args []string, out io.Writer) error {
 		resp.Body.Close()
 		if err != nil || page.Artifacts == nil || page.Count != len(page.Artifacts) {
 			return fmt.Errorf("list: unexpected response")
+		}
+		if *all {
+			for _, raw := range page.Artifacts {
+				var item struct {
+					Kind string `json:"kind"`
+				}
+				if json.Unmarshal(raw, &item) != nil || item.Kind == "" {
+					return fmt.Errorf("list: server does not support --all; upgrade it")
+				}
+			}
 		}
 		items = append(items, page.Artifacts...)
 		if page.Next == "" {

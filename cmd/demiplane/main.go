@@ -101,7 +101,7 @@ func main() {
 			log.Fatal(err)
 		}
 	case "publish":
-		if err := runPublish(os.Args[2:]); err != nil {
+		if err := runPublish(os.Args[2:]); err != nil && !errors.Is(err, flag.ErrHelp) {
 			log.Fatal(err)
 		}
 	case "version", "--version", "-v":
@@ -130,7 +130,7 @@ Usage:
                     [--theme <name>] [--css <file>] [--header] [--footer] [--footer-link <url>] [--meta-header]
   demiplane receive --store <dir> [--slug <name>|--untar] [--base-url <url>] [--ttl <dur>] [--private]
   demiplane list [--url <control-url>] [--token-file <path>] [--all] [--json]
-  demiplane delete-site --url <control-url> [--token-file <path>] <name>
+  demiplane delete-site [--url <control-url>] [--token-file <path>] <name>
   demiplane delete-site --store <dir> <name>
   demiplane mcp     [--url <control-url>] [--token-file <path>]
   demiplane publish <file> [--url <control-url>] [--token-file <path>] [--slug <name>] [--watch] [--open]
@@ -142,7 +142,7 @@ Commands:
             SSH forced command for pubkey-auth publish; --untar for directory sync).
   list      List public artifacts; --all includes private artifacts and sites.
   delete-site
-            Delete remotely with --url, or offline with --store and the server stopped: its files,
+            Delete remotely with --url or DEMIPLANE_URL, or offline with --store and the server stopped: its files,
             and any copy an interrupted replace left for recovery.
   mcp       Run a stdio MCP server (JSON-RPC 2.0 over stdin/stdout) that exposes
             publish/list/delete/get as tools to any MCP-speaking harness (Claude
@@ -762,7 +762,7 @@ func resolveToken(tokenFile string) (string, error) {
 	return tok, nil
 }
 
-// runDeleteSite deletes remotely by default, or offline with --store. Offline
+// runDeleteSite deletes remotely with a supplied URL, or offline with --store. Offline
 // deletion takes the serve lock, so it refuses while a server holds the store, and
 // deletes through the store, so an interrupted replace's copy goes too
 // (removing the directory by hand would leave that copy for recovery to
@@ -770,11 +770,12 @@ func resolveToken(tokenFile string) (string, error) {
 func runDeleteSite(args []string) error {
 	fs := flag.NewFlagSet("delete-site", flag.ContinueOnError)
 	dir := fs.String("store", "", "offline store directory (server must be stopped)")
-	remoteURL := fs.String("url", os.Getenv("DEMIPLANE_URL"), "remote control-plane URL; incompatible with --store")
+	remoteURL := fs.String("url", "", "remote control-plane URL; incompatible with --store")
 	tokenFile := fs.String("token-file", "", "remote bearer token file; overrides DEMIPLANE_TOKEN")
-	if err := fs.Parse(args); err != nil {
+	if err := parseClientFlags(fs, args); err != nil {
 		return err
 	}
+	resolveURLFlag(fs, remoteURL)
 	if fs.NArg() != 1 {
 		return fmt.Errorf("usage: demiplane delete-site [--url URL | --store DIR] [--token-file FILE] <name>")
 	}
@@ -792,6 +793,9 @@ func runDeleteSite(args []string) error {
 		return fmt.Errorf("--store cannot be combined with --url or --token-file")
 	}
 	if !offline {
+		if strings.TrimSpace(*remoteURL) == "" {
+			return fmt.Errorf("usage: demiplane delete-site requires --store or --url (or DEMIPLANE_URL)")
+		}
 		return deleteRemoteSite(*remoteURL, *tokenFile, fs.Arg(0))
 	}
 	if *dir == "" {
