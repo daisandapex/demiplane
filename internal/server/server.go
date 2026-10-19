@@ -99,6 +99,7 @@ type Config struct {
 // Server wires the store and configuration into HTTP handlers.
 type Server struct {
 	store            *store.Store
+	rootRedirect     string
 	baseURL          string
 	contentBaseURL   string
 	contentPort      string
@@ -142,6 +143,7 @@ func New(st *store.Store, cfg Config) *Server {
 	_, _ = rand.Read(key)
 	return &Server{
 		store:            st,
+		rootRedirect:     cfg.BaseURL,
 		baseURL:          strings.TrimRight(cfg.BaseURL, "/"),
 		contentBaseURL:   strings.TrimRight(cfg.ContentBaseURL, "/"),
 		contentPort:      cfg.ContentPort,
@@ -236,9 +238,9 @@ func (s *Server) ContentHandler() http.Handler {
 	// they never shadow the GET /{slug} catch-all.
 	s.mountContentRouteModules(mux)
 	mux.HandleFunc("GET /{slug}", s.handleGet)
-	// The bare content root has no landing on this plane (the landing lives on the
-	// control origin); serve the themed 404 rather than ServeMux's plaintext one.
-	mux.HandleFunc("GET /{$}", s.serveContentNotFound)
+	// The bare content root redirects to a safe explicit control URL, or
+	// serves the existing themed 404 when no safe destination is configured.
+	mux.HandleFunc("GET /{$}", s.handleContentRoot)
 	// The content plane's only writes are module submit routes (the reply
 	// module's POST /answer/{slug}). A cross-origin write guard keeps another
 	// site from posting to them through a visitor's browser. It admits an
@@ -284,7 +286,8 @@ func (s *Server) Handler() http.Handler {
 // GET /{slug}, shared by ControlHandler and the combined Handler.
 func (s *Server) registerControlRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /publish", s.requireAuth(s.handlePublish))
-	mux.HandleFunc("GET /list", s.requireAuth(s.handleList))
+	mux.HandleFunc("GET /list", s.routeList)
+	mux.HandleFunc("DELETE /sites/{name}", s.requireOwner(s.handleDeleteSite))
 	mux.HandleFunc("DELETE /{slug}", s.requireAuth(s.handleDelete))
 	// Human + agent surfaces. These literal paths win over GET /{slug} (more
 	// specific), and "docs"/"help"/"llms.txt" are reserved slug names so an
@@ -1113,6 +1116,9 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 // listItem is one entry in the GET /list response. The password hash is never
 // included — only whether a password gate exists.
 type listItem struct {
+	Kind        string `json:"kind"`
+	Render      string `json:"render"`
+	Reply       bool   `json:"reply"`
 	Slug        string `json:"slug"`
 	URL         string `json:"url"`
 	Filename    string `json:"filename"`
@@ -1122,8 +1128,8 @@ type listItem struct {
 	Owner       string `json:"owner"`
 	Private     bool   `json:"private"`
 	Password    bool   `json:"password"`
-	ExpiresAt   string `json:"expires_at,omitempty"`
-	Series      string `json:"series,omitempty"`
+	ExpiresAt   string `json:"expires_at"`
+	Series      string `json:"series"`
 }
 
 // listPageSize is how many artifacts one /list or /gallery response holds.
@@ -1162,19 +1168,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	base := s.contentBase(r)
 	items := make([]listItem, 0, len(arts))
 	for _, a := range arts {
-		items = append(items, listItem{
-			Slug:        a.Slug,
-			URL:         base + "/" + a.Slug,
-			Filename:    a.Filename,
-			ContentType: a.ContentType,
-			Size:        a.Size,
-			CreatedAt:   a.CreatedAt.Format(time.RFC3339),
-			Owner:       a.Owner,
-			Private:     a.Private,
-			Password:    a.HasPassword(),
-			ExpiresAt:   rfc3339OrEmpty(a.ExpiresAt),
-			Series:      a.Series,
-		})
+		items = append(items, artifactListItem(a, base))
 	}
 	resp := map[string]any{"artifacts": items, "count": len(items)}
 	if next != nil {

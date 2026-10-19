@@ -126,6 +126,39 @@ also sandboxed in an origin of its own, so one page cannot read another or
 install a service worker; pages lose storage and same-origin `fetch` in
 exchange (see [DESIGN.md](DESIGN.md#content-isolation)).
 
+## List and manage publications
+
+```sh
+# Public artifacts, human table by default:
+demiplane list --url http://127.0.0.1:8080
+# Owner inventory, including private artifacts and sites:
+demiplane list --url http://127.0.0.1:8080 --token-file ./token --all --json
+# Delete a site on a running server:
+demiplane delete-site --url http://127.0.0.1:8080 --token-file ./token demo
+# Or maintain an offline store, with the server stopped:
+demiplane delete-site --store ./store demo
+```
+
+`list` follows every API page. `--json` emits one `artifacts` array and total
+`count`; the default table shows kind, slug, render mode, reply enabled, series,
+expiry and URL. Both remote commands use the same URL and token conventions as
+`publish`: `--url` overrides `DEMIPLANE_URL` (default `http://127.0.0.1:8080`),
+and `--token-file` overrides `DEMIPLANE_TOKEN`. Explicit `--store` selects offline
+site deletion and cannot be combined with `--url` or `--token-file`.
+
+Owner listing and remote site deletion require a configured server token and a
+valid bearer, even on an otherwise open server. Owner responses are private and
+not cacheable. The startup banner counts unexpired artifacts including private,
+plus published sites. Public `/list` and `/gallery` continue to exclude private
+artifacts and sites. Sites remain public directories, without TTL or reply
+metadata. Deleting a site preserves a same-named artifact, and vice versa.
+See [API.md](API.md#get-list) for metadata defaults and pagination.
+
+On the split content listener, GET and HEAD `/` redirect with `302` to an
+explicit valid HTTP(S) `--base-url` on a different host or non-default port.
+Unsafe or looping destinations keep the themed 404. Unknown slugs and the
+combined-origin landing page keep their existing behavior.
+
 ## How it compares
 
 The axes that actually matter when choosing where internal content lives:

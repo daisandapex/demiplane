@@ -89,11 +89,15 @@ func main() {
 			log.Fatal(exitMessage(err))
 		}
 	case "delete-site":
-		if err := runDeleteSite(os.Args[2:]); err != nil {
+		if err := runDeleteSite(os.Args[2:]); err != nil && !errors.Is(err, flag.ErrHelp) {
 			log.Fatal(exitMessage(err))
 		}
 	case "mcp":
 		if err := runMCP(os.Args[2:]); err != nil {
+			log.Fatal(err)
+		}
+	case "list":
+		if err := runList(os.Args[2:], os.Stdout); err != nil && !errors.Is(err, flag.ErrHelp) {
 			log.Fatal(err)
 		}
 	case "publish":
@@ -125,6 +129,8 @@ Usage:
   demiplane serve   --bind <addr> --store <dir> [--base-url <url>] [--token-file <path>]
                     [--theme <name>] [--css <file>] [--header] [--footer] [--footer-link <url>] [--meta-header]
   demiplane receive --store <dir> [--slug <name>|--untar] [--base-url <url>] [--ttl <dur>] [--private]
+  demiplane list [--url <control-url>] [--token-file <path>] [--all] [--json]
+  demiplane delete-site --url <control-url> [--token-file <path>] <name>
   demiplane delete-site --store <dir> <name>
   demiplane mcp     [--url <control-url>] [--token-file <path>]
   demiplane publish <file> [--url <control-url>] [--token-file <path>] [--slug <name>] [--watch] [--open]
@@ -134,8 +140,9 @@ Commands:
   serve     Run the HTTP server.
   receive   Ingest an artifact from stdin into the store (designed to run as an
             SSH forced command for pubkey-auth publish; --untar for directory sync).
+  list      List public artifacts; --all includes private artifacts and sites.
   delete-site
-            Delete a site from the store, with the server stopped: its files,
+            Delete remotely with --url, or offline with --store and the server stopped: its files,
             and any copy an interrupted replace left for recovery.
   mcp       Run a stdio MCP server (JSON-RPC 2.0 over stdin/stdout) that exposes
             publish/list/delete/get as tools to any MCP-speaking harness (Claude
@@ -498,7 +505,8 @@ func printStartup(bind, contentBind, dir, baseURL, contentBaseURL, token string,
 		auth = "bearer token required for publish/list/delete"
 	}
 	count := -1
-	if n, err := st.Count(store.DefaultOwner); err == nil {
+	sites, siteErr := st.ListSites()
+	if n, err := st.Count(store.DefaultOwner); err == nil && siteErr == nil {
 		count = n
 	}
 
@@ -509,7 +517,7 @@ func printStartup(bind, contentBind, dir, baseURL, contentBaseURL, token string,
 		fmt.Fprintf(&b, "    content   %s   (artifacts — isolated origin)\n", displayURL(contentBaseURL, contentBind, tlsOn))
 	}
 	if count >= 0 {
-		fmt.Fprintf(&b, "    store     %s  (%d artifact%s)\n", dir, count, plural(count))
+		fmt.Fprintf(&b, "    store     %s  (%d unexpired artifact%s including private, %d site%s; %d owner entries)\n", dir, count, plural(count), len(sites), plural(len(sites)), count+len(sites))
 	} else {
 		fmt.Fprintf(&b, "    store     %s\n", dir)
 	}
@@ -754,20 +762,42 @@ func resolveToken(tokenFile string) (string, error) {
 	return tok, nil
 }
 
-// runDeleteSite deletes a site from a store no server is running on. It
-// takes the serve lock, so it refuses while a server holds the store, and
+// runDeleteSite deletes remotely by default, or offline with --store. Offline
+// deletion takes the serve lock, so it refuses while a server holds the store, and
 // deletes through the store, so an interrupted replace's copy goes too
 // (removing the directory by hand would leave that copy for recovery to
 // restore at the next start).
 func runDeleteSite(args []string) error {
 	fs := flag.NewFlagSet("delete-site", flag.ContinueOnError)
-	dir := fs.String("store", "", "store directory")
+	dir := fs.String("store", "", "offline store directory (server must be stopped)")
+	remoteURL := fs.String("url", os.Getenv("DEMIPLANE_URL"), "remote control-plane URL; incompatible with --store")
+	tokenFile := fs.String("token-file", "", "remote bearer token file; overrides DEMIPLANE_TOKEN")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *dir == "" || fs.NArg() != 1 {
-		return fmt.Errorf("usage: demiplane delete-site --store <dir> <name>")
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: demiplane delete-site [--url URL | --store DIR] [--token-file FILE] <name>")
 	}
+	offline, remoteFlags := false, false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "store" {
+			offline = true
+		}
+		if f.Name == "url" || f.Name == "token-file" {
+			remoteFlags = true
+		}
+	})
+	conflict := offline && remoteFlags
+	if conflict {
+		return fmt.Errorf("--store cannot be combined with --url or --token-file")
+	}
+	if !offline {
+		return deleteRemoteSite(*remoteURL, *tokenFile, fs.Arg(0))
+	}
+	if *dir == "" {
+		return fmt.Errorf("--store requires a nonempty directory")
+	}
+
 	name := fs.Arg(0)
 	unlock, err := store.LockServe(*dir)
 	if errors.Is(err, store.ErrStoreServed) {

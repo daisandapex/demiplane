@@ -9,14 +9,15 @@ import (
 	"testing"
 )
 
-// TestContentPlaneThemedNotFound: an unknown or expired slug and the bare content
-// root must return a themed 404 (demiplane chrome + an honest message + a way
+// TestContentPlaneThemedNotFound: an unknown or expired slug must return a
+// themed 404 (with --base-url set, the bare content root redirects to it
+// instead; see the root-redirect tests) (demiplane chrome + an honest message + a way
 // back), not Go's plaintext "404 page not found". The reading plane must never
 // dead-end a reader who followed a stale link.
 func TestContentPlaneThemedNotFound(t *testing.T) {
 	_, content := newSplitServers(t, Config{BaseURL: "http://idx.example:8891"})
 
-	for _, path := range []string{"/does-not-exist", "/"} {
+	for _, path := range []string{"/does-not-exist"} {
 		resp, body := get(t, content.URL+path)
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("GET %s status = %d, want 404", path, resp.StatusCode)

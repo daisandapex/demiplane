@@ -139,6 +139,25 @@ sandboxed iframe that suppresses `Referer`. This applies to any external site,
 not just hosted pages. Use it only for a single-operator, trusted-content
 instance where you accept that.
 
+## Owner inventory and site management
+
+`GET /list?all=1` and `DELETE /sites/{name}` require both a configured server
+token and a valid bearer. They fail closed with `403` and configuration advice
+when no server token exists; missing or wrong bearer otherwise returns `401`.
+Legacy public listing and artifact deletion retain their existing no-token
+behavior. Site deletion uses the control-origin CSRF checks even in combined
+mode, including rejecting `Origin: null`. Both routes are absent from the
+content listener. Owner GET requests follow the existing read policy, with no
+CORS permission and no Origin-based replacement for token authentication.
+
+Owner inventory and its handler/authentication errors carry
+`Cache-Control: private, no-store`. Inventory includes capability URLs, so treat
+its output and owner pagination cursors as secrets. The server and management
+clients do not echo these into diagnostic errors. Configure external proxy
+access logs to omit query strings containing owner cursors. Public listing
+metadata is allowlisted and excludes next destinations, render specs, hashes
+and reply credentials. Public listing/gallery eligibility is unchanged.
+
 ## Content isolation between artifacts
 
 Every artifact and site is served from the one content origin, so the origin

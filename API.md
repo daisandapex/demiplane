@@ -18,7 +18,7 @@ JavaScript cannot drive `/publish`, `/list`, or `DELETE` at your control plane.
 
 | Plane | What lives here | Default bind |
 |---|---|---|
-| Control plane | `POST /publish`, `GET /list`, `DELETE /{slug}`, `POST /rerender`, `/docs`, `/help`, `/connect`, `/gallery`, reply admin | `127.0.0.1:8080` |
+| Control plane | `POST /publish`, `GET /list`, `DELETE /{slug}`, `DELETE /sites/{name}`, `POST /rerender`, `/docs`, `/help`, `/connect`, `/gallery`, reply admin | `127.0.0.1:8080` |
 | Content origin | `GET /{slug}` artifact bytes, sites, SSE reload stream, inline answer submit | control port + 1, e.g. `:8081` |
 
 `POST /publish` runs on the control plane and returns a URL on the content
@@ -42,7 +42,11 @@ Two independent gates, by design:
   (`serve --token-file` or `DEMIPLANE_TOKEN`), `POST /publish`, `GET /list`,
   `DELETE /{slug}`, and the reply-admin endpoints require
   `Authorization: Bearer <token>`. With no token configured, those endpoints are
-  open to anything that can reach the control plane. `GET /{slug}` is always open.
+  open to anything that can reach the control plane. Owner management is an
+  exception: `GET /list?all=1` and `DELETE /sites/{name}` require a configured
+  token and a valid bearer. Without configuration they return `403` with
+  `configure a token` advice; missing or wrong bearer returns `401` when
+  configured. `GET /{slug}` is always open.
 - **Read auth (who can view a URL).** By default a URL is guarded only by network
   reachability. A `private` artifact adds an unguessable capability slug as its
   secret. An optional per-artifact password gates reads over HTTP Basic (any
@@ -99,7 +103,11 @@ as `text/plain` followed by a newline. With `Accept: application/json`:
   "size": 4096,
   "private": false,
   "password": false,
-  "expires_at": ""
+  "expires_at": "",
+      "series": "",
+      "kind": "artifact",
+      "render": "raw",
+      "reply": false
 }
 ```
 
@@ -319,11 +327,18 @@ func main() {
 
 ## GET /list
 
-The owner's non-private artifacts as JSON, newest first. Auth: bearer. Always
-returns JSON (no `Accept` needed). Private artifacts are never listed, not even
-for the owner: a capability slug is the secret, so keep the URL the publish
-response returned. The response never carries a password value, only whether a
-gate exists.
+Public, unexpired artifacts as JSON, newest first. Auth: bearer when a token
+is configured; otherwise open. Always returns JSON (no `Accept` needed).
+Private artifacts and sites are excluded from this public view. Only `all=1`
+selects owner inventory; other `all` values retain the public view.
+
+Each entry includes the allowlisted publish facts `kind` (`artifact` or `site`),
+`render` (`md` when a saved render spec exists, otherwise `raw`), `reply` (whether
+publishing enabled replies, including the separate reply form), `series`, and `expires_at` (RFC3339).
+`series` and `expires_at` are empty strings when absent. The response never
+carries publish next destinations, raw render specs, hashes, reply tokens,
+passwords or other credentials. `password` only indicates that a gate exists.
+The top-level `next` below is a pagination cursor, not a publish destination.
 
 A response holds at most 200 artifacts. When more follow, it carries `next`, a
 cursor; pass it back as `?after=<next>` for the following page. The last page
@@ -353,6 +368,35 @@ absent.
   "next": "1784109840.reports"
 }
 ```
+
+### Owner inventory: GET /list?all=1
+
+Requires a configured and valid bearer token, including on an otherwise open
+instance. Owner responses, including authentication and handler errors, use
+`Cache-Control: private, no-store`. The response has the same `artifacts`,
+`count`, and optional `next` envelope, including private artifacts and published
+sites. Expired artifacts, staging directories, backups, tombstones, symlinks
+and non-directory site entries are excluded.
+
+Pages contain at most 200 entries, artifacts first in slug order, then sites in
+name order. Pass `next` back as `after` while retaining `all=1`. Owner cursors
+are `artifact:<slug>` or `site:<name>`; malformed cursors return `400` without
+echoing the input. `count` is the page count. Pagination is not a snapshot under
+concurrent writes. Owner cursors may contain capability slugs: treat them as
+secrets and keep query strings out of proxy access logs.
+
+Sites remain public and have no stored publication facts: `kind=site`,
+`render=raw`, `reply=false`, `private=false`, `password=false`, empty `series`,
+`expires_at`, `created_at` and `content_type`, and `size=0` (not an aggregate
+measurement). `slug` and `filename` are the site name; `url` ends with `/`.
+
+The startup banner counts unexpired artifacts including private, plus published
+sites, agreeing with a fully paged owner inventory on an unchanged store.
+Public `/list` and `/gallery` still exclude private artifacts and sites.
+
+Owner listing is a read: browser Origin/fetch metadata does not bypass bearer
+authentication or add a write-CSRF rejection. No CORS permission is granted.
+Neither owner inventory nor site deletion is mounted on the content listener.
 
 ### List: worked examples
 
@@ -424,6 +468,41 @@ func main() {
 	}
 }
 ```
+
+## DELETE /sites/{name}
+
+Control-plane site deletion through the store's transactional `DeleteSite`.
+Requires a configured valid token: `403` with configuration advice when no
+server token is set, `401` for missing/wrong bearer otherwise. Returns `204`
+with no body on success, `404` for an absent site, `400` for an invalid name,
+and generic `500` for storage failure. A site and an artifact with the same
+name are independent: deleting either preserves the other's bytes.
+
+The existing control-origin write checks apply, including in combined mode:
+`Sec-Fetch-Site: same-site` or `cross-site`, foreign Origin, and `Origin: null`
+are refused with `403`. Same-origin/none fetch metadata or a matching Origin
+is allowed with the token; CLI requests without browser headers are allowed.
+Behind a proxy the configured HTTPS `--base-url` origin is authoritative, not
+the backend HTTP origin. CSRF refusals can precede authentication refusals.
+
+```bash
+curl -X DELETE -H "Authorization: Bearer $TOKEN" "$CTRL/sites/demo"
+demiplane delete-site --url "$CTRL" --token-file ~/.config/demiplane/token demo
+# Offline maintenance, with the server stopped:
+demiplane delete-site --store ./store demo
+```
+
+## Content-plane GET and HEAD /
+
+An explicit valid HTTP(S) `--base-url` redirects the split content root with
+`302` and the exact configured `Location`; HEAD has no response body. URLs with
+credentials, missing or malformed hosts, non-HTTP(S) schemes, or the same host
+as the advertised content origin or direct request are refused with the
+existing themed `404`. Host comparison ignores case and normalizes default
+ports; different non-default ports remain distinct. A scheme change alone on
+the same default host is refused. Without `--base-url`, root remains the themed
+`404`. Unknown slugs remain themed `404`; the combined-origin root stays its
+normal landing page. The redirect is public and independent of bearer tokens.
 
 ## DELETE /{slug}
 

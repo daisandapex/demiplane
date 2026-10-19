@@ -6,6 +6,28 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `demiplane list` with publish-compatible URL/token flags, a human table,
+  `--json`, automatic pagination, and `--all` owner inventory.
+- Allowlisted listing facts: resource kind, render mode, reply enabled, series,
+  and expiry. No publish next destinations, raw render specs, hashes or reply
+  credentials are serialized.
+- `GET /list?all=1` includes private unexpired artifacts and published sites,
+  requires a configured valid token, and returns `Cache-Control: private, no-store`.
+- Control-plane `DELETE /sites/{name}` and remote `delete-site --url`; both require
+  a configured valid token. Offline `delete-site --store` remains available.
+  Site and artifact deletion are independent for matching names.
+- Split content-root GET/HEAD redirects to a safe explicit HTTP(S) `--base-url`
+  with `302`, rejecting same-host loops. Unknown-slug 404s and the combined
+  landing page are unchanged.
+
+### Changed
+
+- Startup inventory explicitly counts unexpired artifacts including private,
+  plus published sites, matching owner inventory. Public list/gallery selection
+  is unchanged. No store schema or layout changes.
+
 ## [3.0.0] - 2026-10-19
 
 ### Breaking

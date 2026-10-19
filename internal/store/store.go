@@ -1322,7 +1322,7 @@ func (s *Store) SeriesSlugs(ctx context.Context, owner, series, except string, l
 func (s *Store) List(owner string) ([]Artifact, error) {
 	now := time.Now().Unix()
 	rows, err := s.db.Query(
-		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec
+		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, replies
 		   FROM artifacts
 		  WHERE owner = ? AND private = 0 AND (expires_at = 0 OR expires_at > ?)
 		  ORDER BY created_at DESC, slug ASC`,
@@ -1343,7 +1343,7 @@ func scanArtifact(rows *sql.Rows) (Artifact, error) {
 		expires int64
 		private int
 	)
-	if err := rows.Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec); err != nil {
+	if err := rows.Scan(&a.Slug, &a.Filename, &a.ContentType, &a.Size, &created, &a.Owner, &private, &a.PasswordHash, &expires, &a.Series, &a.RenderSpec, &a.Replies); err != nil {
 		return Artifact{}, fmt.Errorf("scan artifact: %w", err)
 	}
 	a.CreatedAt = time.Unix(created, 0).UTC()
@@ -1394,12 +1394,12 @@ func ParseListCursor(v string) (ListCursor, error) {
 // Each is a seek and an in-order walk of idx_artifacts_public_order. Expiry
 // is checked in Go (ExamineSlack).
 const (
-	qListTies = `SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec
+	qListTies = `SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, replies
    FROM artifacts
   WHERE owner = ? AND private = 0 AND created_at = ? AND slug > ?
   ORDER BY created_at DESC, slug ASC
   LIMIT ?`
-	qListOlder = `SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec
+	qListOlder = `SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, replies
    FROM artifacts
   WHERE owner = ? AND private = 0 AND created_at < ?
   ORDER BY created_at DESC, slug ASC
