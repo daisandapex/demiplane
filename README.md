@@ -141,15 +141,17 @@ demiplane delete-site --store ./store demo
 
 `list` follows every API page. `--json` emits one `artifacts` array and total
 `count`; the default table shows kind, slug, render mode, reply enabled, series,
-expiry and URL. `--all` requires owner metadata and reports an upgrade error
-when an older server returns public entries without it. Artifact continuation
-cursors use numeric row IDs, so they contain no capability slugs.
+expiry and URL. `--all` requires the API's `owner: true` envelope marker and
+owner metadata, reporting an upgrade error even for an empty older-server
+response. Artifact continuation cursors use numeric row IDs, so they contain
+no capability slugs.
 `--url` overrides `DEMIPLANE_URL`; `list` and `publish` default to
 `http://127.0.0.1:8080`. Remote `delete-site` requires a URL supplied through
 `--url` or `DEMIPLANE_URL`; without one, supply `--store` for offline deletion.
 `--token-file` overrides `DEMIPLANE_TOKEN`. Explicit `--store` selects offline
 site deletion and cannot be combined with `--url` or `--token-file`.
-Flag parsing errors omit supplied values and URL environment defaults.
+Flag parsing errors omit supplied values and URL environment defaults and exit
+with status 2. Publish failures retain status 1.
 A management 403 includes token configuration advice.
 
 Owner listing and remote site deletion require a configured server token and a

@@ -56,6 +56,7 @@ func TestManageListCLI(t *testing.T) {
 		{name: "table-env", host: "env.test", token: "env-token"},
 		{name: "json-owner", args: []string{"--url", "https://flag.test", "--token-file", tokenFile, "--json", "--all"}, host: "flag.test", token: "file-token", all: true, json: true},
 		{name: "empty", args: []string{"--json"}, host: "env.test", token: "env-token", json: true, empty: true},
+		{name: "empty-owner", args: []string{"--all", "--json"}, host: "env.test", token: "env-token", all: true, json: true, empty: true},
 		{name: "default", host: "127.0.0.1:8080", token: "env-token"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -69,16 +70,22 @@ func TestManageListCLI(t *testing.T) {
 				if r.Method != "GET" || r.URL.Host != tc.host || r.URL.Path != "/list" || r.Header.Get("Authorization") != "Bearer "+tc.token || (r.URL.Query().Get("all") == "1") != tc.all {
 					t.Fatalf("request: %s %s %v", r.Method, r.URL, r.Header)
 				}
+				response := func(body string) *http.Response {
+					if tc.all {
+						body = `{"owner":true,` + body[1:]
+					}
+					return manageResponse(r, 200, body)
+				}
 				if tc.empty {
-					return manageResponse(r, 200, `{"artifacts":[],"count":0}`), nil
+					return response(`{"artifacts":[],"count":0}`), nil
 				}
 				if calls == 1 {
-					return manageResponse(r, 200, `{"artifacts":[{"kind":"artifact","slug":"one","render":"md","reply":true,"series":"lesson","expires_at":"tomorrow","url":"https://content.test/one"}],"count":1,"next":"artifact:private-cursor"}`), nil
+					return response(`{"artifacts":[{"kind":"artifact","slug":"one","render":"md","reply":true,"series":"lesson","expires_at":"tomorrow","url":"https://content.test/one"}],"count":1,"next":"artifact:private-cursor"}`), nil
 				}
 				if calls != 2 || r.URL.Query().Get("after") != "artifact:private-cursor" {
 					t.Fatal("bad pagination")
 				}
-				return manageResponse(r, 200, `{"artifacts":[{"kind":"site","slug":"two","render":"raw","reply":false,"url":"https://content.test/two/"}],"count":1}`), nil
+				return response(`{"artifacts":[{"kind":"site","slug":"two","render":"raw","reply":false,"url":"https://content.test/two/"}],"count":1}`), nil
 			})
 			var out bytes.Buffer
 			if err := runList(tc.args, &out); err != nil {
@@ -343,22 +350,12 @@ func TestManageStartupInventory(t *testing.T) {
 	}
 }
 
-// Use a subprocess so a regression to flag.ExitOnError is also observable.
+// Exercise dispatch in a subprocess to check both diagnostics and exit status.
 func TestClientFlagSecrets(t *testing.T) {
 	if command := os.Getenv("DEMIPLANE_TEST_FLAG_COMMAND"); command != "" {
 		args := strings.Split(os.Getenv("DEMIPLANE_TEST_FLAG_ARGS"), "\n")
-		var err error
-		switch command {
-		case "list":
-			err = runList(args, io.Discard)
-		case "delete-site":
-			err = runDeleteSite(args)
-		case "publish":
-			err = runPublish(args)
-		}
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
+		os.Args = append([]string{"demiplane", command}, args...)
+		main()
 		return
 	}
 	secret := "https://secret-token@control.test/private-capability"
@@ -372,6 +369,19 @@ func TestClientFlagSecrets(t *testing.T) {
 				c := exec.Command(os.Args[0], "-test.run=^TestClientFlagSecrets$")
 				c.Env = append(os.Environ(), "DEMIPLANE_TEST_FLAG_COMMAND="+command, "DEMIPLANE_TEST_FLAG_ARGS="+args, "DEMIPLANE_URL="+secret)
 				output, err := c.CombinedOutput()
+				if args == "--help" {
+					if err != nil {
+						t.Errorf("help failed: %v", err)
+					}
+				} else {
+					var exitErr *exec.ExitError
+					if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+						t.Errorf("exit error = %v, want status 2", err)
+					}
+					if !strings.Contains(string(output), command+": invalid flags; use --help") {
+						t.Errorf("missing sanitized diagnostic: %s", output)
+					}
+				}
 				if len(output) == 0 {
 					t.Fatalf("missing help/error: %v", err)
 				}
@@ -390,20 +400,49 @@ func TestClientFlagSecrets(t *testing.T) {
 
 func TestManageAllRequiresOwnerFields(t *testing.T) {
 	for _, jsonOutput := range []bool{false, true} {
-		t.Run(fmt.Sprint(jsonOutput), func(t *testing.T) {
-			useManageTransport(t, func(r *http.Request) (*http.Response, error) {
-				return manageResponse(r, 200, `{"artifacts":[{"slug":"public","url":"https://content.test/public"}],"count":1}`), nil
+		for name, body := range map[string]string{
+			"old-public":   `{"artifacts":[{"slug":"public","url":"https://content.test/public"}],"count":1}`,
+			"old-empty":    `{"artifacts":[],"count":0}`,
+			"false-marker": `{"owner":false,"artifacts":[],"count":0}`,
+			"missing-kind": `{"owner":true,"artifacts":[{"slug":"public"}],"count":1}`,
+		} {
+			t.Run(fmt.Sprint(jsonOutput)+"/"+name, func(t *testing.T) {
+				useManageTransport(t, func(r *http.Request) (*http.Response, error) {
+					return manageResponse(r, 200, body), nil
+				})
+				var out bytes.Buffer
+				args := []string{"--all"}
+				if jsonOutput {
+					args = append(args, "--json")
+				}
+				err := runList(args, &out)
+				if err == nil || !strings.Contains(err.Error(), "server does not support --all; upgrade it") || out.Len() != 0 {
+					t.Fatalf("error=%v output=%s", err, &out)
+				}
 			})
-			var out bytes.Buffer
-			args := []string{"--all"}
-			if jsonOutput {
-				args = append(args, "--json")
-			}
-			err := runList(args, &out)
-			if err == nil || !strings.Contains(err.Error(), "server does not support --all; upgrade it") || out.Len() != 0 {
-				t.Fatalf("error=%v output=%s", err, &out)
-			}
+		}
+	}
+}
+
+func TestClientPublishFailureExit(t *testing.T) {
+	if os.Getenv("DEMIPLANE_TEST_PUBLISH_FAILURE") == "1" {
+		useManageTransport(t, func(r *http.Request) (*http.Response, error) {
+			return manageResponse(r, http.StatusServiceUnavailable, ""), nil
 		})
+		os.Args = []string{"demiplane", "publish", "--url", "https://control.test", "-"}
+		main()
+		return
+	}
+	c := exec.Command(os.Args[0], "-test.run=^TestClientPublishFailureExit$")
+	c.Env = append(os.Environ(), "DEMIPLANE_TEST_PUBLISH_FAILURE=1", "DEMIPLANE_TOKEN=")
+	c.Stdin = strings.NewReader("page")
+	output, err := c.CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("exit error = %v, want status 1: %s", err, output)
+	}
+	if !strings.Contains(string(output), "publish: server returned status 503") {
+		t.Fatalf("missing publish failure: %s", output)
 	}
 }
 

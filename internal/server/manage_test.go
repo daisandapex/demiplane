@@ -199,6 +199,34 @@ func TestManageOwnerList(t *testing.T) {
 	}
 }
 
+func TestManageOwnerEnvelope(t *testing.T) {
+	st := manageStore(t)
+	h := New(st, Config{AuthToken: "owner"}).ControlHandler()
+	for _, populated := range []bool{false, true} {
+		if populated {
+			managePut(t, st, store.PutOptions{Slug: "public-doc"})
+		}
+		for _, path := range []string{"/list", "/list?all=0", "/list?all=true", "/list?all=1"} {
+			t.Run(fmt.Sprintf("populated=%t%s", populated, path), func(t *testing.T) {
+				rec := manageRequest(h, "GET", path, "owner", nil)
+				manageDecode(t, rec)
+				var envelope map[string]any
+				if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+					t.Fatal(err)
+				}
+				marker, present := envelope["owner"]
+				if path == "/list?all=1" {
+					if marker != true {
+						t.Fatalf("missing owner marker: %s", rec.Body)
+					}
+				} else if present {
+					t.Fatalf("public listing has owner marker: %s", rec.Body)
+				}
+			})
+		}
+	}
+}
+
 func TestManageOwnerPagination(t *testing.T) {
 	st := manageStore(t)
 	for i := 0; i < 201; i++ {
@@ -504,6 +532,21 @@ func TestManageEquivalentRedirectAuthorities(t *testing.T) {
 				t.Fatalf("redirect loop: %d %v", rec.Code, rec.Header())
 			}
 		})
+	}
+}
+
+func TestManageDistinctHTTPSPorts(t *testing.T) {
+	destination, content := "https://example.test:80/", "https://example.test"
+	if !redirectHostsDiffer(destination, content) {
+		t.Error("HTTPS ports 80 and 443 must differ")
+	}
+	s := New(manageStore(t), Config{BaseURL: destination, ContentBaseURL: content})
+	for _, method := range []string{"GET", "HEAD"} {
+		rec := httptest.NewRecorder()
+		s.ContentHandler().ServeHTTP(rec, httptest.NewRequest(method, content+"/", nil))
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != destination {
+			t.Errorf("%s: status %d, location %q", method, rec.Code, rec.Header().Get("Location"))
+		}
 	}
 }
 

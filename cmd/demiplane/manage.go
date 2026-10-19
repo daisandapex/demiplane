@@ -18,6 +18,18 @@ import (
 	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
+type clientFlagError string
+
+func (e clientFlagError) Error() string { return string(e) }
+
+func clientExitCode(err error) int {
+	var flagErr clientFlagError
+	if errors.As(err, &flagErr) {
+		return 2
+	}
+	return 1
+}
+
 // parseClientFlags suppresses flag's diagnostics, which echo arbitrary values
 // and unknown flag names. Help is printed only from static flag definitions.
 func parseClientFlags(fs *flag.FlagSet, args []string) error {
@@ -33,7 +45,7 @@ func parseClientFlags(fs *flag.FlagSet, args []string) error {
 		return flag.ErrHelp
 	}
 	if err != nil {
-		return fmt.Errorf("%s: invalid flags; use --help", fs.Name())
+		return clientFlagError(fs.Name() + ": invalid flags; use --help")
 	}
 	return nil
 }
@@ -122,6 +134,7 @@ func runList(args []string, out io.Writer) error {
 			return err
 		}
 		var page struct {
+			Owner     bool              `json:"owner"`
 			Artifacts []json.RawMessage `json:"artifacts"`
 			Count     int               `json:"count"`
 			Next      string            `json:"next"`
@@ -132,6 +145,9 @@ func runList(args []string, out io.Writer) error {
 			return fmt.Errorf("list: unexpected response")
 		}
 		if *all {
+			if !page.Owner {
+				return fmt.Errorf("list: server does not support --all; upgrade it")
+			}
 			for _, raw := range page.Artifacts {
 				var item struct {
 					Kind string `json:"kind"`

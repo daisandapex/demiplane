@@ -90,7 +90,8 @@ func main() {
 		}
 	case "delete-site":
 		if err := runDeleteSite(os.Args[2:]); err != nil && !errors.Is(err, flag.ErrHelp) {
-			log.Fatal(exitMessage(err))
+			log.Print(exitMessage(err))
+			os.Exit(clientExitCode(err))
 		}
 	case "mcp":
 		if err := runMCP(os.Args[2:]); err != nil {
@@ -98,11 +99,13 @@ func main() {
 		}
 	case "list":
 		if err := runList(os.Args[2:], os.Stdout); err != nil && !errors.Is(err, flag.ErrHelp) {
-			log.Fatal(err)
+			log.Print(err)
+			os.Exit(clientExitCode(err))
 		}
 	case "publish":
 		if err := runPublish(os.Args[2:]); err != nil && !errors.Is(err, flag.ErrHelp) {
-			log.Fatal(err)
+			log.Print(err)
+			os.Exit(clientExitCode(err))
 		}
 	case "version", "--version", "-v":
 		fmt.Println("demiplane", version)

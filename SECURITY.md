@@ -155,6 +155,8 @@ carry `Cache-Control: private, no-store`. Inventory includes capability URLs,
 so treat its output as secret. Artifact pagination cursors contain numeric row IDs, not
 capability slugs. Management clients do not echo response bodies into errors;
 client flag diagnostics omit supplied values and URL environment defaults.
+Owner inventory includes an `owner: true` envelope marker even when empty;
+public listing omits it, and `list --all` refuses responses without it.
 Public listing metadata is allowlisted and excludes next destinations, render
 specs, hashes and reply credentials. Public listing/gallery eligibility is unchanged.
 

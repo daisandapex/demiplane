@@ -374,8 +374,9 @@ instance. Owner responses, including early admission and host-policy refusals,
 authentication and handler errors, use `Cache-Control: private, no-store`.
 The response has the same `artifacts`,
 `count`, and optional `next` envelope, including private artifacts and published
-sites. Expired artifacts, staging directories, backups, tombstones, symlinks
-and non-directory site entries are excluded.
+sites, plus an `owner: true` marker even on empty pages. Public `/list` never
+sends this envelope marker. Expired artifacts, staging directories, backups,
+tombstones, symlinks and non-directory site entries are excluded.
 
 Pages contain at most 200 entries, artifacts first in row ID order, then sites in
 name order. Pass `next` back as `after` while retaining `all=1`. Owner cursors
@@ -502,7 +503,8 @@ An explicit valid HTTP(S) `--base-url` redirects the split content root with
 credentials, missing or malformed hosts, non-HTTP(S) schemes, or the same host
 as the advertised content origin or direct request are refused with the
 existing themed `404`. Host comparison ignores case and normalizes default
-ports, numeric port spellings, and IP literals; different non-default ports
+ports using each URL's own scheme, numeric port spellings, and IP literals;
+HTTPS port 80 differs from HTTPS's default port 443. Different non-default ports
 remain distinct. A scheme change alone on the same default host is refused. Without `--base-url`, root remains the themed
 `404`. Unknown slugs remain themed `404`; the combined-origin root stays its
 normal landing page. The redirect is public and independent of bearer tokens.

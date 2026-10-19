@@ -33,10 +33,13 @@ All notable changes to demiplane are documented here. The format follows
 - Site deletion surfaces inspection failures instead of claiming success or absence.
 - Client flag errors and help omit URL environment defaults and supplied values,
   including invalid boolean values, for `list`, `delete-site`, and `publish`.
-- Content-root loop checks normalize numeric ports and IPv6 literals.
+  Flag parse errors exit 2; publish failures retain exit 1.
+- Content-root loop checks normalize numeric ports and IPv6 literals using
+  each URL's own scheme for default ports, preserving distinct HTTPS ports.
 - Owner listing uses no-store even on early admission and host-policy refusals;
   artifact cursors use row IDs instead of capability slugs.
-- `list --all` rejects older public entries without owner metadata. Management
+- `list --all` requires an owner envelope marker, including on empty pages,
+  and rejects older public entries without owner metadata. Management
   403 errors include token configuration advice. Remote site deletion requires
   an explicit URL flag or environment value; offline `--store` still works.
 - Correct the publish response example to match its `series` and `replies` fields.

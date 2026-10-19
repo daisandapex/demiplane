@@ -105,7 +105,7 @@ func (s *Server) handleOwnerList(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	resp := map[string]any{}
+	resp := map[string]any{"owner": true}
 	if len(items) > listPageSize {
 		items = items[:listPageSize]
 		last := items[len(items)-1]
@@ -162,23 +162,20 @@ func (s *Server) handleContentRoot(w http.ResponseWriter, r *http.Request) {
 	s.serveContentNotFound(w, r)
 }
 
-// Refuse both equivalent default-port hosts and identical literal authorities.
+// Refuse both equivalent default-port hosts and identical effective ports.
 // The latter also catches a scheme change on an explicitly written port.
 func redirectHostsDiffer(destination, content string) bool {
-	dest, destOK := redirectHost(destination)
-	host, hostOK := redirectHost(content)
+	dest, destOK := redirectHost(destination, false)
+	host, hostOK := redirectHost(content, false)
 	if !destOK || !hostOK || dest == host {
 		return false
 	}
-	du, _ := url.Parse(destination)
-	cu, _ := url.Parse(content)
-	du.Scheme, cu.Scheme = "http", "http"
-	dest, _ = redirectHost(du.String())
-	host, _ = redirectHost(cu.String())
+	dest, _ = redirectHost(destination, true)
+	host, _ = redirectHost(content, true)
 	return dest != host
 }
 
-func redirectHost(raw string) (string, bool) {
+func redirectHost(raw string, keepDefaultPort bool) (string, bool) {
 	u, err := url.Parse(raw)
 	if err != nil || u.Hostname() == "" {
 		return "", false
@@ -200,7 +197,14 @@ func redirectHost(raw string) (string, bool) {
 		}
 		port = strconv.FormatUint(n, 10)
 	}
-	if port != "" && !(u.Scheme == "http" && port == "80") && !(u.Scheme == "https" && port == "443") {
+	defaultPort := "80"
+	if u.Scheme == "https" {
+		defaultPort = "443"
+	}
+	if port == "" {
+		port = defaultPort
+	}
+	if keepDefaultPort || port != defaultPort {
 		host = net.JoinHostPort(host, port)
 	}
 	return host, true
