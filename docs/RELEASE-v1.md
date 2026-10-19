@@ -37,7 +37,7 @@ Built, tested, and in daily use:
 
 - **HTTP API** — `POST /publish`, `GET /{slug}`, `GET /list`, `DELETE /{slug}`,
   plus `/gallery` and `/connect`. Raw-body, multipart, and multi-file
-  (tar/zip/multipart) site uploads.
+  (tar/zip) site uploads.
 - **Two-plane origin isolation** — the control plane and the artifact content
   origin are separate origins by default, so hosted JS cannot read the API or
   drive writes (ADR 0003).

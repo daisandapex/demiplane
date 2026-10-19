@@ -158,7 +158,7 @@ defaults, and TTL/expiry, with **no dependency on pico.sh**.
 | **Per-artifact privacy** | 144-bit unguessable capability slugs, optional view passwords, TTL/expiry with a background sweeper. |
 | **Two-plane isolation** | Control plane and content origin are separate; served content cannot touch your controls, and each page is sandboxed from the others. |
 | **Markdown render** | Opt-in `?render=md` with themes, syntax highlighting, heading anchors, and frontmatter meta-headers. The markdown source is kept, so `POST /rerender` rebakes pages after a theme or renderer change. |
-| **Multi-file sites** | Publish a tar/zip/multipart bundle and serve the whole tree at one slug. |
+| **Multi-file sites** | Publish a tar/zip bundle and serve the whole tree at one slug. |
 | **Live reload** | `?live` streams updates over SSE while you iterate. |
 | **SSH ingest** | `demiplane receive` publishes over your existing `sshd` via an `authorized_keys` forced command. |
 | **Optional TLS** | Self-signed, ACME, or bring-your-own, via `-tags tls`. |

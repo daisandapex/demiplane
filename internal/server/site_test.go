@@ -635,3 +635,57 @@ func TestSitePublishRejectsUnsupportedSecurityOptions(t *testing.T) {
 		})
 	}
 }
+
+// Both validators must reject an old date even when a replacement has the
+// same filesystem modification second as the original site file.
+func TestSiteDateValidators(t *testing.T) {
+	for _, validator := range []string{"If-Modified-Since", "If-Range"} {
+		t.Run(validator, func(t *testing.T) {
+			st, err := store.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { st.Close() })
+			h := New(st, Config{}).Handler()
+			var oldDate string
+			for attempt := 0; attempt < 10; attempt++ {
+				for i, body := range []string{"old version", "new version"} {
+					req := httptest.NewRequest(http.MethodPost, "/publish?site=dates", bytes.NewReader(makeTar(t, []srcFile{{"index.html", body}})))
+					req.Header.Set("Content-Type", "application/x-tar")
+					published := httptest.NewRecorder()
+					h.ServeHTTP(published, req)
+					if published.Code != http.StatusCreated {
+						t.Fatalf("publish: %d %s", published.Code, published.Body)
+					}
+					resp := httptest.NewRecorder()
+					h.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/dates/", nil))
+					date := resp.Header().Get("Last-Modified")
+					if date == "" {
+						t.Fatal("missing filesystem date")
+					}
+					if i == 0 {
+						oldDate = date
+					} else if date != oldDate {
+						oldDate = ""
+					}
+				}
+				if oldDate != "" {
+					break
+				}
+			}
+			if oldDate == "" {
+				t.Fatal("could not publish two versions within one second")
+			}
+			req := httptest.NewRequest(http.MethodGet, "/dates/", nil)
+			req.Header.Set(validator, oldDate)
+			if validator == "If-Range" {
+				req.Header.Set("Range", "bytes=3-")
+			}
+			resp := httptest.NewRecorder()
+			h.ServeHTTP(resp, req)
+			if resp.Code != http.StatusOK || resp.Body.String() != "new version" {
+				t.Fatalf("old date: %d %q, want 200 with whole new version", resp.Code, resp.Body.String())
+			}
+		})
+	}
+}

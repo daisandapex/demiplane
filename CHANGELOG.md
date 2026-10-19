@@ -24,10 +24,15 @@ All notable changes to demiplane are documented here. The format follows
   before this release stay; `DELETE /replies/{id}` and `DELETE
   /replies?slug=` (bearer) remove them and free reply capacity, which nothing
   else did with retention off.
-- **Reply hooks no longer see the bearer token.** An exec hook inherited
+- **Site file date validators cannot validate replacements.** Site files ignore
+  `If-Modified-Since` and serve the full body for a date-based `If-Range`,
+  preventing stale 304 responses and mixed-version resumes within one second.
+- **Reply hooks no longer inherit the bearer token.** An exec hook inherited
   the server's whole environment, `DEMIPLANE_TOKEN` included; the server
-  now drops the token from its environment once read, and hooks get none of
-  its `DEMIPLANE_*` variables.
+  now drops the token from its Go environment once read, and hooks get none of
+  its `DEMIPLANE_*` variables. A hook running as the same user can still
+  read the server environment through `/proc/$PPID/environ` and the token
+  file used by `--token-file`. Run hooks as a different user if that matters.
 - **Published pages are isolated from each other.** HTML, SVG and XML are
   served in a CSP sandbox without `allow-same-origin`, so each page runs in an
   opaque origin and cannot read other artifacts (with or without the viewer's
@@ -541,7 +546,7 @@ milestone or work item that delivered them.
 
 ### Summary of v1.0.0
 
-- **Publishing API** — `POST /publish` (raw body, multipart, and tar/zip/multipart
+- **Publishing API** — `POST /publish` (raw body, multipart, and tar/zip
   multi-file sites), `GET /{slug}`, `GET /list`, `DELETE /{slug}`, `/gallery`,
   `/connect`; friendly `adjective-creature` slugs with named-slug overwrite-in-place.
 - **Two-plane origin isolation** — artifact bodies serve from a separate content
@@ -724,8 +729,8 @@ everywhere else — and adds the iterate-in-place loop.
   iframes the artifact same-origin. Subscribers are capped per-slug and globally
   to bound FD/memory. Pair with `demiplane publish --watch` for an
   edit-save-see loop.
-- **Multi-file site publish (`POST /publish?site=<name>`).** Ingests a tar, zip,
-  or multipart bundle and serves the whole tree: `GET /{name}/` returns
+- **Multi-file site publish (`POST /publish?site=<name>`).** Ingests a tar or zip
+  bundle and serves the whole tree: `GET /{name}/` returns
   `index.html`, `GET /{name}/{path}` returns each asset with the right
   content-type, so relative links resolve. Beats a single-file host — a whole
   static site lives at one slug.

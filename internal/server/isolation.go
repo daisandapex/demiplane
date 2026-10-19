@@ -203,7 +203,10 @@ self.addEventListener("activate", function (event) {
 // because a failed update keeps the old worker. But the browser runs the check
 // after the old worker has handled the navigation that triggered it, so that
 // first navigation after the upgrade (its URL, and with cached credentials the
-// response) is still exposed to the old worker. Moving the content plane to a
+// response) is still exposed to the old worker. It can synthesize a response
+// without CSP, running script unsandboxed on the content origin until the
+// kill switch reloads the page. This is a residual upgrade risk.
+// Moving the content plane to a
 // new origin, or viewers clearing site data for it, is what prevents that;
 // the upgrade notes give the procedure.
 //

@@ -149,8 +149,11 @@ reply_hook_url  = http://127.0.0.1:9099/reply-event
   `{id, slug, kind, body, created_at, status}` arrives as JSON on **stdin** and
   as `DEMIPLANE_REPLY_ID/SLUG/KIND/BODY` env vars. It inherits the server's
   environment except the server's own `DEMIPLANE_*` variables (the bearer
-  token among them), which it never sees. It runs in its own process
-  group, killed when the shell exits or after `reply_hook_timeout` (default
+  token among them). The token is not passed to the hook environment, but a
+  hook running as the same user can read the server environment through
+  `/proc/$PPID/environ` and can read the token file used by `--token-file`.
+  Run hooks as a different user if that access matters. It runs in its own
+  process group, killed when the shell exits or after `reply_hook_timeout` (default
   `5m`), so long-running work must detach (as the `systemd-run` example does,
   or with `setsid`). Output is read as it streams and only the first 512 bytes
   are kept, whether or not they are logged (see below).

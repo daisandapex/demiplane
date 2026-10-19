@@ -33,25 +33,22 @@ import (
 // stands in for the metadata database, and per site file or directory, which
 // stands in for its inode and directory entry. Not counted: the database's
 // actual size, module data (replies, TLS material), filesystem block
-// overhead, and temp files abandoned by a crash (their ".tmp-" names are
-// skipped when usage is measured).
+// overhead. Abandoned temporary files and staging trees are counted; active
+// temporary files owned by this process are charged in flight instead.
 //
-// Other processes: `demiplane receive` opens the same store in its own process.
-// Each process charges its own writes against usage measured when it set its
-// quota, so neither sees the other's in-flight bytes, and a running server
-// learns of committed out-of-process writes only when it recounts
-// (RecountUsage, run on each sweep). Between recounts the store can exceed its
-// quota by the bytes other processes committed since the last recount plus
-// their in-flight writes.
+// Other processes: `demiplane receive` does not enforce a storage quota; each
+// run is bounded only by --max-upload. The server learns of its writes when
+// it recounts (RecountUsage, run on each sweep), then refuses further growth
+// if over quota. Between recounts, out-of-process writes and their in-flight
+// bytes can take the store past the server's quota.
 
 // ErrQuota means a write would take the store past its configured aggregate
 // storage quota. It is a capacity condition, not a malformed request, so it is
 // deliberately not an *InputError; the HTTP layer maps it to 507.
 var ErrQuota = errors.New("storage quota exceeded")
 
-// tempPrefix marks in-flight files and directories. Measuring usage skips
-// them: an in-flight entry is charged as in-flight, and an abandoned one is
-// not live data.
+// tempPrefix marks temporary files and directories. Active entries owned by
+// this process are charged in flight; other entries are counted as live data.
 const tempPrefix = ".tmp-"
 
 // quotaState is the store's byte accounting. A zero limit disables it.

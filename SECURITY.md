@@ -133,9 +133,11 @@ content origin; the per-document sandbox below is what keeps them apart.
 still cannot read control-plane responses there, but the combined handler can
 only run the content listener's write guard, which admits an opaque-origin
 (`Origin: null`) write that carries no other origin's `Referer` (see
-[Resource limits](#resource-limits), "Replies"). On an instance with no token a
-hosted page can therefore submit a form to `POST /publish`. Use it only for a
-single-operator, trusted-content instance where you accept that.
+[Resource limits](#resource-limits), "Replies"). On an instance with no token an
+external site can therefore submit a form to `POST /publish` through a
+sandboxed iframe that suppresses `Referer`. This applies to any external site,
+not just hosted pages. Use it only for a single-operator, trusted-content
+instance where you accept that.
 
 ## Content isolation between artifacts
 
@@ -214,6 +216,9 @@ alternative of an origin per artifact, are in [DESIGN.md](DESIGN.md#content-isol
   navigation that triggered the check. So the first navigation a viewer makes
   on the content origin after the upgrade is still exposed to the old worker:
   its URL, so a capability URL, and with cached credentials the response.
+  The old worker can also synthesize that first navigation response without
+  CSP, allowing its script to run unsandboxed on the content origin until
+  the kill switch reloads the page. This is a residual upgrade risk.
   Until then the old worker stays installed. Moving the content plane to a
   new origin (new port or host name via `--content-bind` and
   `--content-base-url`), or viewers clearing site data for the content

@@ -207,7 +207,7 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 // the byte quota, or the cap on site files and directories.
 func siteQuotaMessage(err error) string {
 	if errors.Is(err, store.ErrSiteEntries) {
-		return "the sites hold the maximum number of files and directories; remove a site's directory from the store while the server is stopped"
+		return "the sites hold the maximum number of files and directories; remove a site with demiplane delete-site"
 	}
 	return quotaMessage
 }
@@ -395,6 +395,13 @@ func (s *Server) serveSiteFile(w http.ResponseWriter, r *http.Request, site, rel
 	pw := w
 	if fi, err := f.Stat(); err == nil {
 		pw = s.pacedDownload(w, fi.Size())
+	}
+	// Filesystem dates cannot distinguish site replacements within one second.
+	// Without a strong validator, dates must neither validate cached bytes nor
+	// authorize resuming a download with bytes from a different version.
+	r.Header.Del("If-Modified-Since")
+	if ir := r.Header.Get("If-Range"); ir != "" && !isEntityTag(ir) {
+		r.Header.Del("Range")
 	}
 	singleRangeOnly(r)
 	http.ServeContent(pw, r, path.Base(rel), mod, f)

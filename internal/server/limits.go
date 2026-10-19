@@ -33,9 +33,9 @@ import (
 //     caps, leaves these counts.
 //
 // Connection counts are bounded at the listener (limit.Listener, wired in
-// cmd/demiplane). A client is its TCP peer address (limit.ClientKey); behind
-// a reverse proxy every request shares the proxy's address, so per-client
-// limits there belong at the proxy.
+// cmd/demiplane). A client is its TCP peer address unless --trusted-proxy
+// resolves it from X-Forwarded-For (limit.ClientKey). Without that setting,
+// clients behind a reverse proxy share the proxy's key.
 
 // RequestLimits configures limits.go. A zero field takes its default; a
 // negative one disables that limit.
