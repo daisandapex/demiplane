@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/modules/reply"
+	"github.com/daisandapex/demiplane/v3/internal/modules/reply"
 )
 
 // TestReplyHookConfigKeys pins the -tags reply config wiring: the reply_hook_*

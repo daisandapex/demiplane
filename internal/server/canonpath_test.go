@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // rawGet sends target verbatim as the request-target (no client-side

@@ -13,7 +13,7 @@ import (
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
 )
 
 // acmeConfig builds the tls.Config for ACME mode: certificates are obtained

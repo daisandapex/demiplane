@@ -2,9 +2,21 @@
 
 All notable changes to demiplane are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
-[Semantic Versioning](https://semver.org/) once it reaches a tagged release.
+[Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
+
+### Breaking
+
+- **The module path is now `github.com/daisandapex/demiplane/v3`.** Install
+  with `go install github.com/daisandapex/demiplane/v3/cmd/demiplane@latest`.
+  The v2.0.0 tag was never installable with `go install`: Go requires a
+  module at major version 2 or above to carry the version in its path, and
+  the old path did not, so `@latest` resolved to an untagged snapshot of
+  main.
+- **This upgrade is one-way.** The store layout changes and a 2.0.0 binary
+  cannot open an upgraded store. Back up the store before upgrading; going
+  back means restoring that backup.
 
 ### Security
 

@@ -6,7 +6,7 @@ package server
 import (
 	"net/http"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // This file is the first-party (core, non-module) route seam. It lets a feature

@@ -32,7 +32,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
 )
 
 // maxSiteFilenameSegments bounds path depth defensively; a legitimate site is

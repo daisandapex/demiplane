@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // TestMultiRangeIsServedWhole: a single byte range still gets 206; a request

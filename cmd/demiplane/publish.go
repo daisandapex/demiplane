@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	ttlparse "github.com/daisandapex/demiplane/internal/ttl"
+	ttlparse "github.com/daisandapex/demiplane/v3/internal/ttl"
 )
 
 // passwordHeader mirrors internal/server.PasswordHeader. The view password

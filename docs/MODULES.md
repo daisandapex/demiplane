@@ -138,7 +138,7 @@ as a first-class capability interface — two instances is not yet a pattern.
    ```go
    //go:build reply
    package main
-   import _ "github.com/daisandapex/demiplane/internal/modules/reply"
+   import _ "github.com/daisandapex/demiplane/v3/internal/modules/reply"
    ```
 
    (A module you genuinely want in *every* build would instead be blank-imported
@@ -180,7 +180,7 @@ module's `//go:build reply` integration test in `internal/server` does exactly
 this:
 
 ```go
-import _ "github.com/daisandapex/demiplane/internal/modules/reply"
+import _ "github.com/daisandapex/demiplane/v3/internal/modules/reply"
 ```
 
 Otherwise the registry is empty and the server runs core-only — which is exactly

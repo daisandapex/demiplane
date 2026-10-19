@@ -15,15 +15,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/limit"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/limit"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 
 	// Compile the reply module into this test binary so Handler() mounts its
 	// routes alongside the real core routes. This is the regression guard for the
 	// mux-conflict class of bug: a wildcard-first module pattern (/{slug}/reply)
 	// is ambiguous with core's literal-first routes (GET /docs/{page}) and panics
 	// at registration. Run with: go test -tags reply ./internal/server/
-	"github.com/daisandapex/demiplane/internal/modules/reply"
+	"github.com/daisandapex/demiplane/v3/internal/modules/reply"
 )
 
 // The registered module is one instance for the whole test binary, so its

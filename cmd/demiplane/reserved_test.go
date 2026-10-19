@@ -6,7 +6,7 @@ package main
 import (
 	"testing"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // coreRouteNames are the top-level names the HTTP planes route in every build.

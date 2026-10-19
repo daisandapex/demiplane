@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	demiplane "github.com/daisandapex/demiplane"
+	demiplane "github.com/daisandapex/demiplane/v3"
 )
 
 // TestRenderedDocHasSelfContainedFavicon: every rendered artifact must carry a

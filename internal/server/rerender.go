@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
-	"github.com/daisandapex/demiplane/internal/render"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/render"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // rerender.go owns the re-render path for ?render=md pages: POST /rerender/{slug}

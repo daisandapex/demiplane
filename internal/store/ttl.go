@@ -6,7 +6,7 @@ package store
 import (
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/ttl"
+	"github.com/daisandapex/demiplane/v3/internal/ttl"
 )
 
 // ParseTTL parses a human time-to-live string into a positive duration. See

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 func TestReceiveHonorsQuota(t *testing.T) {

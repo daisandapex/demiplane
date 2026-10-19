@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 func hostPolicyServer(t *testing.T, cfg Config) *Server {

@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // TestSiteArchiveCountsEveryEntry: directories and other non-regular entries

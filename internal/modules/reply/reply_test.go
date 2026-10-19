@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/formtoken"
-	"github.com/daisandapex/demiplane/internal/limit"
-	"github.com/daisandapex/demiplane/internal/module"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/formtoken"
+	"github.com/daisandapex/demiplane/v3/internal/limit"
+	"github.com/daisandapex/demiplane/v3/internal/module"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // fakeHost is a minimal module.Host for testing: a real temp store, a temp

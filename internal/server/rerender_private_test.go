@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // TestBulkRerenderNeverShowsAPrivateSlug: on an instance with no token, a

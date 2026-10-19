@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // getWith issues a GET with extra request headers and returns the response

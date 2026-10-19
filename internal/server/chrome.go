@@ -8,7 +8,7 @@ import (
 	"html"
 	"strings"
 
-	"github.com/daisandapex/demiplane/internal/theme"
+	"github.com/daisandapex/demiplane/v3/internal/theme"
 )
 
 // This file holds the shared visual chrome for the human-facing HTML surfaces

@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // newQuotaServer serves a fresh store whose aggregate quota is limit.

@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 func newTestServer(t *testing.T, baseURL string) *httptest.Server {

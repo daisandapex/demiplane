@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/limit"
+	"github.com/daisandapex/demiplane/v3/internal/limit"
 )
 
 // parseRateFlag reads a rate flag: "N" (N a minute, burst N) or "N:B" (burst

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
 )
 
 // siteentry.go bounds how many filesystem entries the published sites hold.

@@ -13,9 +13,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
-	"github.com/daisandapex/demiplane/internal/render"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/render"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // renderlimit.go bounds markdown rendering on the server: each render runs

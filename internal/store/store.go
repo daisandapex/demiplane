@@ -27,7 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
 	_ "modernc.org/sqlite" // pure-Go SQLite driver (no cgo)
 )
 

@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // site.go owns feature T2.2: HTTP multi-file / directory publish.

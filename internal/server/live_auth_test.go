@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // sseStatus opens /_events/{slug} with optional Basic credentials and returns

@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/limit"
+	"github.com/daisandapex/demiplane/v3/internal/limit"
 )
 
 // limits.go bounds how long a request may hold the server and how many may

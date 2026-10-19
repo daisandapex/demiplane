@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // bulkServer publishes n plain artifacts (nothing to rebake, so each is a

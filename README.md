@@ -22,7 +22,7 @@ to a box you own, reachable only from your own network.
 ## Install
 
 ```sh
-go install github.com/daisandapex/demiplane/cmd/demiplane@latest
+go install github.com/daisandapex/demiplane/v3/cmd/demiplane@latest
 ```
 
 Requires [Go 1.26+](https://go.dev/dl/). The binary lands in

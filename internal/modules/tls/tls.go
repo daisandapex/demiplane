@@ -29,8 +29,8 @@ import (
 	"log"
 	"strings"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
-	"github.com/daisandapex/demiplane/internal/module"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/module"
 )
 
 // Mode names a certificate source.

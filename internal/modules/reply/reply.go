@@ -25,9 +25,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
-	"github.com/daisandapex/demiplane/internal/module"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/module"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 const (

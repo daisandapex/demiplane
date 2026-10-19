@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/daisandapex/demiplane/internal/theme"
+	"github.com/daisandapex/demiplane/v3/internal/theme"
 )
 
 // repoURL is the default vanity-footer link target.

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/daisandapex/demiplane/internal/theme"
+	"github.com/daisandapex/demiplane/v3/internal/theme"
 )
 
 func render(src string) string { return string(Markdown([]byte(src), Options{})) }

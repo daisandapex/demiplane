@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 func limitServer(t *testing.T, cfg Config) (*Server, *store.Store) {

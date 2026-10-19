@@ -6,7 +6,7 @@ package server
 import (
 	"net/http"
 
-	demiplane "github.com/daisandapex/demiplane"
+	demiplane "github.com/daisandapex/demiplane/v3"
 )
 
 // favicon.go serves the brand icons a browser fetches by convention —

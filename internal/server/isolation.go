@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/daisandapex/demiplane/internal/module"
+	"github.com/daisandapex/demiplane/v3/internal/module"
 )
 
 // isolation.go keeps one published artifact from reaching another through the

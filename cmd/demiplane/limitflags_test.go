@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/limit"
+	"github.com/daisandapex/demiplane/v3/internal/limit"
 )
 
 func TestParseRateFlag(t *testing.T) {

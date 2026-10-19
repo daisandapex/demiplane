@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/ttl"
+	"github.com/daisandapex/demiplane/v3/internal/ttl"
 )
 
 // passwordHeader mirrors server.PasswordHeader: the per-artifact view password

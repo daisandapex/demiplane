@@ -18,7 +18,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // ViewAccess is the outcome of a view-password check (Host.CheckView).

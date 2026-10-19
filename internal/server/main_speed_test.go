@@ -6,7 +6,7 @@ package server
 import (
 	"testing"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // TestMain lowers the password work factor for this package.

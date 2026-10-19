@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // gallery.go owns feature T2.3: the GET /gallery artifact index on the control

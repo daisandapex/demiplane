@@ -20,8 +20,8 @@ import (
 	"time"
 	"unicode"
 
-	demiplane "github.com/daisandapex/demiplane"
-	"github.com/daisandapex/demiplane/internal/theme"
+	demiplane "github.com/daisandapex/demiplane/v3"
+	"github.com/daisandapex/demiplane/v3/internal/theme"
 )
 
 // Options controls how Markdown wraps rendered content in a styled document.

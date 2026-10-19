@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/limit"
+	"github.com/daisandapex/demiplane/v3/internal/limit"
 )
 
 // connGet sends a GET for path on c and reads one response.

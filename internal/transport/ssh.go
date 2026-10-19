@@ -23,8 +23,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // ErrTooLarge is returned when the stdin stream exceeds the configured cap.

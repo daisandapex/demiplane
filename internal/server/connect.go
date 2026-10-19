@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
 )
 
 // connect.go owns feature T1.3: the GET /connect onboarding page (control plane)

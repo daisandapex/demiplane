@@ -6,7 +6,7 @@ package reply
 import (
 	"net/http"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // Submission tokens. Every reply form demiplane serves carries a token bound

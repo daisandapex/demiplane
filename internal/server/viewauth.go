@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/limit"
-	"github.com/daisandapex/demiplane/internal/module"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/limit"
+	"github.com/daisandapex/demiplane/v3/internal/module"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // View-password checks run PBKDF2 at the stored work factor (600,000

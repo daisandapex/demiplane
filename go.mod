@@ -1,4 +1,4 @@
-module github.com/daisandapex/demiplane
+module github.com/daisandapex/demiplane/v3
 
 go 1.26.3
 

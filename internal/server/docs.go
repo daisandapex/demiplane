@@ -10,9 +10,9 @@ import (
 	"net/http"
 	"strings"
 
-	demiplane "github.com/daisandapex/demiplane"
-	"github.com/daisandapex/demiplane/internal/logsafe"
-	"github.com/daisandapex/demiplane/internal/render"
+	demiplane "github.com/daisandapex/demiplane/v3"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/render"
 )
 
 // docPage is one curated, embedded markdown document surfaced at /docs/<slug>.

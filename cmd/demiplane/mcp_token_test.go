@@ -14,7 +14,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/daisandapex/demiplane/internal/mcp"
+	"github.com/daisandapex/demiplane/v3/internal/mcp"
 )
 
 // TestMCPTokenIdentityMatchesBytesRead: the token file is atomically replaced

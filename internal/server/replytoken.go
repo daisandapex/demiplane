@@ -4,8 +4,8 @@
 package server
 
 import (
-	"github.com/daisandapex/demiplane/internal/formtoken"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/formtoken"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // Reply-form submission tokens (internal/formtoken). A token is bound to its

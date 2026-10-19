@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // newSplitServers builds the production topology (ADR 0003): a control listener

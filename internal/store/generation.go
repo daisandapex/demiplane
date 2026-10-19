@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
 )
 
 // generation.go makes each write of an artifact's bytes a new file and the

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // TestDeleteSiteCommand: delete-site removes a site, its interrupted

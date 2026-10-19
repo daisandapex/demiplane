@@ -17,8 +17,8 @@ package main
 import (
 	"crypto/tls"
 
-	"github.com/daisandapex/demiplane/internal/module"
-	tlsmod "github.com/daisandapex/demiplane/internal/modules/tls"
+	"github.com/daisandapex/demiplane/v3/internal/module"
+	tlsmod "github.com/daisandapex/demiplane/v3/internal/modules/tls"
 )
 
 func init() {

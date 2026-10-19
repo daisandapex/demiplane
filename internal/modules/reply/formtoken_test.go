@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/formtoken"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/formtoken"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // postAnswer posts a form submission to path with the given headers and

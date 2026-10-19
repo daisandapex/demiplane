@@ -15,9 +15,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	tlsmod "github.com/daisandapex/demiplane/internal/modules/tls"
-	"github.com/daisandapex/demiplane/internal/server"
-	"github.com/daisandapex/demiplane/internal/store"
+	tlsmod "github.com/daisandapex/demiplane/v3/internal/modules/tls"
+	"github.com/daisandapex/demiplane/v3/internal/server"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 func TestTLSConfigKeysRecognized(t *testing.T) {

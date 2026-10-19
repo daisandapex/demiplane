@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/limit"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/limit"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // proxiedLiveServer is a test server behind a trusted proxy at 127.0.0.1, so

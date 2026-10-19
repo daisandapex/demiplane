@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/limit"
-	"github.com/daisandapex/demiplane/internal/module"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/limit"
+	"github.com/daisandapex/demiplane/v3/internal/module"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // Admission for the open submit endpoints. A reply is accepted only when all

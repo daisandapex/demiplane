@@ -19,9 +19,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/limit"
-	"github.com/daisandapex/demiplane/internal/modules/reply"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/limit"
+	"github.com/daisandapex/demiplane/v3/internal/modules/reply"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 func init() {

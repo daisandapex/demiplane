@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
 )
 
 // The reply-event hook fires a configurable action whenever a reply is durably

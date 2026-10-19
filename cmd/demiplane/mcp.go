@@ -13,7 +13,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/daisandapex/demiplane/internal/mcp"
+	"github.com/daisandapex/demiplane/v3/internal/mcp"
 )
 
 // runMCP runs the stdio MCP server: a JSON-RPC 2.0 loop over stdin/stdout that

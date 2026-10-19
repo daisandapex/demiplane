@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // TestUpgradeListTraversal is the upgrade acceptance check for /list paging:

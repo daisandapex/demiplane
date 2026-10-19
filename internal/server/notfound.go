@@ -7,8 +7,8 @@ import (
 	"html"
 	"net/http"
 
-	demiplane "github.com/daisandapex/demiplane"
-	"github.com/daisandapex/demiplane/internal/theme"
+	demiplane "github.com/daisandapex/demiplane/v3"
+	"github.com/daisandapex/demiplane/v3/internal/theme"
 )
 
 // notfound.go gives the CONTENT origin (where every published/bookmarked view

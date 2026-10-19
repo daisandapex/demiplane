@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/daisandapex/demiplane/internal/logsafe"
-	"github.com/daisandapex/demiplane/internal/store"
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
+	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // syncBuffer is a log sink safe for the concurrent writes handler goroutines
