@@ -6,77 +6,65 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
-### Fixed
+## [3.1.0] - 2026-10-20
 
-- Stamp and sync site publication time at commit so staging delays do not age
-  newly published sites in owner listings and deletion filters.
-- Preserve confirmed MCP bulk deletion results on a later batch failure and
-  mark the failed batch as `outcome unknown` and later batches as `not attempted`
-  alongside the sanitized error.
-- Use inventory server time for CLI/MCP selection and age cutoffs, independent
-  of client clock skew. Fail closed when older servers omit it; reject manifests
-  more than one minute ahead of the server clock.
-- Log bulk deletion failures safely and report expired unpinned manifest items
-  as missing.
-- Honor pins during inventory, PATCH and sweeping even when an older publisher
-  sets an expiry. Empty publish TTL uses the configured default, like omission.
+Manage what you have published: list it, delete it in bulk, and set expiry
+and pins after the fact. Closes #15, #16 and #22.
 
 ### Added
 
-- Owner-only `PATCH /{slug}` to set/clear TTL (1m through 365d) and pin/unpin,
-  with atomic publish/sweeper coordination and no-store responses.
-- Persistent artifact pins and an idempotent additive migration. Pins clear
-  expiry, allowing 3.0 sweepers to leave them alone; pin enforcement needs 3.1+.
-- `serve --default-ttl` (off by default), persisted for HTTP, SSH receive and MCP
-  artifact publishes. Explicit zero/none opts out. Sites remain outside expiry.
-- Revision-bearing owner inventory and `POST /manage/delete` for exact manifests,
-  reporting deleted, changed/pinned, missing and failed entries independently.
-- Dry-run-first `demiplane delete` with intersecting client-side filters, named
-  slug union, pagination, pin exclusion, and host confirmation for broad runs.
-  Real runs submit the displayed revisions and skip concurrent changes.
-- `demiplane ttl`, `pin`, `unpin`; MCP `delete_many` (dry run by default, explicit
-  revision manifest and host confirmation for execution), `set_ttl`, and `pin`.
-  Existing MCP `delete` remains immediate and single-slug.
-
-- `demiplane list` with publish-compatible URL/token flags, a human table,
-  `--json`, automatic pagination, and `--all` owner inventory.
-- Allowlisted listing facts: resource kind, render mode, reply enabled, series,
-  and expiry. No publish next destinations, raw render specs, hashes or reply
-  credentials are serialized.
+- `demiplane list` with publish-compatible URL and token flags, a human table,
+  `--json`, automatic pagination, and `--all` for the owner inventory.
 - `GET /list?all=1` includes private unexpired artifacts and published sites,
   requires a configured valid token, and returns `Cache-Control: private, no-store`.
-- Control-plane `DELETE /sites/{name}` and remote `delete-site --url`; both require
-  a configured valid token. Offline `delete-site --store` remains available.
-  Site and artifact deletion are independent for matching names.
-- Split content-root GET/HEAD redirects to a safe explicit HTTP(S) `--base-url`
-  with `302`, rejecting same-host loops. Unknown-slug 404s and the combined
-  landing page are unchanged.
+  Each entry carries allowlisted facts: kind, render mode, reply enabled, series,
+  expiry and pin state. No next destinations, raw render specs, hashes or reply
+  credentials are serialized. Site entries report aggregate size and the
+  publication time, stamped when the site is committed.
+- Dry-run-first `demiplane delete` with intersecting filters (`--match`,
+  `--older-than`, `--series`, `--type`, `--sites`), named slugs, pin exclusion,
+  and host confirmation for broad runs. Age cutoffs use the server's clock from
+  the inventory, never the client's; a server that does not supply it is refused.
+  Real runs submit the displayed revisions and skip anything changed since.
+- `POST /manage/delete` for exact revision manifests, reporting deleted,
+  changed or pinned, missing and failed entries independently. Failures are
+  logged in sanitized form.
+- `PATCH /{slug}` (owner only) to set or clear a TTL (1m through 365d) and to pin
+  or unpin, with `demiplane ttl`, `pin` and `unpin`.
+- Persistent pins. Pinned artifacts are never swept, even when an older
+  publisher sets an expiry; pinning clears expiry so 3.0 sweepers leave them
+  alone.
+- `serve --default-ttl` (off by default) for HTTP, SSH receive and MCP artifact
+  publishes without a ttl. An explicit `0` or `none` opts out; an empty `?ttl=`
+  counts as omitted. Sites are outside expiry.
+- MCP `delete_many` (dry run by default; execution needs the revision manifest
+  and host confirmation), `set_ttl` and `pin`. If a later batch fails,
+  `delete_many` returns the confirmed results, marks the failed batch
+  `outcome unknown` and later ones `not attempted`. MCP `delete` is unchanged.
+- Control-plane `DELETE /sites/{name}` and remote `delete-site --url`, both with
+  the token. Offline `delete-site --store` remains. Deleting an artifact never
+  touches a same-named site, and the reverse.
+- With a separate content origin, `GET /` and `HEAD /` there redirect (302) to
+  the explicit `--base-url`, rejecting same-host loops. Unknown slugs keep the
+  themed 404.
 
 ### Changed
 
-- Owner site entries report aggregate regular-file size and publication timestamp
-  for client-side selection; public listing behavior is unchanged.
-
-- Startup inventory explicitly counts unexpired artifacts including private,
-  plus published sites, matching owner inventory. Public list/gallery selection
-  is unchanged. The directory layout is unchanged; pin metadata and default expiry
-  policy use additive SQLite schema changes.
+- The startup count covers unexpired artifacts, private ones included, plus
+  published sites, and matches the owner inventory. Public list and gallery
+  output is unchanged.
+- The store gains additive SQLite columns for pins and the default-expiry
+  policy; the directory layout is unchanged, and 3.0 can still read the store.
 
 ### Fixed
 
-- Site deletion surfaces inspection failures instead of claiming success or absence.
-- Client flag errors and help omit URL environment defaults and supplied values,
-  including invalid boolean values, for `list`, `delete-site`, and `publish`.
-  Flag parse errors exit 2; publish failures retain exit 1.
-- Content-root loop checks normalize numeric ports and IPv6 literals using
-  each URL's own scheme for default ports, preserving distinct HTTPS ports.
-- Owner listing uses no-store even on early admission and host-policy refusals;
-  artifact cursors use row IDs instead of capability slugs.
-- `list --all` requires an owner envelope marker, including on empty pages,
-  and rejects older public entries without owner metadata. Management
-  403 errors include token configuration advice. Remote site deletion requires
-  an explicit URL flag or environment value; offline `--store` still works.
-- Correct the publish response example to match its `series` and `replies` fields.
+- Site deletion reports inspection failures instead of claiming success.
+- Flag errors and help for `list`, `delete-site` and `publish` no longer echo
+  URL environment defaults or supplied values. Flag parse errors exit 2;
+  publish failures still exit 1.
+- The publish response example in API.md matches its `series` and `replies`
+  fields.
+- Release notes give the `/v3` module path for `go install`.
 
 ## [3.0.0] - 2026-10-19
 

@@ -115,6 +115,13 @@ jobs:
           case "${TAG}" in
             *-*) prerelease=(--prerelease) ;;
           esac
+          # Go needs the /vN suffix on a v2+ module path.
+          modpath="github.com/${REPO}"
+          major="${TAG%%.*}"
+          case "${major}" in
+            v0|v1) ;;
+            *) modpath="${modpath}/${major}" ;;
+          esac
           notes="$(printf '%s\n' \
             "Verify a binary before running it:" \
             '' \
@@ -126,7 +133,7 @@ jobs:
             "Or build it yourself, verified against sum.golang.org:" \
             '' \
             '```sh' \
-            "go install github.com/${REPO}/cmd/demiplane@${TAG}" \
+            "go install ${modpath}/cmd/demiplane@${TAG}" \
             '```' \
             '' \
             "Binaries are default builds; the optional \`reply\` and \`tls\` modules" \

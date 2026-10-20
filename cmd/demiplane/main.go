@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -66,10 +67,30 @@ const shutdownTimeout = 10 * time.Second
 // any other byte count. Shared by both `serve` and `receive`.
 const defaultMaxUpload = 100 << 20 // 100 MiB
 
-// version is the release baseline; a build stamps the exact commit via
-// -ldflags "-X main.version=1.2-<short-sha>" (see the Dockerfile and the release
-// runbook). A bare `go build` reports this baseline.
-var version = "2.0.0"
+// version is the release baseline; a build stamps the exact version via
+// -ldflags "-X main.version=..." (see the Dockerfile and the release workflow).
+// A `go install ...@vX.Y.Z` build reports the module version Go recorded
+// instead; a bare `go build` in a checkout reports this baseline.
+const baselineVersion = "3.1.0"
+
+var version = baselineVersion
+
+func init() {
+	bi, _ := debug.ReadBuildInfo()
+	version = resolveVersion(version, bi)
+}
+
+// resolveVersion keeps an -ldflags stamp, else prefers the module version Go
+// recorded for a `go install ...@vX.Y.Z` build, else the baseline.
+func resolveVersion(v string, bi *debug.BuildInfo) string {
+	if v != baselineVersion || bi == nil {
+		return v
+	}
+	if mv := bi.Main.Version; mv != "" && mv != "(devel)" {
+		return mv
+	}
+	return v
+}
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
