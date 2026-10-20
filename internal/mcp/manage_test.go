@@ -223,7 +223,11 @@ func TestManageMCPSecondBatchFailure(t *testing.T) {
 		t.Fatalf("unresolved=%d, want failed batch and unattempted items", len(got.Unresolved))
 	}
 	for n, result := range got.Unresolved {
-		if result.Item != m.Items[manage.MaxBatch+n] || result.Reason != "outcome unknown" {
+		want := "outcome unknown"
+		if n >= manage.MaxBatch {
+			want = "not attempted"
+		}
+		if result.Item != m.Items[manage.MaxBatch+n] || result.Reason != want {
 			t.Fatalf("unresolved item: %+v", result)
 		}
 	}

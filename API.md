@@ -374,7 +374,8 @@ instance. Owner responses, including early admission and host-policy refusals,
 authentication and handler errors, use `Cache-Control: private, no-store`.
 The response has the same `artifacts`,
 `count`, and optional `next` envelope, including private artifacts and published
-sites, plus an `owner: true` marker and `instance` (normalized control origin, including the effective port) even on empty pages. Public `/list` never
+sites, plus an `owner: true` marker, `instance` (normalized control origin, including the effective port),
+and `server_time` (current server UTC time in RFC 3339 format) even on empty pages. Public `/list` never
 sends this envelope marker. Expired artifacts, staging directories, backups,
 tombstones, symlinks and non-directory site entries are excluded.
 
@@ -931,8 +932,9 @@ freeze the selected owner entries and send this JSON envelope (up to 1000 items,
 Use the listing's `instance` exactly. Each item requires `kind` (`artifact` or
 `site`), `id` (the listing's slug), and `revision`. Display fields `size`,
 `created_at`, `series`, `content_type`, and `pinned` may accompany it; they are
-never evaluated as deletion filters. `selected_at` must be nonzero. Client clock
-skew is allowed because revisions bind the selection. An instance mismatch,
+never evaluated as deletion filters. Set `selected_at` to the first inventory
+page's `server_time`; it must be nonzero and no more than one minute ahead of
+the server clock (allowing a small server clock rollback). An instance mismatch,
 duplicate item, missing revision, invalid kind/identifier, unknown field, or invalid JSON rejects the
 whole request with `400` before any deletion. When supplied, `confirm_host` must
 match the instance hostname. CLI/MCP enforce broad-operation confirmation before
@@ -961,9 +963,13 @@ the same identifier. Clients batch larger selections without rerunning filters.
 after slugs. It follows owner cursors until complete, requires owner markers and
 revisions, then prints selection time, instance, item count, total bytes and each
 item's kind, identifier, size and revision. It refuses malformed owner responses.
+Every page must include a valid, nonzero `server_time`; clients fail closed with
+upgrade advice when it is absent, including on a 3.0 server. There is no client
+clock fallback.
 
 Filters intersect, and named slugs union with that filter result. Age is measured
-at selection time against `created_at`; `--older-than` takes a positive Go
+against `created_at` using the first page's `server_time` for `selected_at` and
+every cutoff, including across pagination; `--older-than` takes a positive Go
 duration, excluding entries with no timestamp. Glob matches the identifier,
 series is exact, and type is a MIME prefix. Artifacts are eligible by default;
 `--sites` adds sites but does not select anything by itself. `--all` includes both kinds; other supplied filters still
@@ -988,7 +994,8 @@ manifest. Real execution (`dry_run:false`) requires that `manifest`, with all
 revisions, plus `confirm_host`; it never reselects. It returns the same per-item
 report as HTTP. If a batch request fails, the tool returns `isError:true` with
 confirmed report arrays, a sanitized `error`, and `unresolved` items marked
-`outcome unknown`, including unattempted batches. Existing MCP `delete` still
+`outcome unknown` for the failed batch and `not attempted` for later batches.
+Execution stops at the first failed batch request. Existing MCP `delete` still
 immediately deletes one slug.
 `set_ttl` takes `slug` and `ttl`; `pin` takes `slug` and optional `pinned` (true
 by default, false to unpin). No new tool reads capability URLs into error text.

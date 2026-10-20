@@ -4,7 +4,13 @@
 package manage
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -55,6 +61,78 @@ func TestManageSelection(t *testing.T) {
 	for _, s := range []Selection{{Match: "["}, {OlderThan: "-1h"}, {OlderThan: "garbage"}} {
 		if _, err := Select(Manifest{}, s); err == nil {
 			t.Fatal("bad filter accepted")
+		}
+	}
+}
+
+// inventoryTransport keeps clock-skew tests independent of listening sockets.
+type inventoryTransport func(*http.Request) (*http.Response, error)
+
+func (f inventoryTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestManageInventoryClockAhead(t *testing.T) {
+	// The real client clock is two hours ahead of this simulated server clock.
+	serverTime := time.Now().UTC().Add(-2 * time.Hour)
+	calls := 0
+	c := &http.Client{Transport: inventoryTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		id, created, now, next := "fresh", serverTime, serverTime, "page2"
+		if calls == 2 {
+			if r.URL.Query().Get("after") != "page2" {
+				t.Fatal("missing cursor")
+			}
+			// Even if pagination takes two hours, use the first page's cutoff.
+			id, created, now, next = "old", serverTime.Add(-2*time.Hour), serverTime.Add(2*time.Hour), ""
+		}
+		rec := httptest.NewRecorder()
+		err := json.NewEncoder(rec).Encode(map[string]any{
+			"owner": true, "instance": "https://control.test:443", "server_time": now,
+			"count": 1, "next": next, "artifacts": []map[string]any{{
+				"kind": "artifact", "slug": id, "revision": "rev", "created_at": created,
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rec.Result(), nil
+	})}
+	m, err := Inventory(context.Background(), c, "https://control.test", "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected, err := Select(m, Selection{OlderThan: "1h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected.Items) != 1 || selected.Items[0].ID != "old" {
+		t.Fatalf("client two hours ahead selected fresh artifact with --older-than 1h: %+v", selected.Items)
+	}
+	if calls != 2 || !selected.SelectedAt.Equal(serverTime) {
+		t.Fatalf("selection must retain first page server time: calls=%d selected_at=%s want=%s", calls, selected.SelectedAt, serverTime)
+	}
+}
+
+func TestManageInventoryRequiresServerTime(t *testing.T) {
+	for _, badTime := range []string{"", `,"server_time":null`, `,"server_time":"0001-01-01T00:00:00Z"`, `,"server_time":"invalid"`} {
+		for _, badPage := range []int{1, 2} {
+			t.Run(fmt.Sprintf("%s/page%d", badTime, badPage), func(t *testing.T) {
+				calls := 0
+				c := &http.Client{Transport: inventoryTransport(func(r *http.Request) (*http.Response, error) {
+					calls++
+					stamp, next := `,"server_time":"2026-10-19T12:00:00Z"`, `,"next":"page2"`
+					if calls == badPage {
+						stamp, next = badTime, ""
+					}
+					rec := httptest.NewRecorder()
+					rec.WriteString(`{"owner":true,"instance":"https://control.test:443","artifacts":[],"count":0` + stamp + next + `}`)
+					return rec.Result(), nil
+				})}
+				if _, err := Inventory(context.Background(), c, "https://control.test", "owner"); err == nil {
+					t.Fatal("accepted inventory without valid server time")
+				} else if badTime == "" && !strings.Contains(err.Error(), "upgrade server") {
+					t.Fatalf("missing upgrade advice: %v", err)
+				}
+			})
 		}
 	}
 }

@@ -125,8 +125,9 @@ func serverManifest(t *testing.T, h http.Handler) manage.Manifest {
 	t.Helper()
 	rec := manageRequest(h, "GET", "/list?all=1", "owner", nil)
 	var page struct {
-		Instance  string `json:"instance"`
-		Artifacts []struct {
+		ServerTime time.Time `json:"server_time"`
+		Instance   string    `json:"instance"`
+		Artifacts  []struct {
 			manage.Item
 			Slug string `json:"slug"`
 		} `json:"artifacts"`
@@ -134,7 +135,7 @@ func serverManifest(t *testing.T, h http.Handler) manage.Manifest {
 	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &page) != nil {
 		t.Fatalf("list: %d %s", rec.Code, rec.Body)
 	}
-	m := manage.Manifest{Instance: page.Instance, SelectedAt: time.Now().UTC(), Items: []manage.Item{}}
+	m := manage.Manifest{Instance: page.Instance, SelectedAt: page.ServerTime, Items: []manage.Item{}}
 	for _, i := range page.Artifacts {
 		i.ID = i.Slug
 		m.Items = append(m.Items, i.Item)
@@ -423,12 +424,24 @@ func TestManageRoutePrivacy(t *testing.T) {
 }
 
 func TestManageBulkClockAhead(t *testing.T) {
-	_, h := newManageHandler(t)
-	m := serverManifest(t, h)
-	m.SelectedAt = time.Now().Add(2 * time.Hour)
-	r := bulk(t, h, m)
-	if len(r.Deleted) != 1 || r.Partial() {
-		t.Fatalf("client clock ahead: %+v", r)
+	for _, tc := range []struct {
+		name  string
+		ahead time.Duration
+		want  int
+	}{{"small rollback", 30 * time.Second, 200}, {"two hours", 2 * time.Hour, 400}} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, h := newManageHandler(t)
+			m := serverManifest(t, h)
+			m.SelectedAt = time.Now().Add(tc.ahead)
+			body, err := json.Marshal(manage.DeleteRequest{Manifest: m})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := mutate(t, h, "POST", "/manage/delete", string(body))
+			if r.Code != tc.want {
+				t.Fatalf("status=%d want %d: %s", r.Code, tc.want, r.Body)
+			}
+		})
 	}
 }
 

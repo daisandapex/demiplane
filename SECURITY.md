@@ -170,7 +170,10 @@ behind a proxy; forwarded origin headers do not grant write permission.
 
 Owner manifests contain confidential identifiers. The server returns opaque
 revisions and a normalized control-origin instance identity. Clients freeze
-kind, identifier, revision and selection time, and the server rejects mismatched
+kind, identifier, revision and selection time from the first inventory page's
+`server_time`; age filters never use the client clock. Bulk selection fails closed
+on older servers without server time. The server allows at most one minute of
+future selection time for server clock rollback, and rejects mismatched
 instances and invalid envelopes before mutation. It accepts no deletion filters.
 The revision and current pin are rechecked atomically at deletion. Concurrent
 republish or metadata changes cause skips. Sites use the same lock as their

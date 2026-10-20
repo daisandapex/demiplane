@@ -89,7 +89,9 @@ func (s *Server) handleBulkDelete(w http.ResponseWriter, r *http.Request) {
 	if !decodeManagement(w, r, &body) {
 		return
 	}
-	if body.Instance != s.controlOrigin(r) || body.SelectedAt.IsZero() || body.Items == nil || len(body.Items) > manage.MaxBatch {
+	// Clients select against inventory server_time, not their own clocks. Allow
+	// only a minute of server clock rollback; revisions still bind old manifests.
+	if body.Instance != s.controlOrigin(r) || body.SelectedAt.IsZero() || body.SelectedAt.After(time.Now().Add(time.Minute)) || body.Items == nil || len(body.Items) > manage.MaxBatch {
 		http.Error(w, "invalid manifest or instance", 400)
 		return
 	}

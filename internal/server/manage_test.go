@@ -208,6 +208,7 @@ func TestManageOwnerEnvelope(t *testing.T) {
 		}
 		for _, path := range []string{"/list", "/list?all=0", "/list?all=true", "/list?all=1"} {
 			t.Run(fmt.Sprintf("populated=%t%s", populated, path), func(t *testing.T) {
+				before := time.Now().UTC()
 				rec := manageRequest(h, "GET", path, "owner", nil)
 				manageDecode(t, rec)
 				var envelope map[string]any
@@ -216,6 +217,11 @@ func TestManageOwnerEnvelope(t *testing.T) {
 				}
 				marker, present := envelope["owner"]
 				if path == "/list?all=1" {
+					stamp, _ := envelope["server_time"].(string)
+					now, err := time.Parse(time.RFC3339Nano, stamp)
+					if err != nil || now.Before(before) || now.After(time.Now()) {
+						t.Fatalf("invalid server time: %s", rec.Body)
+					}
 					if marker != true {
 						t.Fatalf("missing owner marker: %s", rec.Body)
 					}

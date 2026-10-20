@@ -158,15 +158,16 @@ func Request(ctx context.Context, c *http.Client, base, token, method, route str
 	return nil
 }
 func Inventory(ctx context.Context, c *http.Client, base, token string) (Manifest, error) {
-	m := Manifest{SelectedAt: time.Now().UTC(), Items: make([]Item, 0)}
+	m := Manifest{Items: make([]Item, 0)}
 	seen := map[string]bool{}
 	ids := map[string]bool{}
 	cursor := ""
 	for {
 		var page struct {
-			Owner     bool   `json:"owner"`
-			Instance  string `json:"instance"`
-			Artifacts []struct {
+			ServerTime time.Time `json:"server_time"`
+			Owner      bool      `json:"owner"`
+			Instance   string    `json:"instance"`
+			Artifacts  []struct {
 				Item
 				Slug string `json:"slug"`
 			} `json:"artifacts"`
@@ -180,8 +181,13 @@ func Inventory(ctx context.Context, c *http.Client, base, token string) (Manifes
 		if err := Request(ctx, c, base, token, "GET", route, nil, &page); err != nil {
 			return Manifest{}, err
 		}
-		if !page.Owner || page.Instance == "" || page.Artifacts == nil || page.Count != len(page.Artifacts) || (m.Instance != "" && page.Instance != m.Instance) {
+		if page.ServerTime.IsZero() || !page.Owner || page.Instance == "" || page.Artifacts == nil || page.Count != len(page.Artifacts) || (m.Instance != "" && page.Instance != m.Instance) {
 			return Manifest{}, errors.New("management: invalid owner inventory; upgrade server")
+		}
+		// Freeze the first page's server time for every age cutoff, even across
+		// slow pagination. Never fall back to the client clock on older servers.
+		if m.SelectedAt.IsZero() {
+			m.SelectedAt = page.ServerTime
 		}
 		m.Instance = page.Instance
 		for _, row := range page.Artifacts {
@@ -207,14 +213,26 @@ func Inventory(ctx context.Context, c *http.Client, base, token string) (Manifes
 		cursor = page.Next
 	}
 }
+
+// BatchError identifies the failed request's half-open item range. Later items
+// were not attempted; the failed batch may have mutated before the error.
+type BatchError struct {
+	Start, End int
+	Err        error
+}
+
+func (e *BatchError) Error() string { return e.Err.Error() }
+func (e *BatchError) Unwrap() error { return e.Err }
+
 func Execute(ctx context.Context, c *http.Client, base, token string, r DeleteRequest) (Report, error) {
 	out := Report{Deleted: []Result{}, Skipped: []Result{}, Missing: []Result{}, Failed: []Result{}}
 	for start := 0; start < len(r.Items); start += MaxBatch {
 		batch := r
-		batch.Items = r.Items[start:min(start+MaxBatch, len(r.Items))]
+		end := min(start+MaxBatch, len(r.Items))
+		batch.Items = r.Items[start:end]
 		var part Report
 		if err := Request(ctx, c, base, token, "POST", "/manage/delete", batch, &part); err != nil {
-			return out, err
+			return out, &BatchError{Start: start, End: end, Err: err}
 		}
 		out.Deleted = append(out.Deleted, part.Deleted...)
 		out.Skipped = append(out.Skipped, part.Skipped...)

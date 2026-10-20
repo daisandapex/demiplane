@@ -6,6 +6,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/url"
 	"strings"
 
@@ -66,17 +67,17 @@ func callManage(ctx context.Context, c *Client, name string, raw json.RawMessage
 		if err != nil {
 			// Execute retains only confirmed batches. A failed request may have
 			// mutated its batch, so do not label its items deleted or failed.
-			confirmed := make(map[string]bool)
-			for _, results := range [][]manage.Result{report.Deleted, report.Skipped, report.Missing, report.Failed} {
-				for _, r := range results {
-					confirmed[r.Kind+":"+r.ID] = true
-				}
+			var batch *manage.BatchError
+			if !errors.As(err, &batch) {
+				return nil, upstreamError(err)
 			}
 			unresolved := []manage.Result{}
-			for _, i := range a.Manifest.Items {
-				if !confirmed[i.Kind+":"+i.ID] {
-					unresolved = append(unresolved, manage.Result{Item: i, Reason: "outcome unknown"})
+			for n := batch.Start; n < len(a.Manifest.Items); n++ {
+				reason := "outcome unknown"
+				if n >= batch.End {
+					reason = "not attempted"
 				}
+				unresolved = append(unresolved, manage.Result{Item: a.Manifest.Items[n], Reason: reason})
 			}
 			b, _ := json.Marshal(struct {
 				manage.Report

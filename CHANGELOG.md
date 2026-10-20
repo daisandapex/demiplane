@@ -11,9 +11,13 @@ All notable changes to demiplane are documented here. The format follows
 - Stamp and sync site publication time at commit so staging delays do not age
   newly published sites in owner listings and deletion filters.
 - Preserve confirmed MCP bulk deletion results on a later batch failure and
-  mark unresolved items explicitly alongside the sanitized error.
-- Log bulk deletion failures safely, allow client clock skew in manifests,
-  and report expired unpinned manifest items as missing.
+  mark the failed batch as `outcome unknown` and later batches as `not attempted`
+  alongside the sanitized error.
+- Use inventory server time for CLI/MCP selection and age cutoffs, independent
+  of client clock skew. Fail closed when older servers omit it; reject manifests
+  more than one minute ahead of the server clock.
+- Log bulk deletion failures safely and report expired unpinned manifest items
+  as missing.
 - Honor pins during inventory, PATCH and sweeping even when an older publisher
   sets an expiry. Empty publish TTL uses the configured default, like omission.
 

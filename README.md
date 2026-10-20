@@ -200,11 +200,15 @@ it alone. A 3.0 writer does not enforce pins and can set an expiry again.
 In 3.1, such pins remain in owner inventory, can be patched, and are protected from sweeping.
 
 `delete` lists all owner pages, then selects locally. `--match` matches identifiers;
-`--older-than` is a positive Go duration measured from publication time;
+`--older-than` is a positive Go duration measured from publication time using
+the first inventory page's `server_time` for selection time and all age cutoffs;
 `--series` matches exactly; `--type` matches a MIME prefix. Filters intersect.
 Named slugs are unioned with the filter set. Artifacts are eligible by default;
 `--sites` adds sites, and `--all` includes both kinds. `--sites` alone is not a
 selector; no selector selects nothing.
+CLI/MCP bulk selection requires valid server time on every inventory page and
+fails closed with upgrade advice on 3.0 servers; it never uses the client clock.
+The server rejects manifests more than one minute ahead of its own clock.
 Pins are excluded from every selection unless `--include-pinned` is present.
 `--all` with other filters still intersects those filters. Sites have no series
 or MIME type, so those filters exclude them.
@@ -221,7 +225,9 @@ are removed with artifacts; a same-named site is independent.
 
 MCP adds `delete_many` (dry run defaults true), `set_ttl`, and `pin`. A real
 `delete_many` call requires the returned manifest, including revisions, and
-`confirm_host`. `pin` takes `pinned:false` to unpin. Existing MCP `delete` remains
+`confirm_host`. If a batch request fails, confirmed outcomes are retained;
+items in that batch are `outcome unknown`, and later items are `not attempted`.
+`pin` takes `pinned:false` to unpin. Existing MCP `delete` remains
 an immediate, single-slug operation. See [API.md](API.md#post-managedelete).
 
 ## How it compares

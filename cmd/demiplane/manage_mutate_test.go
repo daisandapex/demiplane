@@ -24,7 +24,7 @@ import (
 	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
-const cliInventory = `{"owner":true,"instance":"https://control.test:443","count":1,"artifacts":[{"kind":"artifact","slug":"page","revision":"rev","size":12,"created_at":"2000-01-01T00:00:00Z","series":"s","content_type":"text/html"}]}`
+const cliInventory = `{"owner":true,"server_time":"2026-10-19T12:00:00Z","instance":"https://control.test:443","count":1,"artifacts":[{"kind":"artifact","slug":"page","revision":"rev","size":12,"created_at":"2000-01-01T00:00:00Z","series":"s","content_type":"text/html"}]}`
 
 func cliTransport(t *testing.T, reply string, posts *int, manifest *manage.DeleteRequest) {
 	t.Helper()

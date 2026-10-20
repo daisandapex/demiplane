@@ -122,7 +122,7 @@ func (s *Server) handleOwnerList(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	resp := map[string]any{"owner": true, "instance": s.controlOrigin(r)}
+	resp := map[string]any{"owner": true, "instance": s.controlOrigin(r), "server_time": time.Now().UTC()}
 	if len(items) > listPageSize {
 		items = items[:listPageSize]
 		last := items[len(items)-1]
