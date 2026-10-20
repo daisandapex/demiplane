@@ -6,6 +6,17 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Stamp and sync site publication time at commit so staging delays do not age
+  newly published sites in owner listings and deletion filters.
+- Preserve confirmed MCP bulk deletion results on a later batch failure and
+  mark unresolved items explicitly alongside the sanitized error.
+- Log bulk deletion failures safely, allow client clock skew in manifests,
+  and report expired unpinned manifest items as missing.
+- Honor pins during inventory, PATCH and sweeping even when an older publisher
+  sets an expiry. Empty publish TTL uses the configured default, like omission.
+
 ### Added
 
 - Owner-only `PATCH /{slug}` to set/clear TTL (1m through 365d) and pin/unpin,

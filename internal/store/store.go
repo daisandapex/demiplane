@@ -898,7 +898,7 @@ func (s *Store) HasPublic(slug string) (bool, error) {
 
 func (s *Store) exists(slug string) (bool, error) {
 	var one int
-	err := s.db.QueryRow(`SELECT 1 FROM artifacts WHERE slug = ?`, slug).Scan(&one)
+	err := s.db.QueryRow(`SELECT 1 FROM artifacts WHERE slug = ? AND (pinned = 1 OR expires_at = 0 OR expires_at > ?)`, slug, time.Now().Unix()).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -1629,7 +1629,7 @@ func (s *Store) Count(owner string) (int, error) {
 // renews its TTL via overwrite-in-place — is NOT destroyed.
 func (s *Store) SweepExpired(now time.Time) (int, error) {
 	rows, err := s.db.Query(
-		`SELECT slug FROM artifacts WHERE expires_at > 0 AND expires_at <= ?`,
+		`SELECT slug FROM artifacts WHERE expires_at > 0 AND expires_at <= ? AND pinned = 0`,
 		now.Unix(),
 	)
 	if err != nil {
@@ -1676,7 +1676,7 @@ func (s *Store) reapIfExpired(slug string, now time.Time) (bool, error) {
 	unlock := s.locks.lock(slug)
 	defer unlock()
 	blobGen, sourceGen, err := s.deleteRow(slug,
-		`DELETE FROM artifacts WHERE slug = ? AND expires_at > 0 AND expires_at <= ? RETURNING blob_gen, source_gen`,
+		`DELETE FROM artifacts WHERE slug = ? AND expires_at > 0 AND expires_at <= ? AND pinned = 0 RETURNING blob_gen, source_gen`,
 		slug, now.Unix())
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil

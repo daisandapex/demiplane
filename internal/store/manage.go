@@ -27,7 +27,7 @@ func (s *Store) SetDefaultTTL(d time.Duration) error {
 }
 
 // Patch updates metadata under a database write lock, also shared with other
-// processes. Expired rows are never revived. A pin's zero expiry is understood
+// processes. Expired unpinned rows are never revived. A pin's zero expiry is understood
 // by older sweepers even though those writers cannot enforce pin policy.
 func (s *Store) Patch(slug string, ttl *time.Duration, pin *bool) (Artifact, error) {
 	if err := ValidateNamedSlug(slug); err != nil {
@@ -46,7 +46,7 @@ func (s *Store) Patch(slug string, ttl *time.Duration, pin *bool) (Artifact, err
 	// Open configures immediate transactions, so Begin already owns the writer lock.
 	var pinned bool
 	var expires int64
-	err = tx.QueryRow(`SELECT pinned, expires_at FROM artifacts WHERE slug=? AND (expires_at=0 OR expires_at>?)`, slug, time.Now().Unix()).Scan(&pinned, &expires)
+	err = tx.QueryRow(`SELECT pinned, expires_at FROM artifacts WHERE slug=? AND (pinned=1 OR expires_at=0 OR expires_at>?)`, slug, time.Now().Unix()).Scan(&pinned, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Artifact{}, ErrNotFound
 	}
@@ -93,7 +93,7 @@ func (s *Store) Patch(slug string, ttl *time.Duration, pin *bool) (Artifact, err
 func (s *Store) DeleteRevision(slug, revision string, includePinned bool) error {
 	unlock := s.locks.lock(slug)
 	defer unlock()
-	bg, sg, err := s.deleteRow(slug, `DELETE FROM artifacts WHERE slug=? AND writer_tag=? AND (pinned=0 OR ?) RETURNING blob_gen,source_gen`, slug, revision, includePinned)
+	bg, sg, err := s.deleteRow(slug, `DELETE FROM artifacts WHERE slug=? AND writer_tag=? AND (pinned=0 OR ?) AND (pinned=1 OR expires_at=0 OR expires_at>?) RETURNING blob_gen,source_gen`, slug, revision, includePinned, time.Now().Unix())
 	if errors.Is(err, sql.ErrNoRows) {
 		exists, e := s.exists(slug)
 		if e != nil {

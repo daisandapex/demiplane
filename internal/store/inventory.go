@@ -19,7 +19,7 @@ type OwnerArtifact struct {
 // in rowid order, with pin state and the current opaque write revision.
 func (s *Store) OwnerArtifacts(ctx context.Context, owner string, after int64, limit int) ([]OwnerArtifact, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, replies, rowid, pinned, writer_tag
- FROM artifacts WHERE owner = ? AND rowid > ? AND (expires_at = 0 OR expires_at > ?)
+ FROM artifacts WHERE owner = ? AND rowid > ? AND (pinned = 1 OR expires_at = 0 OR expires_at > ?)
  ORDER BY rowid LIMIT ?`, owner, after, time.Now().Unix(), limit)
 	if err != nil {
 		return nil, err

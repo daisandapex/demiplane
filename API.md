@@ -73,7 +73,7 @@ after a `--body-timeout` grace, or the request gets `408`.
 |---|---|
 | `slug=<name>` | Named, stable URL that overwrites in place on re-publish. Charset `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. Omit for an auto friendly slug like `shadow-specter`. |
 | `private=true` | Mint a high-entropy, unguessable capability slug. Cannot be combined with `slug` (a named slug is guessable). |
-| `ttl=<dur>` | Auto-expire: `30m`, `2h`, `7d` (days), or any Go duration. Days are a plain decimal (`7d`, `0.5d`); exponents, signs, `NaN` and `Inf` are refused, and so is any value longer than 64 bytes. The minimum is `1s` and the maximum about 292 years; anything outside that range, or a value of only whitespace, is a `400`, never a page that does not expire. Explicit `ttl=0`, `ttl=none`, or empty `ttl` means no expiry. An omitted TTL uses `serve --default-ttl` (off by default) for unpinned artifacts. Pinned artifacts refuse any explicit TTL with `409`; absence preserves their pin. After it lapses the slug returns 404. |
+| `ttl=<dur>` | Auto-expire: `30m`, `2h`, `7d` (days), or any Go duration. Days are a plain decimal (`7d`, `0.5d`); exponents, signs, `NaN` and `Inf` are refused, and so is any value longer than 64 bytes. The minimum is `1s` and the maximum about 292 years; anything outside that range, or a value of only whitespace, is a `400`, never a page that does not expire. Explicit `ttl=0` or `ttl=none` means no expiry. An omitted or empty TTL uses `serve --default-ttl` (off by default) for unpinned artifacts. Pinned artifacts refuse any nonempty explicit TTL with `409`; omission or empty TTL preserves their pin. After it lapses the slug returns 404. |
 | `render=md` | Render a markdown body (at most 8 MiB) to a styled HTML page on publish (house theme, sticky title header, optional light/dark toggle). The body is received into a scratch file in the store, charged to `--store-quota`, and rendered once it is complete; a render that waits more than 5 seconds for one of the `--render-concurrency` slots gets `503`. |
 | `reply=question` | Bake a first-class inline reply box into the rendered page and accept replies. Requires `render=md` and a named `slug`; not valid with `private`. Needs the `reply` build tag. |
 | `reply=form` | Accept replies through the reply module's form at `/reply/{slug}`, without changing the page. Not valid with `private`. Without either `reply` value, a publish turns replies off for the slug. |
@@ -387,8 +387,10 @@ treat continuation cursors as opaque values.
 
 Each owner entry has an opaque `revision`. It changes on artifact publish,
 rebake, TTL/pin mutation, or site replacement. Artifact entries include
-`pinned:true` when pinned (absent means false). Public listings omit revisions
-and pins. Sites remain public: `kind=site`, `render=raw`, `reply=false`,
+`pinned:true` when pinned (absent means false). Site `created_at` is stamped and
+synced at publication under the site lock, so staging time does not age a new
+site. Public listings omit revisions and pins. Sites remain public: `kind=site`,
+`render=raw`, `reply=false`,
 `private=false`, `password=false`, empty `series`, `expires_at` and
 `content_type`. Site `created_at` is the published directory's timestamp and
 `size` is the sum of regular file sizes. `slug` and `filename` are the site name;
@@ -886,24 +888,26 @@ mutation time plus the duration, never extends the old expiry. Bounds are
 null pinned, invalid durations and overflow return `400` without changes.
 Pinning clears expiry. A TTL field combined with a resulting pinned state returns
 `409` with an unpin instruction, even for null/zero. `{"pinned":false,"ttl":"1h"}`
-is allowed. Unpinning alone leaves expiry absent. Unknown and expired artifacts
-return `404`; expired rows cannot be revived. Success is `200` with the updated
-owner entry, including revision. Mutations serialize against publishes and TTL
+is allowed. Unpinning alone leaves expiry unchanged. Unknown and expired
+unpinned artifacts return `404`; expired unpinned rows cannot be revived.
+Success is `200` with the updated owner entry, including revision. Mutations serialize against publishes and TTL
 sweeping across store handles.
 
 The nullable-expiry convention here is the store's existing integer `0` sentinel.
 The additive `pinned INTEGER NOT NULL DEFAULT 0` migration is idempotent. A 3.0
 binary can open the store, and its expiry predicate ignores pins' zero expiry.
 Pins are honored only by 3.1+: an older publisher can overwrite expiry without
-pin enforcement. A 3.1 republish preserves pins and refuses any explicit TTL
-while pinned. No directory layout change is required.
+pin enforcement. A 3.1 republish preserves pins and refuses any nonempty explicit
+TTL while pinned. In 3.1, pins remain in owner inventory and can be patched, and
+are protected from sweeping even if an older writer set an expiry.
+No directory layout change is required.
 
 `serve --default-ttl DURATION` accepts `0` (off, default), `none`, or `1m..365d`.
 It stores the policy for HTTP, SSH receive and MCP publishes; starting serve with
 `0` clears it. The policy applies at the artifact publish commit only when TTL
-is absent and the slug is unpinned. Explicit publish `ttl=0` or `ttl=none` opts
-out; explicit positive durations retain the existing publish grammar and bounds.
-Sites still reject every TTL parameter, including zero/none, and do not get the
+is absent or empty and the slug is unpinned. Explicit publish `ttl=0` or
+`ttl=none` opts out; explicit positive durations retain the existing publish grammar and bounds.
+Sites still reject nonempty TTL parameters, including zero/none, and do not get the
 default. SSH `receive --untar` publishes artifacts, not a site tree, so those
 artifacts receive the policy too.
 
@@ -927,9 +931,9 @@ freeze the selected owner entries and send this JSON envelope (up to 1000 items,
 Use the listing's `instance` exactly. Each item requires `kind` (`artifact` or
 `site`), `id` (the listing's slug), and `revision`. Display fields `size`,
 `created_at`, `series`, `content_type`, and `pinned` may accompany it; they are
-never evaluated as deletion filters. `selected_at` must be nonzero and no more
-than a minute in the future. An instance mismatch, duplicate item, missing
-revision, invalid kind/identifier, unknown field, or invalid JSON rejects the
+never evaluated as deletion filters. `selected_at` must be nonzero. Client clock
+skew is allowed because revisions bind the selection. An instance mismatch,
+duplicate item, missing revision, invalid kind/identifier, unknown field, or invalid JSON rejects the
 whole request with `400` before any deletion. When supplied, `confirm_host` must
 match the instance hostname. CLI/MCP enforce broad-operation confirmation before
 calling the endpoint; the endpoint cannot infer how a manifest was selected.
@@ -940,10 +944,12 @@ the site's publish lock. Pins are skipped unless `include_pinned:true`, which
 still requires matching revisions. Success is `200` with four arrays:
 `deleted`, `skipped`, `missing`, and `failed`. Entries carry the submitted
 identity/revision/display fields and, for non-deleted entries, a fixed `reason`.
-Changed or pinned items are skipped; absent items are missing; operational errors
-are failed without raw filesystem errors. An empty manifest returns four empty
-arrays. Retrying the same manifest reports prior deletions as missing and cannot
-delete replacement revisions. Body and retained source cleanup uses the existing
+Changed or pinned items are skipped; absent or expired unpinned items are missing;
+operational errors are failed without raw filesystem errors and logged with
+sanitized identifiers and errors. A rerender between a dry run and `--yes` changes
+the revision, so the item is reported as `skipped`. An empty manifest returns
+four empty arrays. Retrying the same manifest reports prior deletions as missing
+and cannot delete replacement revisions. Body and retained source cleanup uses the existing
 durable deletion queue. Artifact and site deletions are independent even with
 the same identifier. Clients batch larger selections without rerunning filters.
 
@@ -980,6 +986,9 @@ MCP `delete_many` takes `slugs`, `match`, `older_than`, `series`, `type`, `sites
 `all`, and `include_pinned`. `dry_run` defaults **true**, returning the complete
 manifest. Real execution (`dry_run:false`) requires that `manifest`, with all
 revisions, plus `confirm_host`; it never reselects. It returns the same per-item
-report as HTTP. Existing MCP `delete` still immediately deletes one slug.
+report as HTTP. If a batch request fails, the tool returns `isError:true` with
+confirmed report arrays, a sanitized `error`, and `unresolved` items marked
+`outcome unknown`, including unattempted batches. Existing MCP `delete` still
+immediately deletes one slug.
 `set_ttl` takes `slug` and `ttl`; `pin` takes `slug` and optional `pinned` (true
 by default, false to unpin). No new tool reads capability URLs into error text.

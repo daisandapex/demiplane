@@ -326,6 +326,18 @@ func (w *SiteWriter) Commit() (int, error) {
 		w.Abort()
 		return 0, fmt.Errorf("an interrupted replace of this site could not be recovered: %w", err)
 	}
+	// The root mtime is the publication timestamp used by owner age filters.
+	// Stamp it under the publish lock after extraction and sync it before the
+	// swap record can make this tree recoverable as a committed publication.
+	now := time.Now()
+	if err := os.Chtimes(w.tmpDir, now, now); err != nil {
+		w.Abort()
+		return 0, fmt.Errorf("stamp staged site: %w", err)
+	}
+	if err := contentSync(w.tmpDir); err != nil {
+		w.Abort()
+		return 0, fmt.Errorf("sync publication timestamp: %w", err)
+	}
 	// Both renames and the accounting are one quota transition, so a
 	// concurrent usage recount never walks the tree halfway through the swap.
 	// The replaced tree moves to a staging name, owned until it is removed;

@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -161,5 +163,71 @@ func TestManageMCPPublishTTL(t *testing.T) {
 		if err != nil || a.ExpiresAt.IsZero() == tc.expires {
 			t.Fatalf("publish ttl %+v %v", a, err)
 		}
+	}
+}
+
+func TestManageMCPSecondBatchFailure(t *testing.T) {
+	c := NewClient("https://control.test", "", "owner-secret")
+	m := manage.Manifest{Instance: "https://control.test:443", SelectedAt: time.Now()}
+	for n := 0; n < 2*manage.MaxBatch+1; n++ {
+		m.Items = append(m.Items, manage.Item{Kind: "artifact", ID: fmt.Sprintf("item-%d", n), Revision: "revision"})
+	}
+	var confirmed manage.Report
+	calls := 0
+	c.HTTP.Transport = manageRoundTrip(func(r *http.Request) (*http.Response, error) {
+		calls++
+		rec := httptest.NewRecorder()
+		if calls == 2 {
+			rec.WriteHeader(http.StatusServiceUnavailable)
+			rec.WriteString("private-upstream-secret")
+			return rec.Result(), nil
+		}
+		var batch manage.DeleteRequest
+		if err := json.NewDecoder(r.Body).Decode(&batch); err != nil {
+			t.Fatal(err)
+		}
+		for n, item := range batch.Items {
+			result := manage.Result{Item: item}
+			switch n {
+			case 0:
+				confirmed.Skipped = append(confirmed.Skipped, result)
+			case 1:
+				confirmed.Missing = append(confirmed.Missing, result)
+			case 2:
+				confirmed.Failed = append(confirmed.Failed, result)
+			default:
+				confirmed.Deleted = append(confirmed.Deleted, result)
+			}
+		}
+		if err := json.NewEncoder(rec).Encode(confirmed); err != nil {
+			t.Fatal(err)
+		}
+		return rec.Result(), nil
+	})
+	r := manageCall(t, c, "delete_many", map[string]any{"dry_run": false, "manifest": m, "confirm_host": "control.test"})
+	if calls != 2 || !r.IsError {
+		t.Fatalf("calls=%d result=%+v", calls, r)
+	}
+	var got struct {
+		manage.Report
+		Error      string          `json:"error"`
+		Unresolved []manage.Result `json:"unresolved"`
+	}
+	if err := json.Unmarshal([]byte(r.Content[0].Text), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Report, confirmed) {
+		t.Fatal("lost confirmed outcomes")
+	}
+	if len(got.Unresolved) != manage.MaxBatch+1 {
+		t.Fatalf("unresolved=%d, want failed batch and unattempted items", len(got.Unresolved))
+	}
+	for n, result := range got.Unresolved {
+		if result.Item != m.Items[manage.MaxBatch+n] || result.Reason != "outcome unknown" {
+			t.Fatalf("unresolved item: %+v", result)
+		}
+	}
+	if got.Error != "management: server returned status 503" || strings.Contains(r.Content[0].Text, "secret") {
+		t.Fatalf("unsafe failure: %s", got.Error)
 	}
 }

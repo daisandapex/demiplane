@@ -64,7 +64,28 @@ func callManage(ctx context.Context, c *Client, name string, raw json.RawMessage
 		}
 		report, err := manage.Execute(ctx, c.HTTP, c.ControlURL, c.Token, manage.DeleteRequest{Manifest: *a.Manifest, IncludePinned: a.IncludePinned, ConfirmHost: a.ConfirmHost})
 		if err != nil {
-			return nil, upstreamError(err)
+			// Execute retains only confirmed batches. A failed request may have
+			// mutated its batch, so do not label its items deleted or failed.
+			confirmed := make(map[string]bool)
+			for _, results := range [][]manage.Result{report.Deleted, report.Skipped, report.Missing, report.Failed} {
+				for _, r := range results {
+					confirmed[r.Kind+":"+r.ID] = true
+				}
+			}
+			unresolved := []manage.Result{}
+			for _, i := range a.Manifest.Items {
+				if !confirmed[i.Kind+":"+i.ID] {
+					unresolved = append(unresolved, manage.Result{Item: i, Reason: "outcome unknown"})
+				}
+			}
+			b, _ := json.Marshal(struct {
+				manage.Report
+				Error      string          `json:"error"`
+				Unresolved []manage.Result `json:"unresolved"`
+			}{report, upstreamError(err).Message, unresolved})
+			result := textResult(string(b))
+			result.IsError = true
+			return result, nil
 		}
 		b, _ := json.Marshal(report)
 		return textResult(string(b)), nil

@@ -760,7 +760,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		Private:      private,
 		PasswordHash: passwordHash,
 		TTL:          ttl,
-		TTLSet:       q.Has("ttl"),
+		TTLSet:       q.Get("ttl") != "",
 		Series:       series,
 		// nil on a non-rendered publish, which also DROPS any source retained at
 		// this slug by an earlier rendered publish (store.Put).

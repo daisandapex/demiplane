@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
 	"github.com/daisandapex/demiplane/v3/internal/manage"
 	"github.com/daisandapex/demiplane/v3/internal/store"
 	"github.com/daisandapex/demiplane/v3/internal/ttl"
@@ -87,7 +89,7 @@ func (s *Server) handleBulkDelete(w http.ResponseWriter, r *http.Request) {
 	if !decodeManagement(w, r, &body) {
 		return
 	}
-	if body.Instance != s.controlOrigin(r) || body.SelectedAt.IsZero() || body.SelectedAt.After(time.Now().Add(time.Minute)) || body.Items == nil || len(body.Items) > manage.MaxBatch {
+	if body.Instance != s.controlOrigin(r) || body.SelectedAt.IsZero() || body.Items == nil || len(body.Items) > manage.MaxBatch {
 		http.Error(w, "invalid manifest or instance", 400)
 		return
 	}
@@ -123,6 +125,7 @@ func (s *Server) handleBulkDelete(w http.ResponseWriter, r *http.Request) {
 			result.Reason = "missing"
 			report.Missing = append(report.Missing, result)
 		default:
+			log.Printf("bulk delete %s failed: %s", logsafe.Slug(i.ID), logsafe.Err(err, i.ID))
 			result.Reason = "delete failed"
 			report.Failed = append(report.Failed, result)
 		}

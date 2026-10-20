@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/daisandapex/demiplane/v3/internal/manage"
 )
 
 func ownerArt(t *testing.T, s *Store, slug string) Artifact {
@@ -355,5 +357,114 @@ func TestManageReadMetadata(t *testing.T) {
 	read, body := readBack(t, s, "metadata")
 	if !read.Pinned || read.Revision != pinned.Revision || string(body) != "body" {
 		t.Errorf("read omitted pin/revision: %+v", read)
+	}
+}
+
+func TestManageSitePublicationTime(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { s.Close() }()
+	w, err := s.NewSiteWriter("delayed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Abort()
+	if err := w.AddFile("assets/first.txt", strings.NewReader("first")); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate minutes of nested extraction without sleeping. Adding another
+	// nested file leaves the root mtime at the start of staging.
+	old := time.Now().Add(-5 * time.Minute)
+	if err := os.Chtimes(w.tmpDir, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.AddFile("assets/last.txt", strings.NewReader("last")); err != nil {
+		t.Fatal(err)
+	}
+	before := time.Now().Add(-time.Second) // allow filesystem timestamp precision
+	if _, err := w.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	meta, err := s.SiteMetadata("delayed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.CreatedAt.Before(before) || meta.CreatedAt.After(time.Now()) {
+		t.Fatalf("publication time is staging time: %s", meta.CreatedAt)
+	}
+	m, err := manage.Select(manage.Manifest{SelectedAt: time.Now(), Items: []manage.Item{{Kind: "site", ID: "delayed", CreatedAt: meta.CreatedAt.Format(time.RFC3339Nano)}}}, manage.Selection{Sites: true, OlderThan: "1m"})
+	if err != nil || len(m.Items) != 0 {
+		t.Fatalf("fresh site selected for deletion: %+v, %v", m, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := s.SiteMetadata("delayed")
+	if err != nil || !reopened.CreatedAt.Equal(meta.CreatedAt) || reopened.Revision != meta.Revision {
+		t.Fatalf("publication metadata did not persist: %+v, %v", reopened, err)
+	}
+}
+
+func TestManagePinnedLegacyExpiry(t *testing.T) {
+	for _, operation := range []string{"inventory", "patch", "sweep", "reap"} {
+		t.Run(operation, func(t *testing.T) {
+			s := newTestStore(t)
+			mustPut(t, s, PutOptions{Slug: "legacy"}, "body")
+			pinArt(t, s, "legacy")
+			// An older writer can change expiry without clearing the pin.
+			if _, err := s.db.Exec(`UPDATE artifacts SET expires_at=? WHERE slug='legacy'`, time.Now().Add(-time.Hour).Unix()); err != nil {
+				t.Fatal(err)
+			}
+			switch operation {
+			case "inventory":
+				if !ownerArt(t, s, "legacy").Pinned {
+					t.Fatal("inventory lost pin")
+				}
+			case "patch":
+				p := true
+				a, err := s.Patch("legacy", nil, &p)
+				if err != nil || !a.Pinned || !a.ExpiresAt.IsZero() {
+					t.Fatalf("cannot patch expired pin: %+v, %v", a, err)
+				}
+			case "sweep":
+				if n, err := s.SweepExpired(time.Now()); err != nil || n != 0 {
+					t.Fatalf("swept pin: %d, %v", n, err)
+				}
+			case "reap":
+				// Exercise the atomic recheck separately from the scan.
+				if reaped, err := s.reapIfExpired("legacy", time.Now()); err != nil || reaped {
+					t.Fatalf("reaped pin: %v, %v", reaped, err)
+				}
+			}
+			var pinned bool
+			if err := s.db.QueryRow(`SELECT pinned FROM artifacts WHERE slug='legacy'`).Scan(&pinned); err != nil || !pinned {
+				t.Fatalf("pin did not survive: %v, %v", pinned, err)
+			}
+		})
+	}
+}
+
+func TestManageExpiredManifestMissing(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		t.Run(map[bool]string{false: "matching", true: "stale"}[stale], func(t *testing.T) {
+			s := newTestStore(t)
+			a := mustPut(t, s, PutOptions{Slug: "expired"}, "body")
+			if _, err := s.db.Exec(`UPDATE artifacts SET expires_at=? WHERE slug='expired'`, time.Now().Add(-time.Hour).Unix()); err != nil {
+				t.Fatal(err)
+			}
+			if stale {
+				a.Revision = "old-revision"
+			}
+			if err := s.DeleteRevision(a.Slug, a.Revision, false); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("expired manifest item: %v, want missing", err)
+			}
+		})
 	}
 }

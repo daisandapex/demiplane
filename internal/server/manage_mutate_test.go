@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
 	"github.com/daisandapex/demiplane/v3/internal/manage"
 	"github.com/daisandapex/demiplane/v3/internal/store"
 )
@@ -196,7 +197,6 @@ func TestManageBulkValidation(t *testing.T) {
 	}
 	for _, change := range []func(*manage.Manifest){
 		func(m *manage.Manifest) { m.SelectedAt = time.Time{} },
-		func(m *manage.Manifest) { m.SelectedAt = time.Now().Add(time.Hour) },
 		func(m *manage.Manifest) { m.Items = make([]manage.Item, manage.MaxBatch+1) },
 		func(m *manage.Manifest) {
 			m.Items = []manage.Item{m.Items[0], {Kind: "invalid", ID: "x", Revision: "r"}}
@@ -252,7 +252,7 @@ func TestManageHTTPDefaultTTL(t *testing.T) {
 	for _, tc := range []struct {
 		slug, q string
 		want    time.Duration
-	}{{"absent", "", time.Hour}, {"zero", "&ttl=0", 0}, {"none", "&ttl=none", 0}, {"explicit", "&ttl=2h", 2 * time.Hour}} {
+	}{{"absent", "", time.Hour}, {"empty", "&ttl=", time.Hour}, {"zero", "&ttl=0", 0}, {"none", "&ttl=none", 0}, {"explicit", "&ttl=2h", 2 * time.Hour}} {
 		r := mutate(t, h, "POST", "/publish?slug="+tc.slug+tc.q, "x")
 		if r.Code != 201 {
 			t.Fatalf("publish %s: %d %s", tc.slug, r.Code, r.Body)
@@ -419,5 +419,40 @@ func TestManageRoutePrivacy(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), a.Slug) {
 		t.Fatal("capability in log")
+	}
+}
+
+func TestManageBulkClockAhead(t *testing.T) {
+	_, h := newManageHandler(t)
+	m := serverManifest(t, h)
+	m.SelectedAt = time.Now().Add(2 * time.Hour)
+	r := bulk(t, h, m)
+	if len(r.Deleted) != 1 || r.Partial() {
+		t.Fatalf("client clock ahead: %+v", r)
+	}
+}
+
+func TestManageBulkFailureLogging(t *testing.T) {
+	s, h := newManageHandler(t)
+	private := managePut(t, s, store.PutOptions{Private: true})
+	m := serverManifest(t, h)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	old := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(old)
+	r := bulk(t, h, m)
+	if len(r.Failed) != len(m.Items) {
+		t.Fatalf("failed outcomes: %+v", r)
+	}
+	for _, item := range m.Items {
+		if !strings.Contains(logs.String(), "bulk delete "+logsafe.Slug(item.ID)+" failed: sql: database is closed") {
+			t.Fatalf("missing operational log for %s: %s", logsafe.Slug(item.ID), &logs)
+		}
+	}
+	if strings.Contains(logs.String(), private.Slug) {
+		t.Fatal("capability leaked in log")
 	}
 }

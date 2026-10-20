@@ -185,18 +185,19 @@ demiplane delete --all --yes --confirm-host 127.0.0.1 --token-file ./token
 
 Management requires a configured valid token. TTL changes set expiry to **now
 plus** the duration, from `1m` through `365d`; `none` or `0` clears expiry.
-Pinning clears expiry. A pinned slug refuses any explicitly supplied TTL,
+Pinning clears expiry. A pinned slug refuses any nonempty explicitly supplied TTL,
 including never-expire values, until unpinned. Republishing without TTL keeps
-its pin. Unknown or expired slugs return 404 without changing anything.
+its pin. Unknown or expired unpinned slugs return 404 without changing anything.
 
 `serve --default-ttl 7d` sets a persistent default for HTTP, SSH receive (including
 untar artifact ingestion), and MCP publishes. The default is `0` (off); starting
-serve with `0` clears the stored policy. Only absent TTL on unpinned artifacts
+serve with `0` clears the stored policy. Absent or empty TTL on unpinned artifacts
 uses the default. Explicit `ttl=0` or `ttl=none` means never expires. Sites still
 reject TTL and are outside the default policy. Pins are honored only by 3.1+:
 the additive default-false database column preserves 3.0 compatibility, and a
 pinned artifact has the existing zero/no-expiry sentinel so a 3.0 sweeper leaves
 it alone. A 3.0 writer does not enforce pins and can set an expiry again.
+In 3.1, such pins remain in owner inventory, can be patched, and are protected from sweeping.
 
 `delete` lists all owner pages, then selects locally. `--match` matches identifiers;
 `--older-than` is a positive Go duration measured from publication time;
