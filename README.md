@@ -313,6 +313,22 @@ have the same disease with worse formatting.
 The gap: rendered HTML, shareable as a URL, without handing the content to someone
 else's host. So: `POST` the file to your own box, send the link, done.
 
+## How this is built
+
+I build demiplane with AI coding tools. Claude (Anthropic) and Codex (OpenAI)
+write most of the code, from plans I approve. Nothing merges on one model's
+word:
+
+- every change comes with tests, and every bug fix with a test that fails
+  without it;
+- every change is reviewed by at least two different models, and each finding
+  is fixed or explicitly deferred;
+- CI runs the full matrix, including the end-to-end browser tests;
+- I decide what ships; releases are signed with the studio's key.
+
+Each pull request says which models wrote and reviewed it, and the reviews are
+posted on it.
+
 ## Contributing & security
 
 Contributions are welcome under a CLA; see [CONTRIBUTING.md](CONTRIBUTING.md).
