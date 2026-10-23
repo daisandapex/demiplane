@@ -300,6 +300,11 @@ check "real push: --no-verify bypasses" 0 "$?"
 echo clean > "$repo/e.md"; commit "docs: e"
 g push -q origin HEAD:refs/heads/main >/dev/null 2>&1
 check "real push: clean push on top of published leak passes" 0 "$?"
+g push -q origin HEAD:refs/heads/topic >/dev/null 2>&1
+check "real push: new branch over history the destination holds passes" 0 "$?"
+echo 'deploy to secrethost again' > "$repo/f.md"; commit "docs: f"
+g push -q origin HEAD:refs/heads/topic2 >/dev/null 2>&1
+check "real push: new leak on a new branch blocked" 1 "$?"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

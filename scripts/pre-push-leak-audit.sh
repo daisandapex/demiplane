@@ -35,8 +35,9 @@
 #      LEAK_AUDIT_TIMEOUT seconds (default 300), when timeout(1) exists.
 #
 # What is audited: every object reachable from the pushed refs that the
-# destination does not already have, judged only from the remote SHAs git
-# passes on stdin. Presence on some other remote proves nothing about this
+# destination does not already have, judged from the remote SHAs git passes
+# on stdin and from the destination's own refs (git ls-remote on this push's
+# URL). Presence on some other remote proves nothing about this
 # destination. That covers root commits, merge resolutions, every filename
 # (tree objects), binary blobs, commit metadata and annotated tags. Any
 # enumeration or read error blocks the push: an audit that could not look is
@@ -186,6 +187,22 @@ done
 if [[ ${#refs[@]} -eq 0 ]]; then
   echo "== leak audit clean ==" >&2
   exit 0
+fi
+
+# A new ref arrives with a zero remote SHA, which would re-audit the whole
+# history the destination already holds. Ask the destination itself (this
+# push's URL, never some other remote) which commits it has, and exclude
+# those known here. If it cannot be asked, the wider set is audited.
+dest_url="${2:-}"
+if [[ -n "$dest_url" ]]; then
+  if git ls-remote --refs "$dest_url" > "$work/dest-refs" 2>/dev/null; then
+    while read -r dsha _; do
+      [[ "$dsha" =~ $sha_re ]] || continue
+      git cat-file -e "${dsha}^{commit}" 2>/dev/null && echo "^$dsha" >> "$work/revs"
+    done < "$work/dest-refs"
+  else
+    note "could not list the destination's refs; auditing without excluding them"
+  fi
 fi
 
 git rev-list --objects --no-object-names --stdin < "$work/revs" > "$work/objects" \
