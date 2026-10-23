@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -153,6 +154,7 @@ func TestCaptureHookScript_CaptureDir(t *testing.T) {
 	const secret = "<!doctype html><html>outside secret</html>\n"
 	for _, tc := range []struct {
 		name, path, root, replace string
+		maxBytes, reason          string
 		publish, render           bool
 	}{
 		{name: "direct", path: "note.html", publish: true},
@@ -163,15 +165,19 @@ func TestCaptureHookScript_CaptureDir(t *testing.T) {
 		{name: "configured root parent", path: "note.html", root: "parent", publish: true},
 		{name: "relative root", path: "note.html", root: "relative"},
 		{name: "relative file", path: "note.html", root: "relative-file"},
-		{name: "parent traversal", path: "../secret.html"},
+		{name: "parent traversal", path: "../secret.html", reason: "parent traversal"},
 		{name: "internal parent traversal", path: "nested/../note.html"},
 		{name: "sibling prefix", path: "../capture-other/note.html"},
-		{name: "leaf symlink", path: "link.html"},
+		{name: "leaf symlink", path: "link.html", reason: "capture dir rejected"},
 		{name: "directory symlink", path: "linked-dir/secret.html"},
 		{name: "internal symlink", path: "internal.html"},
 		{name: "missing", path: "missing.html"},
 		{name: "directory", path: "directory.html"},
-		{name: "fifo", path: "pipe.html"},
+		{name: "fifo", path: "pipe.html", reason: "not a regular file"},
+		{name: "hardlink to outside file", path: "hardlink.html", reason: "hardlinked file"},
+		{name: "over size cap", path: "note.html", maxBytes: "8", reason: "exceeds the 8-byte cap"},
+		{name: "at size cap", path: "note.html", maxBytes: strconv.Itoa(len(html)), publish: true},
+		{name: "invalid size cap", path: "note.html", maxBytes: "lots", reason: "non-negative integer"},
 		{name: "fragment", path: "fragment.html"},
 		{name: "markdown disabled", path: "note.md"},
 		{name: "markdown enabled", path: "note.md", publish: true, render: true},
@@ -201,6 +207,13 @@ func TestCaptureHookScript_CaptureDir(t *testing.T) {
 			} {
 				if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
 					t.Fatal(err)
+				}
+			}
+			if tc.name == "hardlink to outside file" {
+				// A same-uid process can plant a second name for a file outside
+				// the capture directory; O_NOFOLLOW alone does not see it.
+				if err := os.Link(filepath.Join(dir, "secret.html"), filepath.Join(root, "hardlink.html")); err != nil {
+					t.Skipf("hardlink unavailable: %v", err)
 				}
 			}
 			if tc.name == "fifo" {
@@ -254,6 +267,7 @@ func TestCaptureHookScript_CaptureDir(t *testing.T) {
 			if tc.render {
 				cmd.Env = append(cmd.Env, "DEMIPLANE_RENDER=1")
 			}
+			cmd.Env = append(cmd.Env, "DEMIPLANE_CAPTURE_MAX_BYTES="+tc.maxBytes)
 			if tc.replace != "" {
 				// Swap the original path at the last boundary before curl opens its
 				// input. The published bytes must still be the inspected snapshot.
@@ -302,6 +316,11 @@ func TestCaptureHookScript_CaptureDir(t *testing.T) {
 				if tc.publish {
 					t.Fatalf("expected capture, got no upload: %s", out)
 				}
+			}
+			// A rejected capture must say why on stderr, not skip silently.
+			if tc.reason != "" && (!strings.Contains(string(out), tc.reason) ||
+				!strings.Contains(string(out), "demiplane-capture: skipped "+file)) {
+				t.Fatalf("missing rejection log %q: %s", tc.reason, out)
 			}
 			matches, err := filepath.Glob(filepath.Join(dir, "tmp", "*"))
 			if err != nil || len(matches) != 0 {

@@ -69,7 +69,8 @@ gate and the self-contained heuristic (it publishes exactly what you point it at
 | `DEMIPLANE_SLUG` | Force a named slug. Default: derived from the filename (e.g. `My_Report.html` → `my_report`). Set empty to let the server generate one. |
 | `DEMIPLANE_PRIVATE` | `1` → publish `?private=true` (unguessable capability URL). Drops the named slug, since the two are mutually exclusive. |
 | `DEMIPLANE_RENDER` | `1` → also capture markdown, published with `?render=md`. |
-| `DEMIPLANE_CAPTURE_DIR` | Restrict hook captures to regular files under this absolute path. Requires Python 3; rejects `..` components and symlinks beneath the configured directory. |
+| `DEMIPLANE_CAPTURE_DIR` | Restrict hook captures to regular files under this absolute path. Requires Python 3; rejects `..` components, symlinks and hardlinked files beneath the configured directory. |
+| `DEMIPLANE_CAPTURE_MAX_BYTES` | Largest file a restricted capture will snapshot, in bytes. Default `104857600`, the server's 100 MiB `--max-upload` default; `0` = unlimited. Only applies when `DEMIPLANE_CAPTURE_DIR` is set. |
 
 ## Behaviour & safety
 
@@ -82,10 +83,20 @@ gate and the self-contained heuristic (it publishes exactly what you point it at
   `POST /publish` exactly as written.
 - **Directory restriction.** Restricted captures open each path component
   relative to a held directory descriptor without following symlinks, then copy
-  the opened regular file into a private temporary snapshot. Inspection and
-  upload use that snapshot, so replacing the original path cannot redirect the
-  upload. The snapshot is removed when the hook exits. Symlinks beneath the
-  configured directory are skipped even when their targets are inside it.
+  the opened regular file into a private (mode `0700`) temporary snapshot.
+  Inspection and upload use that snapshot, so swapping the original path for a
+  link after the check still uploads the bytes that were checked. What gets
+  uploaded is the content of a regular file reached through real directories
+  beneath the configured directory: `..` components and symlinks are rejected,
+  even when a symlink's target is inside the directory, and so is any file
+  with more than one hardlink, since another name for it can live outside the
+  directory. Files over `DEMIPLANE_CAPTURE_MAX_BYTES` are rejected too. The
+  configured directory itself is trusted, so do not point it at a path another
+  user can replace. The snapshot is removed when the hook exits.
+- **Rejections are logged, not silent.** A restricted capture that is refused
+  writes `demiplane-capture: capture dir rejected <path>: <reason>` followed by
+  `demiplane-capture: skipped <path>: …` to stderr, and the hook still exits
+  `0` so the edit is unaffected.
 
 ## Requirements
 

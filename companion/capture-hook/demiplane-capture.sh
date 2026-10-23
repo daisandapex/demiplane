@@ -28,6 +28,9 @@
 #                        publishing them with ?render=md (HTML on the server side).
 #   DEMIPLANE_CAPTURE_DIR  Restrict hook captures to files under this directory
 #                          (absolute path). Default: no restriction.
+#   DEMIPLANE_CAPTURE_MAX_BYTES  Largest file a restricted capture will snapshot,
+#                          in bytes. Default 104857600 (the server's 100 MiB
+#                          --max-upload default); 0 = unlimited.
 #
 # Dependencies: bash, curl, jq; python3 when DEMIPLANE_CAPTURE_DIR is set.
 #
@@ -37,6 +40,10 @@
 set -uo pipefail
 
 log() { printf 'demiplane-capture: %s\n' "$*" >&2; }
+
+# Mirrors the server's --max-upload default (100 MiB) so a restricted capture
+# never snapshots a file the default server would refuse anyway.
+default_capture_max_bytes=104857600
 
 # is_true returns 0 for 1/true/yes/on (case-insensitive), 1 otherwise.
 is_true() {
@@ -173,17 +180,29 @@ fi
 # snapshot: inspection and curl must not reopen the attacker-controlled path.
 source=$file
 if [[ -n ${DEMIPLANE_CAPTURE_DIR:-} ]]; then
-	capture_tmp=$(mktemp -d) || exit 0
+	# The snapshot holds a copy of the user's file: keep it owner-only.
+	umask 077
+	if ! capture_tmp=$(mktemp -d); then
+		log "skipped $file: cannot create snapshot directory"
+		exit 0
+	fi
 	trap 'rm -rf -- "$capture_tmp"' EXIT
 	source=$capture_tmp/artifact
-	if ! python3 - "$DEMIPLANE_CAPTURE_DIR" "$file" >"$source" <<'PY'
+	if ! python3 - "$DEMIPLANE_CAPTURE_DIR" "$file" \
+		"${DEMIPLANE_CAPTURE_MAX_BYTES:-$default_capture_max_bytes}" >"$source" <<'PY'
 import os
-import shutil
 import stat
 import sys
 
+path = sys.argv[2] if len(sys.argv) > 2 else "?"
 try:
-    root, path = sys.argv[1:]
+    root, path, limit = sys.argv[1:]
+    try:
+        limit = int(limit)
+    except ValueError:
+        limit = -1
+    if limit < 0:
+        raise ValueError("DEMIPLANE_CAPTURE_MAX_BYTES must be a non-negative integer")
     if not os.path.isabs(root) or not os.path.isabs(path):
         raise ValueError("absolute paths required")
     prefix = root.rstrip("/") + "/"
@@ -209,13 +228,34 @@ try:
     finally:
         os.close(directory)
     with os.fdopen(fd, "rb") as opened:
-        if not stat.S_ISREG(os.fstat(opened.fileno()).st_mode):
+        info = os.fstat(opened.fileno())
+        if not stat.S_ISREG(info.st_mode):
             raise ValueError("not a regular file")
-        shutil.copyfileobj(opened, sys.stdout.buffer)
-except (OSError, ValueError):
+        # A hardlink is a second name for an inode that may live outside the
+        # capture directory; O_NOFOLLOW cannot see it, so refuse shared inodes.
+        if info.st_nlink > 1:
+            raise ValueError("hardlinked file")
+        if limit and info.st_size > limit:
+            raise ValueError(f"{info.st_size} bytes exceeds the {limit}-byte cap")
+        # The file can grow after fstat; bound the copy itself as well.
+        copied = 0
+        while True:
+            chunk = opened.read(1 << 16)
+            if not chunk:
+                break
+            copied += len(chunk)
+            if limit and copied > limit:
+                raise ValueError(f"grew past the {limit}-byte cap while copying")
+            sys.stdout.buffer.write(chunk)
+        sys.stdout.buffer.flush()
+except (OSError, ValueError) as exc:
+    reason = exc.strerror if isinstance(exc, OSError) and exc.strerror else str(exc)
+    print(f"demiplane-capture: capture dir rejected {path}: {reason}",
+          file=sys.stderr)
     sys.exit(1)
 PY
 	then
+		log "skipped $file: not captured (reason logged above)"
 		exit 0
 	fi
 fi
