@@ -103,15 +103,25 @@ printf '%s\n' "${GENERIC_PATTERNS[@]}" > "$work/patterns" || abort "cannot write
 
 if [[ -e "$pattern_file" ]]; then
   [[ -f "$pattern_file" && -r "$pattern_file" ]] || abort "$pattern_file is not a readable file"
+  # A CR left by a CRLF editor would make every line demand a literal \r
+  # and silently match nothing, so carriage returns are stripped first.
   # Blank lines would match everything, so they go along with comments.
-  command grep -vE '^[[:space:]]*(#|$)' "$pattern_file" >> "$work/patterns"
-  [[ $? -le 1 ]] || abort "cannot read $pattern_file"
+  tr -d '\r' < "$pattern_file" | command grep -vE '^[[:space:]]*(#|$)' > "$work/repo-patterns"
+  rc=("${PIPESTATUS[@]}")
+  [[ ${rc[0]} -eq 0 && ${rc[1]} -le 1 ]] || abort "cannot read $pattern_file"
+  if [[ -s "$work/repo-patterns" ]]; then
+    cat "$work/repo-patterns" >> "$work/patterns" || abort "cannot write $work/patterns"
+  else
+    note "NOTE  $pattern_file has no patterns; checking the generic set only"
+  fi
 elif [[ -n "$repo_root" && -e "$repo_root/.leakpatterns" ]]; then
   # The old location. Reading it would trust the working tree; ignoring it
   # would silently drop this repo's patterns. Neither is acceptable.
   note "MOVE  .leakpatterns is no longer read from the working tree"
   note "      run: mv .leakpatterns $pattern_file"
   blocked
+else
+  note "NOTE  no $pattern_file; checking the generic set only"
 fi
 
 # Odd number of backslashes before a digit: a backreference.

@@ -121,6 +121,19 @@ echo 'deploy to secrethost' > "$repo/d.md"; commit "docs: d"
 check "file content: local pattern" 1 "$(run_hook)"
 
 setup_repo
+sed -i 's/$/\r/' "$repo/.git/info/leakpatterns"
+echo 'deploy to secrethost' > "$repo/d.md"; commit "docs: d"
+check "CRLF pattern file still matches" 1 "$(run_hook)" 'LEAK .*d\.md'
+
+setup_repo
+rm -f "$repo/.git/info/leakpatterns"
+check "no pattern file: says generic only" 0 "$(run_hook)" 'checking the generic set only'
+
+setup_repo
+printf '# only comments\n\n' > "$repo/.git/info/leakpatterns"
+check "comment-only pattern file: says generic only" 0 "$(run_hook)" 'has no patterns'
+
+setup_repo
 echo 'mail me at bob@private.example.test' > "$repo/c.md"; commit "docs: c"
 check "file content: local domain pattern" 1 "$(run_hook)"
 
