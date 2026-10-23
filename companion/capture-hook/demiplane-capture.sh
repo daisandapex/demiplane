@@ -29,7 +29,7 @@
 #   DEMIPLANE_CAPTURE_DIR  Restrict hook captures to files under this directory
 #                          (absolute path). Default: no restriction.
 #
-# Dependencies: bash, curl, jq.
+# Dependencies: bash, curl, jq; python3 when DEMIPLANE_CAPTURE_DIR is set.
 #
 # Exit status is always 0 in hook mode (publishing is best-effort and must never
 # break the editing workflow); failures are reported on stderr.
@@ -63,13 +63,13 @@ derive_slug() {
 # whose content is a self-contained document, or (when DEMIPLANE_RENDER is on) a
 # markdown file.
 looks_like_artifact() {
-	local f=$1
-	[[ -f $f ]] || return 1
+	local f=$1 source=${2:-$1}
+	[[ -f $source ]] || return 1
 	case "${f,,}" in
 	*.html | *.htm)
 		# Self-contained heuristic: a real document declares <html> or a doctype.
 		# A fragment edited into a partial file is skipped on purpose.
-		grep -qiE '<!doctype html|<html' -- "$f"
+		grep -qiE '<!doctype html|<html' -- "$source"
 		return $?
 		;;
 	*.md | *.markdown)
@@ -83,7 +83,7 @@ looks_like_artifact() {
 # publish POSTs $1 to demiplane and prints the artifact URL on stdout. Returns
 # nonzero (and logs) on failure.
 publish() {
-	local file=$1
+	local file=$1 source=${2:-$1}
 
 	if [[ -z ${DEMIPLANE_URL:-} ]]; then
 		log "DEMIPLANE_URL is not set — cannot publish $file"
@@ -121,7 +121,7 @@ publish() {
 	resp=$(curl -fsS --max-time 30 \
 		"${auth[@]}" \
 		-H 'Accept: application/json' \
-		--data-binary @"$file" \
+		--data-binary @"$source" \
 		"${base}/publish${query}" \
 		-w $'\n%{http_code}' 2>/dev/null)
 	local rc=$?
@@ -169,19 +169,62 @@ if [[ -z $file ]]; then
 	exit 0
 fi
 
-# Optional path restriction.
+# Optional path restriction. Copy from one confined open into a private
+# snapshot: inspection and curl must not reopen the attacker-controlled path.
+source=$file
 if [[ -n ${DEMIPLANE_CAPTURE_DIR:-} ]]; then
-	case "$file" in
-	"${DEMIPLANE_CAPTURE_DIR%/}"/*) : ;;
-	*) exit 0 ;;
-	esac
+	capture_tmp=$(mktemp -d) || exit 0
+	trap 'rm -rf -- "$capture_tmp"' EXIT
+	source=$capture_tmp/artifact
+	if ! python3 - "$DEMIPLANE_CAPTURE_DIR" "$file" >"$source" <<'PY'
+import os
+import shutil
+import stat
+import sys
+
+try:
+    root, path = sys.argv[1:]
+    if not os.path.isabs(root) or not os.path.isabs(path):
+        raise ValueError("absolute paths required")
+    prefix = root.rstrip("/") + "/"
+    if not path.startswith(prefix):
+        raise ValueError("outside capture directory")
+    parts = path[len(prefix):].split("/")
+    if ".." in parts or not parts[-1]:
+        raise ValueError("parent traversal or directory")
+    parts = [part for part in parts if part not in ("", ".")]
+    if not parts:
+        raise ValueError("no file")
+    # The configured root is trusted; every component beneath it must be
+    # opened relative to a held directory descriptor, without following links.
+    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                            dir_fd=directory)
+            os.close(directory)
+            directory = child
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     dir_fd=directory)
+    finally:
+        os.close(directory)
+    with os.fdopen(fd, "rb") as opened:
+        if not stat.S_ISREG(os.fstat(opened.fileno()).st_mode):
+            raise ValueError("not a regular file")
+        shutil.copyfileobj(opened, sys.stdout.buffer)
+except (OSError, ValueError):
+    sys.exit(1)
+PY
+	then
+		exit 0
+	fi
 fi
 
-if ! looks_like_artifact "$file"; then
+if ! looks_like_artifact "$file" "$source"; then
 	exit 0
 fi
 
-if url=$(publish "$file"); then
+if url=$(publish "$file" "$source"); then
 	log "published $(basename -- "$file") → $url"
 	# Feed the mesh URL back to the agent so it shares THAT, not a public link.
 	jq -n --arg url "$url" --arg file "$(basename -- "$file")" '{

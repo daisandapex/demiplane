@@ -69,7 +69,7 @@ gate and the self-contained heuristic (it publishes exactly what you point it at
 | `DEMIPLANE_SLUG` | Force a named slug. Default: derived from the filename (e.g. `My_Report.html` → `my_report`). Set empty to let the server generate one. |
 | `DEMIPLANE_PRIVATE` | `1` → publish `?private=true` (unguessable capability URL). Drops the named slug, since the two are mutually exclusive. |
 | `DEMIPLANE_RENDER` | `1` → also capture markdown, published with `?render=md`. |
-| `DEMIPLANE_CAPTURE_DIR` | Restrict hook captures to files under this absolute path. |
+| `DEMIPLANE_CAPTURE_DIR` | Restrict hook captures to regular files under this absolute path. Requires Python 3; rejects `..` components and symlinks beneath the configured directory. |
 
 ## Behaviour & safety
 
@@ -80,8 +80,15 @@ gate and the self-contained heuristic (it publishes exactly what you point it at
   re-writing `report.html` keeps updating the same `…/report` URL — bookmark once.
 - **Filenames**, not contents, drive the slug; the file's bytes are streamed to
   `POST /publish` exactly as written.
+- **Directory restriction.** Restricted captures open each path component
+  relative to a held directory descriptor without following symlinks, then copy
+  the opened regular file into a private temporary snapshot. Inspection and
+  upload use that snapshot, so replacing the original path cannot redirect the
+  upload. The snapshot is removed when the hook exits. Symlinks beneath the
+  configured directory are skipped even when their targets are inside it.
 
 ## Requirements
 
-`bash`, `curl`, `jq`. The demiplane instance must be reachable from the machine
+`bash`, `curl`, `jq`; Python 3 on Unix when `DEMIPLANE_CAPTURE_DIR` is set.
+The demiplane instance must be reachable from the machine
 running Claude Code (i.e. you're on the mesh/LAN).

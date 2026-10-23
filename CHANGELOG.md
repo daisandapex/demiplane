@@ -6,6 +6,13 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- The capture hook enforces `DEMIPLANE_CAPTURE_DIR` with directory-relative
+  opens and a private upload snapshot, preventing parent traversal, escaping
+  symlinks, and path replacement between inspection and upload. Restricted
+  captures now require Python 3 and skip symlinks beneath the capture directory.
+
 ## [3.1.0] - 2026-10-20
 
 Manage what you have published: list it, delete it in bulk, and set expiry
