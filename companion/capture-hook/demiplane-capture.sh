@@ -32,12 +32,17 @@
 #                          in bytes. Default 104857600 (the server's 100 MiB
 #                          --max-upload default); 0 = unlimited.
 #
-# Dependencies: bash, curl, jq; python3 when DEMIPLANE_CAPTURE_DIR is set.
+# Dependencies: bash, curl 7.55+, jq; python3 when DEMIPLANE_CAPTURE_DIR is set.
 #
 # Exit status is always 0 in hook mode (publishing is best-effort and must never
 # break the editing workflow); failures are reported on stderr.
 
 set -uo pipefail
+
+# The token reaches curl as a header line on stdin. Never in argv, which any
+# local account can read with ps, and never in a child's environment.
+token=${DEMIPLANE_TOKEN:-}
+unset DEMIPLANE_TOKEN
 
 log() { printf 'demiplane-capture: %s\n' "$*" >&2; }
 
@@ -120,8 +125,15 @@ publish() {
 		query="?${params[*]}"
 	fi
 
+	# -H @- reads header lines from stdin (curl 7.55+), fed by the here-string.
 	local -a auth=()
-	[[ -n ${DEMIPLANE_TOKEN:-} ]] && auth=(-H "Authorization: Bearer ${DEMIPLANE_TOKEN}")
+	if [[ -n $token ]]; then
+		if [[ $token == *[$'\r\n']* ]]; then
+			log "DEMIPLANE_TOKEN contains a line break — not sending it"
+			return 1
+		fi
+		auth=(-H @-)
+	fi
 
 	# Accept: application/json so we can pull the canonical URL out of the reply.
 	local resp http
@@ -130,7 +142,7 @@ publish() {
 		-H 'Accept: application/json' \
 		--data-binary @"$source" \
 		"${base}/publish${query}" \
-		-w $'\n%{http_code}' 2>/dev/null)
+		-w $'\n%{http_code}' 2>/dev/null <<<"Authorization: Bearer ${token}")
 	local rc=$?
 	if ((rc != 0)); then
 		log "publish failed (curl exit $rc) for $file → ${base}/publish${query}"

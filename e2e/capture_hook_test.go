@@ -138,6 +138,83 @@ func TestCaptureHookScript_HookMode(t *testing.T) {
 	}
 }
 
+// TestCaptureHookScript_TokenNotInArgv: the bearer token must reach the server
+// without appearing in curl's argv (readable by every local account through ps)
+// or in curl's environment. A curl shim records both, plus ps's view of its own
+// process, then execs the real curl; the publish succeeding against a
+// token-protected server proves the header still arrives.
+func TestCaptureHookScript_TokenNotInArgv(t *testing.T) {
+	for _, bin := range []string{"bash", "curl", "jq"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("skip: %s not on PATH", bin)
+		}
+	}
+	realCurl, err := exec.LookPath("curl")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	scriptPath := filepath.Join(repoRoot, "companion", "capture-hook", "demiplane-capture.sh")
+	srv := startServer(t, serverOpts{Token: "capture-hook-token-argv-sentinel"})
+
+	dir := t.TempDir()
+	htmlFile := filepath.Join(dir, "argv.html")
+	if err := os.WriteFile(htmlFile, []byte("<!doctype html><html>argv</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "bin")
+	if err := os.Mkdir(bin, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	argvDump := filepath.Join(dir, "argv")
+	envDump := filepath.Join(dir, "env")
+	psDump := filepath.Join(dir, "ps")
+	shim := "#!/usr/bin/env bash\n" +
+		"printf '%s\\n' \"$@\" > \"$CAPTURE_TEST_ARGV\"\n" +
+		"env > \"$CAPTURE_TEST_ENV\"\n" +
+		"ps -ww -o args= -p $$ > \"$CAPTURE_TEST_PS\" 2>&1 || true\n" +
+		"exec \"$CAPTURE_TEST_CURL\" \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "curl"), []byte(shim), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("bash", scriptPath, htmlFile)
+	cmd.Env = append(os.Environ(),
+		"DEMIPLANE_URL="+srv.ControlURL,
+		"DEMIPLANE_TOKEN="+srv.Token,
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"CAPTURE_TEST_ARGV="+argvDump, "CAPTURE_TEST_ENV="+envDump,
+		"CAPTURE_TEST_PS="+psDump, "CAPTURE_TEST_CURL="+realCurl,
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("publish with token failed: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if url := strings.TrimSpace(stdout.String()); !strings.HasPrefix(url, srv.ContentURL+"/") {
+		t.Fatalf("stdout %q is not a URL on %s (stderr:\n%s)", url, srv.ContentURL, stderr.String())
+	}
+
+	argv, err := os.ReadFile(argvDump)
+	if err != nil {
+		t.Fatalf("curl shim did not run: %v", err)
+	}
+	if !strings.Contains(string(argv), "--data-binary") {
+		t.Fatalf("shim recorded unexpected argv: %q", argv)
+	}
+	env, err := os.ReadFile(envDump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps, err := os.ReadFile(psDump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoSecret(t, srv.Token, "curl argv, environment and ps line",
+		string(argv), string(env), string(ps), stdout.String(), stderr.String())
+}
+
 // Exercise the client-side boundary directly: server authorization cannot stop
 // an authorized hook from leaking a local file outside its capture directory.
 func TestCaptureHookScript_CaptureDir(t *testing.T) {

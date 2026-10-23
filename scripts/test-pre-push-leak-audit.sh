@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Regression tests for pre-push-leak-audit.
 #
-# Run: scripts/test-pre-push-leak-audit.sh
+# Run: test-pre-push-leak-audit [path-to-hook]
+#      (vendored: scripts/test-pre-push-leak-audit.sh [path-to-hook])
+#
+# Without an argument it tests the hook next to it. Byte-identical wherever it
+# is vendored, like the hook.
 #
 # The failure mode this exists for is a SILENT FALSE PASS. On 2026-08-06 the
 # metadata check was found to have never worked: written as
@@ -12,53 +16,88 @@
 # SIGPIPE (141), and pipefail reports the pipeline as failed — so a detected
 # leak read as "clean". It only manifests when the producer is still writing as
 # grep quits, which is why small single-file content checks passed and the
-# large metadata stream did not. A linter cannot see that. Case 4 can.
+# large metadata stream did not. A linter cannot see that. The metadata case
+# can.
+#
+# The 2026-10 cases reproduce ways the previous hook let a leak through while
+# reporting clean: root and merge commits, display-quoted filenames, NUL bytes,
+# a file named like the scanner, a deleted restricted file, failed enumeration,
+# history known only to another remote, annotated tags and filenames. A planted
+# backreference pattern hung it instead.
 set -uo pipefail
 
-HOOK="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pre-push-leak-audit.sh}"
+here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+default_hook="$here/pre-push-leak-audit"
+[[ -e "$default_hook.sh" ]] && default_hook="$default_hook.sh"
+HOOK="${1:-$default_hook}"
 [[ -x "$HOOK" ]] || { echo "no executable hook at $HOOK" >&2; exit 2; }
+HOOK=$(cd "$(dirname "$HOOK")" && pwd)/$(basename "$HOOK")
 
 ZERO=0000000000000000000000000000000000000000
 pass=0; fail=0
-work=$(mktemp -d) || exit 2
+work=$(mktemp -d "${TMPDIR:-/tmp}/leak-audit-test.XXXXXX") || exit 2
 trap 'rm -rf "$work"' EXIT
 
-setup_repo() {
+# A hung hook is a failed hook, and must not hang the suite.
+budget=()
+if command -v timeout >/dev/null 2>&1; then budget=(timeout 30)
+elif command -v gtimeout >/dev/null 2>&1; then budget=(gtimeout 30)
+fi
+
+g() { git -C "$repo" "$@"; }
+commit() { g add -A; g commit -q -m "$1"; }
+
+write_patterns() {
+  cat > "$1" <<'PAT'
+# test patterns
+\bsecrethost\b
+private\.example\.test
+[Ff]orbidden[- ]?[Nn]ame
+PAT
+}
+
+new_repo() {
   repo="$work/repo"
-  rm -rf "$repo"; mkdir -p "$repo"
-  git -C "$repo" init -q
-  git -C "$repo" config user.name tekton
-  git -C "$repo" config user.email tekton@example.test
-  git -C "$repo" config commit.gpgsign false
+  rm -rf "$repo" "$work"/dest*.git; mkdir -p "$repo"
+  g init -q
+  g config user.name tekton
+  g config user.email tekton@example.test
+  g config commit.gpgsign false
+  g config tag.gpgsign false
+  write_patterns "$repo/.git/info/leakpatterns"
+  ln -sf "$HOOK" "$repo/.git/hooks/pre-push"
+}
+
+setup_repo() {
+  new_repo
   # A body long enough that the producer is still writing when grep -q exits.
   # Without this the SIGPIPE bug hides.
   local filler; filler=$(head -c 4000 /dev/zero | tr '\0' 'x')
   local i
   for i in $(seq 1 40); do
     echo "$i" > "$repo/f$i.txt"
-    git -C "$repo" add "f$i.txt"
-    git -C "$repo" commit -q -m "chore: seed $i" -m "$filler"
+    g add "f$i.txt"
+    g commit -q -m "chore: seed $i" -m "$filler"
   done
-  cat > "$repo/.leakpatterns" <<'PAT'
-# test patterns
-\bsecrethost\b
-private\.example\.test
-[Ff]orbidden[- ]?[Nn]ame
-PAT
-  ln -sf "$HOOK" "$repo/.git/hooks/pre-push"
 }
 
-# Runs the hook over every commit (no remotes exist, so --not --remotes is a
-# no-op and the whole history is in range). Echoes the exit status.
+# Feeds the hook one pre-push line. Defaults: push HEAD to a new branch on a
+# destination that has nothing. Echoes the exit status.
 run_hook() {
-  echo "refs/heads/main $(git -C "$repo" rev-parse HEAD) refs/heads/main $ZERO" \
-    | (cd "$repo" && "$HOOK" origin test-url) >/dev/null 2>&1
+  local lref="${1:-refs/heads/main}" lsha="${2:-$(g rev-parse HEAD)}"
+  local rref="${3:-refs/heads/main}" rsha="${4:-$ZERO}"
+  echo "$lref $lsha $rref $rsha" \
+    | (cd "$repo" && ${budget[@]+"${budget[@]}"} "$HOOK" origin test-url) >"$work/out" 2>&1
   echo $?
 }
 
+# Optional 4th argument: a regex the hook output must contain, so a block for
+# the wrong reason (an unrelated error) does not count as the right block.
 check() {
-  local name="$1" want="$2" got="$3"
-  if [[ "$got" == "$want" ]]; then
+  local name="$1" want="$2" got="$3" why="${4:-}"
+  if [[ -n "$why" && "$got" == "$want" ]] && ! command grep -qE -- "$why" "$work/out"; then
+    printf 'FAIL %s (exit %s, but output lacks /%s/)\n' "$name" "$got" "$why"; fail=$((fail + 1))
+  elif [[ "$got" == "$want" ]]; then
     printf 'ok   %s\n' "$name"; pass=$((pass + 1))
   else
     printf 'FAIL %s (want exit %s, got %s)\n' "$name" "$want" "$got"; fail=$((fail + 1))
@@ -78,26 +117,22 @@ setup_repo
 check "clean history passes" 0 "$(run_hook)"
 
 setup_repo
-echo 'deploy to secrethost' > "$repo/d.md"
-git -C "$repo" add d.md; git -C "$repo" commit -q -m "docs: d"
+echo 'deploy to secrethost' > "$repo/d.md"; commit "docs: d"
 check "file content: local pattern" 1 "$(run_hook)"
 
 setup_repo
-echo 'mail me at bob@private.example.test' > "$repo/c.md"
-git -C "$repo" add c.md; git -C "$repo" commit -q -m "docs: c"
+echo 'mail me at bob@private.example.test' > "$repo/c.md"; commit "docs: c"
 check "file content: local domain pattern" 1 "$(run_hook)"
 
 # The regression case. Metadata never appears in a diff, and the pipeline form
 # of this check reported clean on a real match.
 setup_repo
-echo x > "$repo/m.md"; git -C "$repo" add m.md
-git -C "$repo" -c user.name='Forbidden Name' -c user.email='x@example.test' \
-  commit -q -m "docs: m"
+echo x > "$repo/m.md"; g add m.md
+g -c user.name='Forbidden Name' -c user.email='x@example.test' commit -q -m "docs: m"
 check "commit metadata: author name (SIGPIPE regression)" 1 "$(run_hook)"
 
 setup_repo
-echo x > "$repo/s.md"; git -C "$repo" add s.md
-git -C "$repo" commit -q -m "docs: mentions secrethost in the subject"
+echo x > "$repo/s.md"; commit "docs: mentions secrethost in the subject"
 check "commit metadata: subject line" 1 "$(run_hook)"
 
 # The credential fixtures below are ASSEMBLED AT RUNTIME rather than written
@@ -107,31 +142,151 @@ check "commit metadata: subject line" 1 "$(run_hook)"
 # option and is worse: it would create a file where a real credential could sit
 # unnoticed. The printf output is identical; only the source text differs.
 setup_repo
-printf -- '-----BEGIN OPENSSH %s-----\n' 'PRIVATE KEY' > "$repo/k.txt"
-git -C "$repo" add k.txt; git -C "$repo" commit -q -m "chore: k"
+printf -- '-----BEGIN OPENSSH %s-----\n' 'PRIVATE KEY' > "$repo/k.txt"; commit "chore: k"
 check "generic pattern: private key header" 1 "$(run_hook)"
 
 setup_repo
-git -C "$repo" add -f .leakpatterns; git -C "$repo" commit -q -m "chore: p"
+write_patterns "$repo/.leakpatterns"; g add -f .leakpatterns; g commit -q -m "chore: p"
 check "tracked .leakpatterns is refused" 1 "$(run_hook)"
 
 setup_repo
 mkdir -p "$repo/.beads"; echo '{}' > "$repo/.beads/issues.jsonl"
-git -C "$repo" add -f .beads; git -C "$repo" commit -q -m "chore: b"
+g add -f .beads; g commit -q -m "chore: b"
 check "tracked .beads is refused" 1 "$(run_hook)"
 
-# A repo with no .leakpatterns must still work, on generic patterns alone.
+# A repo with no pattern file must still work, on generic patterns alone.
 setup_repo
-rm -f "$repo/.leakpatterns"
-echo 'deploy to secrethost' > "$repo/d.md"
-git -C "$repo" add d.md; git -C "$repo" commit -q -m "docs: d"
-check "no .leakpatterns: local pattern not enforced" 0 "$(run_hook)"
+rm -f "$repo/.git/info/leakpatterns"
+echo 'deploy to secrethost' > "$repo/d.md"; commit "docs: d"
+check "no pattern file: local pattern not enforced" 0 "$(run_hook)"
 
 setup_repo
-rm -f "$repo/.leakpatterns"
-printf 'AKIA%s\n' 'IOSFODNN7EXAMPLE' > "$repo/a.txt"
-git -C "$repo" add a.txt; git -C "$repo" commit -q -m "chore: a"
-check "no .leakpatterns: generic pattern still enforced" 1 "$(run_hook)"
+rm -f "$repo/.git/info/leakpatterns"
+printf 'AKIA%s\n' 'IOSFODNN7EXAMPLE' > "$repo/a.txt"; commit "chore: a"
+check "no pattern file: generic pattern still enforced" 1 "$(run_hook)"
+
+# --- 2026-10: ways the previous hook reported clean on a leak ---------------
+
+# Root commit: diff-tree without --root lists nothing for it.
+new_repo
+echo 'deploy to secrethost' > "$repo/r.md"; commit "chore: root"
+echo clean > "$repo/later.md"; commit "chore: later"
+check "root commit content" 1 "$(run_hook)" "LEAK  blob .* r\\.md"
+
+# Merge resolution: diff-tree without -m lists nothing for a merge.
+setup_repo
+g checkout -q -b side; echo side > "$repo/side.md"; commit "chore: side"
+g checkout -q -; echo main > "$repo/main.md"; commit "chore: main"
+g merge -q --no-ff --no-commit side >/dev/null 2>&1
+echo 'deploy to secrethost' > "$repo/resolved.md"; g add resolved.md
+g commit -q -m "chore: merge"
+check "content introduced in a merge resolution" 1 "$(run_hook)" "LEAK  blob .* resolved\\.md"
+
+# Filenames git display-quotes: the quoted form is not a valid object path,
+# the lookup failed, and the failure read as a clean file.
+for name in 'with space.md' $'new\nline.md' $'na\xc3\xafve.md' 'back\slash.md' 'dq"uote.md'; do
+  setup_repo
+  echo 'deploy to secrethost' > "$repo/$name"; commit "chore: odd name"
+  check "content under filename $(printf '%q' "$name")" 1 "$(run_hook)" "LEAK  blob"
+done
+
+# A NUL byte made grep -I call the blob binary and report no match.
+setup_repo
+printf 'deploy to secrethost\n\0\0binary tail\n' > "$repo/blob.bin"; commit "chore: bin"
+check "content in a blob with NUL bytes" 1 "$(run_hook)" "LEAK  blob .* blob\\.bin"
+
+# Any file with the scanner's basename was exempt from scanning.
+setup_repo
+mkdir -p "$repo/scripts"
+echo 'deploy to secrethost' > "$repo/scripts/pre-push-leak-audit.sh"; commit "chore: s"
+check "content in a file named like the scanner" 1 "$(run_hook)" "LEAK  blob .* scripts/pre-push"
+
+# A branch that tracks .leakpatterns plants patterns in the working tree. The
+# previous hook evaluated them before refusing the file, so a backreference
+# pattern hung it (the suite's 30 s budget reports 124). The working tree must
+# never be read, and the tracked file is refused.
+setup_repo
+printf '%s\n' '(a*)(a*)(a*)(a*)\4\3\2\1b' > "$repo/.leakpatterns"
+printf '%sb\n' "$(head -c 32 /dev/zero | tr '\0' a)" > "$repo/as.txt"
+g add -f .leakpatterns as.txt; g commit -q -m "chore: planted patterns"
+check "planted backreference pattern in the working tree" 1 "$(run_hook)" "LEAK  \\.leakpatterns is in outgoing"
+
+# The pattern file itself refuses backreferences rather than running them.
+setup_repo
+printf '%s\n' '(a*)\1b' >> "$repo/.git/info/leakpatterns"
+check "backreference in the pattern file is refused" 1 "$(run_hook)" "ERROR pattern above uses a backreference"
+
+# The old in-tree location is not read and not silently ignored either.
+setup_repo
+mv "$repo/.git/info/leakpatterns" "$repo/.leakpatterns"
+check "untracked in-tree .leakpatterns asks to be moved" 1 "$(run_hook)" "MOVE"
+
+# Restricted path added then deleted before the push: the index is clean, the
+# pushed history is not.
+setup_repo
+mkdir -p "$repo/.beads"; echo '{}' > "$repo/.beads/issues.jsonl"
+g add -f .beads; g commit -q -m "chore: b"
+g rm -q -r .beads; g commit -q -m "chore: unb"
+check "restricted .beads deleted before push" 1 "$(run_hook)" "LEAK  \\.beads is in outgoing"
+
+# Destination advertises a commit this clone never fetched: rev-list failed,
+# and an empty range read as nothing to audit.
+setup_repo
+echo 'deploy to secrethost' > "$repo/d.md"; commit "docs: d"
+check "destination sha unknown locally" 1 \
+  "$(run_hook refs/heads/main "" refs/heads/main 1111111111111111111111111111111111111111)" \
+  "LEAK  blob .* d\\.md"
+
+# An outgoing object that cannot be read must block, not read as clean.
+setup_repo
+echo 'deploy to secrethost' > "$repo/gone.md"; commit "docs: gone"
+blob=$(g rev-parse HEAD:gone.md)
+rm -f "$repo/.git/objects/${blob:0:2}/${blob:2}"
+check "missing object in outgoing history" 1 "$(run_hook)" "ERROR could not enumerate"
+
+# History pushed to a private remote, then to a public one as a new branch:
+# the previous hook excluded everything any remote had seen.
+setup_repo
+git init -q --bare "$work/dest-private.git"; git init -q --bare "$work/dest-public.git"
+g remote add private "$work/dest-private.git"; g remote add public "$work/dest-public.git"
+echo 'deploy to secrethost' > "$repo/d.md"; commit "docs: d"
+g push -q --no-verify private HEAD:refs/heads/main 2>/dev/null
+g fetch -q private
+check "new branch whose history is only on a private remote" 1 \
+  "$(run_hook refs/heads/main "" refs/heads/feature)" "LEAK  blob .* d\\.md"
+
+# Annotated tags are objects of their own: tagger and message are published.
+setup_repo
+git init -q --bare "$work/dest.git"; g remote add origin "$work/dest.git"
+g push -q --no-verify origin HEAD:refs/heads/main 2>/dev/null; g fetch -q origin
+g tag -a v1 -m "release for secrethost"
+check "annotated tag message" 1 "$(run_hook refs/tags/v1 "$(g rev-parse v1)" refs/tags/v1)" "LEAK  tag"
+
+setup_repo
+git init -q --bare "$work/dest.git"; g remote add origin "$work/dest.git"
+g push -q --no-verify origin HEAD:refs/heads/main 2>/dev/null; g fetch -q origin
+g -c user.name='Forbidden Name' tag -a v1 -m "release"
+check "annotated tag tagger" 1 "$(run_hook refs/tags/v1 "$(g rev-parse v1)" refs/tags/v1)" "LEAK  tag"
+
+# Filenames are published too, as tree entries.
+setup_repo
+echo clean > "$repo/secrethost-notes.md"; commit "docs: n"
+check "filename itself matches" 1 "$(run_hook)" "LEAK  tree"
+
+# --- end to end through git push --------------------------------------------
+
+setup_repo
+git init -q --bare "$work/dest.git"; g remote add origin "$work/dest.git"
+g push -q origin HEAD:refs/heads/main >/dev/null 2>&1
+check "real push: clean history passes" 0 "$?"
+echo 'deploy to secrethost' > "$repo/d.md"; commit "docs: d"
+g push -q origin HEAD:refs/heads/main >/dev/null 2>&1
+check "real push: leak blocked" 1 "$?"
+g push -q --no-verify origin HEAD:refs/heads/main >/dev/null 2>&1
+check "real push: --no-verify bypasses" 0 "$?"
+echo clean > "$repo/e.md"; commit "docs: e"
+g push -q origin HEAD:refs/heads/main >/dev/null 2>&1
+check "real push: clean push on top of published leak passes" 0 "$?"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]
