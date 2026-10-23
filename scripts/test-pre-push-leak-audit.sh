@@ -46,6 +46,11 @@ fi
 
 g() { git -C "$repo" "$@"; }
 commit() { g add -A; g commit -q -m "$1"; }
+# The two-remote cases mean nothing unless the other remote really holds HEAD;
+# a failed push or fetch would otherwise let them pass on an empty remote.
+private_holds_head() {
+  [[ "$(g rev-parse -q --verify refs/remotes/private/main)" == "$(g rev-parse HEAD)" ]]
+}
 
 write_patterns() {
   cat > "$1" <<'PAT'
@@ -274,6 +279,8 @@ g remote add private "$work/dest-private.git"; g remote add public "$work/dest-p
 echo 'deploy to secrethost' > "$repo/d.md"; commit "docs: d"
 g push -q --no-verify private HEAD:refs/heads/main 2>/dev/null
 g fetch -q private
+private_holds_head
+check "precondition: the private remote holds the leak" 0 "$?"
 check "new branch whose history is only on a private remote" 1 \
   "$(run_hook refs/heads/main "" refs/heads/feature)" "LEAK  blob .* d\\.md"
 
@@ -428,6 +435,8 @@ git init -q --bare "$work/dest-private.git"; g remote add private "$work/dest-pr
 g push -q origin HEAD:refs/heads/main >/dev/null 2>&1
 echo 'deploy to secrethost' > "$repo/d.md"; commit "docs: d"
 g push -q --no-verify private HEAD:refs/heads/main >/dev/null 2>&1; g fetch -q private
+private_holds_head
+check "precondition: real push, the private remote holds the leak" 0 "$?"
 g push -q origin HEAD:refs/heads/feature >"$work/out" 2>&1
 check "real push: history only on another remote is blocked" 1 "$?" "LEAK  blob .* d\\.md"
 
