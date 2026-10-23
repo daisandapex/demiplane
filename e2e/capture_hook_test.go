@@ -7,11 +7,18 @@ package e2e
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestCaptureHookScript_CLIMode exercises
@@ -128,6 +135,198 @@ func TestCaptureHookScript_HookMode(t *testing.T) {
 	}
 	if strings.TrimSpace(string(gatedOut)) != "" {
 		t.Fatalf("hook published without DEMIPLANE_CAPTURE=1: %s", gatedOut)
+	}
+}
+
+// Exercise the client-side boundary directly: server authorization cannot stop
+// an authorized hook from leaking a local file outside its capture directory.
+func TestCaptureHookScript_CaptureDir(t *testing.T) {
+	for _, bin := range []string{"bash", "curl", "jq", "python3"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("skip: %s not on PATH", bin)
+		}
+	}
+	realCurl, err := exec.LookPath("curl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const html = "<!doctype html><html>inside capture</html>\n"
+	const secret = "<!doctype html><html>outside secret</html>\n"
+	for _, tc := range []struct {
+		name, path, root, replace string
+		maxBytes, reason          string
+		publish, render           bool
+	}{
+		{name: "direct", path: "note.html", publish: true},
+		{name: "nested", path: "nested/note.html", publish: true},
+		{name: "trailing root slash", path: "note.html", root: "slash", publish: true},
+		{name: "filesystem root", path: "note.html", root: "filesystem", publish: true},
+		{name: "configured root symlink", path: "note.html", root: "alias", publish: true},
+		{name: "configured root parent", path: "note.html", root: "parent", publish: true},
+		{name: "relative root", path: "note.html", root: "relative"},
+		{name: "relative file", path: "note.html", root: "relative-file"},
+		{name: "parent traversal", path: "../secret.html", reason: "parent traversal"},
+		{name: "internal parent traversal", path: "nested/../note.html"},
+		{name: "sibling prefix", path: "../capture-other/note.html"},
+		{name: "leaf symlink", path: "link.html", reason: "capture dir rejected"},
+		{name: "directory symlink", path: "linked-dir/secret.html"},
+		{name: "internal symlink", path: "internal.html"},
+		{name: "missing", path: "missing.html"},
+		{name: "directory", path: "directory.html"},
+		{name: "fifo", path: "pipe.html", reason: "not a regular file"},
+		{name: "hardlink to outside file", path: "hardlink.html", reason: "hardlinked file"},
+		{name: "over size cap", path: "note.html", maxBytes: "8", reason: "exceeds the 8-byte cap"},
+		{name: "at size cap", path: "note.html", maxBytes: strconv.Itoa(len(html)), publish: true},
+		{name: "invalid size cap", path: "note.html", maxBytes: "lots", reason: "non-negative integer"},
+		{name: "fragment", path: "fragment.html"},
+		{name: "markdown disabled", path: "note.md"},
+		{name: "markdown enabled", path: "note.md", publish: true, render: true},
+		{name: "leaf replaced before curl", path: "note.html", replace: "file", publish: true},
+		{name: "directory replaced before curl", path: "nested/note.html", replace: "directory", publish: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			root := filepath.Join(dir, "capture")
+			for _, sub := range []string{"capture/nested", "capture/directory.html", "capture-other", "tmp"} {
+				if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for name, contents := range map[string]string{
+				"capture/note.html": html, "capture/nested/note.html": html,
+				"capture/note.md": "# markdown\n", "capture/fragment.html": "<p>fragment</p>",
+				"secret.html": secret, "note.html": secret, "capture-other/note.html": secret,
+			} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for name, target := range map[string]string{
+				"capture/link.html":  filepath.Join(dir, "secret.html"),
+				"capture/linked-dir": dir, "capture/internal.html": "note.html", "alias": root,
+			} {
+				if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.name == "hardlink to outside file" {
+				// A same-uid process can plant a second name for a file outside
+				// the capture directory; O_NOFOLLOW alone does not see it.
+				if err := os.Link(filepath.Join(dir, "secret.html"), filepath.Join(root, "hardlink.html")); err != nil {
+					t.Skipf("hardlink unavailable: %v", err)
+				}
+			}
+			if tc.name == "fifo" {
+				if err := exec.Command("mkfifo", filepath.Join(root, "pipe.html")).Run(); err != nil {
+					t.Skipf("mkfifo unavailable: %v", err)
+				}
+			}
+
+			type upload struct{ body, query string }
+			uploads := make(chan upload, 2)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+				}
+				uploads <- upload{string(body), r.URL.RawQuery}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"url":"http://synthetic.invalid/artifact"}`)
+			}))
+			defer srv.Close()
+
+			// Concatenate deliberately: filepath.Join would erase the attack's .. .
+			file := root + "/" + tc.path
+			if tc.name == "sibling prefix" {
+				file = filepath.Join(dir, "capture-other/note.html")
+			}
+			switch tc.root {
+			case "slash":
+				root += "/"
+			case "filesystem":
+				root = "/"
+			case "alias":
+				root = filepath.Join(dir, "alias")
+				file = root + "/" + tc.path
+			case "parent":
+				root += "/nested/.."
+				file = root + "/" + tc.path
+			case "relative":
+				root = "capture"
+			case "relative-file":
+				file = "capture/" + tc.path
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "bash", filepath.Join(repoRoot, "companion/capture-hook/demiplane-capture.sh"))
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "DEMIPLANE_URL="+srv.URL, "DEMIPLANE_TOKEN=",
+				"DEMIPLANE_CAPTURE=1", "DEMIPLANE_CAPTURE_DIR="+root,
+				"DEMIPLANE_SLUG=__derive__", "DEMIPLANE_PRIVATE=", "DEMIPLANE_RENDER=0",
+				"TMPDIR="+filepath.Join(dir, "tmp"))
+			if tc.render {
+				cmd.Env = append(cmd.Env, "DEMIPLANE_RENDER=1")
+			}
+			cmd.Env = append(cmd.Env, "DEMIPLANE_CAPTURE_MAX_BYTES="+tc.maxBytes)
+			if tc.replace != "" {
+				// Swap the original path at the last boundary before curl opens its
+				// input. The published bytes must still be the inspected snapshot.
+				bin := filepath.Join(dir, "bin")
+				if err := os.Mkdir(bin, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				wrapper := "#!/usr/bin/env bash\nset -e\n"
+				if tc.replace == "file" {
+					wrapper += "rm -- \"$CAPTURE_TEST_FILE\"\nln -s -- \"$CAPTURE_TEST_DIR/secret.html\" \"$CAPTURE_TEST_FILE\"\n"
+				} else {
+					wrapper += "mv -- \"$CAPTURE_TEST_DIR/capture/nested\" \"$CAPTURE_TEST_DIR/saved\"\nln -s -- \"$CAPTURE_TEST_DIR\" \"$CAPTURE_TEST_DIR/capture/nested\"\n"
+				}
+				wrapper += "exec \"$CAPTURE_TEST_CURL\" \"$@\"\n"
+				if err := os.WriteFile(filepath.Join(bin, "curl"), []byte(wrapper), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				cmd.Env = append(cmd.Env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+					"CAPTURE_TEST_DIR="+dir, "CAPTURE_TEST_FILE="+file, "CAPTURE_TEST_CURL="+realCurl)
+			}
+			input, err := json.Marshal(map[string]any{"tool_input": map[string]string{"file_path": file}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd.Stdin = bytes.NewReader(input)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("hook failed: %v\n%s", err, out)
+			}
+			select {
+			case got := <-uploads:
+				if !tc.publish {
+					t.Fatalf("restricted hook uploaded %q", got.body)
+				}
+				want, query := html, "slug=note"
+				if tc.render {
+					want, query = "# markdown\n", "slug=note&render=md"
+				}
+				if got.body != want || got.query != query {
+					t.Fatalf("upload = %#v, want body %q query %q", got, want, query)
+				}
+				if !strings.Contains(string(out), "additionalContext") {
+					t.Fatalf("missing hook output: %s", out)
+				}
+			default:
+				if tc.publish {
+					t.Fatalf("expected capture, got no upload: %s", out)
+				}
+			}
+			// A rejected capture must say why on stderr, not skip silently.
+			if tc.reason != "" && (!strings.Contains(string(out), tc.reason) ||
+				!strings.Contains(string(out), "demiplane-capture: skipped "+file)) {
+				t.Fatalf("missing rejection log %q: %s", tc.reason, out)
+			}
+			matches, err := filepath.Glob(filepath.Join(dir, "tmp", "*"))
+			if err != nil || len(matches) != 0 {
+				t.Fatalf("snapshot cleanup: %v, %v", matches, err)
+			}
+		})
 	}
 }
 

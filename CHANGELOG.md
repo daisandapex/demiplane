@@ -6,6 +6,21 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- The capture hook enforces `DEMIPLANE_CAPTURE_DIR` with directory-relative
+  opens and a private upload snapshot. Before, the check was a path prefix
+  match, so `..` components, symlinks and hardlinks inside the capture
+  directory could upload files from anywhere the user can read. Restricted
+  captures now reject parent traversal, symlinks (even ones pointing inside the
+  directory), hardlinked files, and path replacement between inspection and
+  upload. Each rejection is logged to stderr with its reason; the hook still
+  exits 0.
+- New `DEMIPLANE_CAPTURE_MAX_BYTES` caps the snapshot a restricted capture
+  takes, defaulting to the server's 100 MiB `--max-upload` default.
+- Setting `DEMIPLANE_CAPTURE_DIR` now requires `python3` on the machine running
+  the hook. Without it, restricted captures are skipped and logged.
+
 ## [3.1.0] - 2026-10-20
 
 Manage what you have published: list it, delete it in bulk, and set expiry
