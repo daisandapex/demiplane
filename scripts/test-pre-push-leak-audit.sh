@@ -120,8 +120,17 @@ setup_repo
 echo 'deploy to secrethost' > "$repo/d.md"; commit "docs: d"
 check "file content: local pattern" 1 "$(run_hook)"
 
+# awk, not sed -i: BSD sed takes -i's next word as a backup suffix and does not
+# expand \r, so the fixture would silently stay LF there.
 setup_repo
-sed -i 's/$/\r/' "$repo/.git/info/leakpatterns"
+awk '{ printf "%s\r\n", $0 }' "$repo/.git/info/leakpatterns" > "$work/crlf" \
+  && mv "$work/crlf" "$repo/.git/info/leakpatterns"
+n_lines=$(wc -l < "$repo/.git/info/leakpatterns")
+if [[ $n_lines -gt 0 && $(command grep -c $'\r$' "$repo/.git/info/leakpatterns") -eq $n_lines ]]; then
+  check "CRLF fixture has a CR on every line" 0 0
+else
+  check "CRLF fixture has a CR on every line" 0 1
+fi
 echo 'deploy to secrethost' > "$repo/d.md"; commit "docs: d"
 check "CRLF pattern file still matches" 1 "$(run_hook)" 'LEAK .*d\.md'
 
@@ -286,6 +295,111 @@ setup_repo
 echo clean > "$repo/secrethost-notes.md"; commit "docs: n"
 check "filename itself matches" 1 "$(run_hook)" "LEAK  tree"
 
+# --- a failed intermediate step must block, not read as clean ---------------
+
+# Fault injection by PATH shim: fault <tool> <body> writes a <tool> that runs
+# <body> with the real binary in $REAL. Each case breaks one step and leaves a
+# leak the hook would otherwise catch, so a pass here is a silent false pass.
+fault_bin="$work/fault-bin"
+fault() {
+  local real; real=$(command -v "$1") || return 1
+  rm -rf "$fault_bin"; mkdir -p "$fault_bin"
+  { printf '#!/usr/bin/env bash\nREAL=%q\n' "$real"; printf '%s\n' "$2"; } > "$fault_bin/$1"
+  chmod +x "$fault_bin/$1"
+}
+
+# The revision list exists but cannot be written: rev-list then reads an empty
+# list, enumerates nothing, and the push looked clean. (Root ignores modes.)
+if [[ $(id -u) -ne 0 ]]; then
+  setup_repo
+  echo 'deploy to secrethost' > "$repo/d.md"; commit "docs: d"
+  # shellcheck disable=SC2016  # expands in the shim, not here
+  fault mktemp 'd=$("$REAL" "$@") || exit
+case $d in */leak-audit.*) : > "$d/revs"; chmod a-w "$d/revs" ;; esac
+printf "%s\n" "$d"'
+  check "revision list write fails" 1 "$(PATH="$fault_bin:$PATH" run_hook)" 'ERROR cannot write .*revs'
+else
+  printf 'skip revision list write fails: running as root\n'
+fi
+
+# The restricted-path filter ran in a process substitution, whose status
+# nothing read: a failed stage dropped every path and .beads went out.
+setup_repo
+mkdir -p "$repo/.beads"; echo '{}' > "$repo/.beads/issues.jsonl"
+g add -f .beads; g commit -q -m "chore: b"
+# shellcheck disable=SC2016  # expands in the shim, not here
+fault tr 'if [[ "${1:-}" == "\\0" ]]; then exit 1; fi
+exec "$REAL" "$@"'
+check "restricted-path filter fails" 1 "$(PATH="$fault_bin:$PATH" run_hook)" 'ERROR could not filter'
+
+# An empty commit count read as zero and skipped every per-commit stage, so
+# a restricted file deleted again before the push went out unseen.
+setup_repo
+mkdir -p "$repo/.beads"; echo '{}' > "$repo/.beads/issues.jsonl"
+g add -f .beads; g commit -q -m "chore: b"
+g rm -q -r .beads; g commit -q -m "chore: unb"
+fault wc 'exit 1'
+check "commit count fails" 1 "$(PATH="$fault_bin:$PATH" run_hook)" 'ERROR could not count'
+
+# --- gitleaks ---------------------------------------------------------------
+
+# An AWS temporary-credential key id (ASIA...) is outside the generic set, so
+# only gitleaks can block it. Assembled at runtime like the fixtures above, and
+# not of the EXAMPLE form gitleaks allowlists.
+gl_key() { printf 'aws_key = "ASIA%s"\n' 'QZ3KF7MXR2B4N6TW'; }
+gl_secret="ASIA""QZ3KF7MXR2B4N6TW"
+
+# A PATH with every command on the current one except gitleaks.
+nogl="$work/nogl-bin"; mkdir -p "$nogl"
+IFS=: read -ra path_dirs <<< "$PATH"
+for d in "${path_dirs[@]}"; do
+  for f in "$d"/*; do
+    b=${f##*/}
+    [[ "$b" == gitleaks || -e "$nogl/$b" || ! -x "$f" ]] && continue
+    ln -s "$f" "$nogl/$b" 2>/dev/null
+  done
+done
+
+setup_repo
+gl_key > "$repo/cfg.txt"; commit "chore: cfg"
+check "gitleaks missing: says so and carries on" 0 "$(PATH="$nogl" run_hook)" 'gitleaks not installed'
+
+if command -v gitleaks >/dev/null 2>&1; then
+  setup_repo
+  gl_key > "$repo/cfg.txt"; commit "chore: cfg"
+  check "gitleaks: AWS key outside the generic set blocks" 1 "$(run_hook)" \
+    'LEAK  gitleaks aws-access-token [0-9a-f]{12}  cfg\.txt:1'
+  if command grep -qF "$gl_secret" "$work/out"; then
+    check "gitleaks: finding is redacted" 0 1
+  else
+    check "gitleaks: finding is redacted" 0 0
+  fi
+
+  setup_repo
+  mkdir -p "$repo/fixtures"; gl_key > "$repo/fixtures/cfg.txt"
+  printf '[extend]\nuseDefault = true\n\n[[allowlists]]\npaths = [%s]\n' "'''^fixtures/'''" \
+    > "$repo/.gitleaks.toml"
+  commit "test: allowlisted fixture"
+  check "gitleaks: fixture allowlisted in .gitleaks.toml passes" 0 "$(run_hook)" \
+    'outgoing commits change \.gitleaks\.toml'
+
+  # git log shows no patch for a merge without -m.
+  setup_repo
+  g checkout -q -b side; echo side > "$repo/side.md"; commit "chore: side"
+  g checkout -q -; echo main > "$repo/main.md"; commit "chore: main"
+  g merge -q --no-ff --no-commit side >/dev/null 2>&1
+  gl_key > "$repo/resolved.txt"; g add resolved.txt; g commit -q -m "chore: merge"
+  check "gitleaks: key added in a merge resolution blocks" 1 "$(run_hook)" \
+    'LEAK  gitleaks aws-access-token .* resolved\.txt'
+
+  # A config gitleaks cannot load must block, not read as "no leaks".
+  setup_repo
+  echo 'not [ toml' > "$repo/.gitleaks.toml"; commit "chore: broken config"
+  check "gitleaks: error fails closed" 1 "$(run_hook)" 'ERROR gitleaks reported an error'
+else
+  printf 'skip gitleaks cases: gitleaks not installed\n'
+fi
+
 # --- end to end through git push --------------------------------------------
 
 setup_repo
@@ -305,6 +419,17 @@ check "real push: new branch over history the destination holds passes" 0 "$?"
 echo 'deploy to secrethost again' > "$repo/f.md"; commit "docs: f"
 g push -q origin HEAD:refs/heads/topic2 >/dev/null 2>&1
 check "real push: new leak on a new branch blocked" 1 "$?"
+
+# Destination isolation through git push itself: another remote already holds
+# the leak, this destination does not, so the push must still be blocked.
+setup_repo
+git init -q --bare "$work/dest.git"; g remote add origin "$work/dest.git"
+git init -q --bare "$work/dest-private.git"; g remote add private "$work/dest-private.git"
+g push -q origin HEAD:refs/heads/main >/dev/null 2>&1
+echo 'deploy to secrethost' > "$repo/d.md"; commit "docs: d"
+g push -q --no-verify private HEAD:refs/heads/main >/dev/null 2>&1; g fetch -q private
+g push -q origin HEAD:refs/heads/feature >"$work/out" 2>&1
+check "real push: history only on another remote is blocked" 1 "$?" "LEAK  blob .* d\\.md"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ "$fail" -eq 0 ]]

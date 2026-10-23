@@ -20,6 +20,13 @@ All notable changes to demiplane are documented here. The format follows
   takes, defaulting to the server's 100 MiB `--max-upload` default.
 - Setting `DEMIPLANE_CAPTURE_DIR` now requires `python3` on the machine running
   the hook. Without it, restricted captures are skipped and logged.
+- The capture hook drops the export attribute from its token holder, so a
+  caller that already exported a variable named `token` no longer passes the
+  bearer token to curl's environment.
+- The pre-push leak audit (`scripts/pre-push-leak-audit.sh`) blocks the push
+  when a scratch-file write, the commit count or the restricted-path filter
+  fails. Before, each could leave it auditing nothing and reporting clean. It
+  also runs gitleaks over the outgoing commits when gitleaks is installed.
 
 ## [3.1.0] - 2026-10-20
 

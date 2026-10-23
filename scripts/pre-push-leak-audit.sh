@@ -34,6 +34,16 @@
 #      with exponential matching cost) and the scan runs under a time budget,
 #      LEAK_AUDIT_TIMEOUT seconds (default 300), when timeout(1) exists.
 #
+#      The budget is per stage, not per push: the whole outgoing object stream
+#      gets one, and after a hit each per-object rescan and gitleaks get their
+#      own. A first push to an empty or unreachable destination audits the
+#      whole reachable history, so a large repo may need a higher value there.
+#      Running out of budget blocks the push.
+#
+#   3. gitleaks, when it is installed, over the same outgoing commits. It
+#      honours the repo's .gitleaks.toml and .gitleaksignore (or
+#      GITLEAKS_CONFIG). Without it the hook prints a note and carries on.
+#
 # What is audited: every object reachable from the pushed refs that the
 # destination does not already have, judged from the remote SHAs git passes
 # on stdin and from the destination's own refs (git ls-remote on this push's
@@ -159,7 +169,7 @@ scan() {
 # git feeds pre-push one line per ref: <local ref> <local sha> <remote ref>
 # <remote sha>. remote_ref is unused but named rather than dropped, so the
 # protocol stays legible at the read.
-: > "$work/revs"
+: > "$work/revs" || abort "cannot write $work/revs"
 refs=()
 sha_re='^[0-9a-f]{40}([0-9a-f]{24})?$'
 # shellcheck disable=SC2034
@@ -169,7 +179,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     || abort "unexpected pre-push input for ${local_ref}"
 
   if [[ ! "$local_sha" =~ ^0+$ ]]; then          # not a deletion
-    echo "$local_sha" >> "$work/revs"
+    echo "$local_sha" >> "$work/revs" || abort "cannot write $work/revs"
     refs+=("$local_ref")
   fi
 
@@ -177,7 +187,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   # not here locally it cannot be excluded, and the wider set is audited.
   if [[ ! "$remote_sha" =~ ^0+$ ]]; then
     if git cat-file -e "$remote_sha" 2>/dev/null; then
-      echo "^$remote_sha" >> "$work/revs"
+      echo "^$remote_sha" >> "$work/revs" || abort "cannot write $work/revs"
     else
       note "destination has ${remote_sha:0:12}, unknown here; auditing without excluding it"
     fi
@@ -198,7 +208,9 @@ if [[ -n "$dest_url" ]]; then
   if git ls-remote --refs "$dest_url" > "$work/dest-refs" 2>/dev/null; then
     while read -r dsha _; do
       [[ "$dsha" =~ $sha_re ]] || continue
-      git cat-file -e "${dsha}^{commit}" 2>/dev/null && echo "^$dsha" >> "$work/revs"
+      if git cat-file -e "${dsha}^{commit}" 2>/dev/null; then
+        echo "^$dsha" >> "$work/revs" || abort "cannot write $work/revs"
+      fi
     done < "$work/dest-refs"
   else
     note "could not list the destination's refs; auditing without excluding them"
@@ -215,8 +227,11 @@ fi
 git rev-list --stdin < "$work/revs" > "$work/commits" \
   || abort "could not enumerate outgoing commits"
 
-n_obj=$(wc -l < "$work/objects" | tr -d ' ')
-n_commit=$(wc -l < "$work/commits" | tr -d ' ')
+# An empty count would read as zero and skip every per-commit stage below.
+n_obj=$(wc -l < "$work/objects" | tr -d ' ') || abort "could not count outgoing objects"
+n_commit=$(wc -l < "$work/commits" | tr -d ' ') || abort "could not count outgoing commits"
+[[ "$n_obj" =~ ^[0-9]+$ && "$n_commit" =~ ^[0-9]+$ ]] \
+  || abort "could not count outgoing objects and commits"
 note "auditing ${n_commit} commit(s), ${n_obj} object(s) for ${refs[*]}"
 
 # --- content: every object, raw bytes ---------------------------------------
@@ -277,7 +292,7 @@ fi
 # deleted again before the push is still in the history the push carries.
 # -m --root: merges against every parent, root commits against the empty tree.
 # -z: names arrive verbatim, whatever bytes they contain.
-: > "$work/paths"
+: > "$work/paths" || abort "cannot write $work/paths"
 if [[ $n_commit -gt 0 ]]; then
   git diff-tree --stdin --no-commit-id -r -m --root -z --name-only \
     --diff-filter=ACMRT < "$work/commits" > "$work/paths" \
@@ -289,14 +304,95 @@ while read -r rev; do
   git rev-parse -q --verify "$rev^{commit}" >/dev/null 2>&1 || continue
   git ls-tree -z --name-only "$rev" -- .beads .leakpatterns >> "$work/paths" \
     || abort "could not list the tree of $rev"
-done < "$work/revs"
+done < "$work/revs" || abort "cannot read $work/revs"
+# Through files, not a process substitution, so every stage's status is read:
+# a stage that died would otherwise look like a history with nothing restricted.
+tr '\0' '\n' < "$work/paths" > "$work/paths.nl" \
+  || abort "could not filter restricted paths (cannot convert the path list)"
+command grep -E "$RESTRICTED_RE" "$work/paths.nl" | cut -d/ -f1 | sort -u > "$work/restricted"
+st=("${PIPESTATUS[@]}")
+[[ ${st[0]} -le 1 && ${st[1]} -eq 0 && ${st[2]} -eq 0 ]] \
+  || abort "could not filter restricted paths (grep ${st[0]}, cut ${st[1]}, sort ${st[2]})"
 while read -r p; do
   case "$p" in
     .beads)        note "LEAK  .beads is in outgoing history — it is local state and must stay untracked" ;;
     .leakpatterns) note "LEAK  .leakpatterns is in outgoing history — it names what you are hiding" ;;
   esac
   fail=1
-done < <(tr '\0' '\n' < "$work/paths" | command grep -E "$RESTRICTED_RE" | cut -d/ -f1 | sort -u)
+done < "$work/restricted" || abort "cannot read $work/restricted"
+
+# --- gitleaks, when installed -----------------------------------------------
+
+# A far wider rule set than the generic shapes above, over the same outgoing
+# commits. Findings name rule, commit, file and line only: --redact plus a
+# report template that never reads the secret keep the value off the terminal.
+#
+# -m: without it git log prints no patch for a merge, and a secret added in a
+# merge resolution went unseen. The working-tree .gitleaks.toml is honoured
+# (that is how fixtures are allowlisted), so an outgoing change to it is named.
+#
+# Fail closed. gitleaks logs a git error at ERR and still exits 0 with "no
+# leaks found", so an ERR or FTL line, a missing "commits scanned" line, or
+# any exit other than 0 and the leak code blocks the push.
+GL_LEAK=99
+gl_show() { while IFS= read -r l; do note "      ${l//[[:cntrl:]]/?}"; done; }
+if [[ $n_commit -gt 0 ]]; then
+  if command -v gitleaks >/dev/null 2>&1; then
+    printf '{{ range . }}{{ .RuleID }}\t{{ .Commit }}\t{{ .File }}\t{{ .StartLine }}\n{{ end }}' \
+      > "$work/gl.tmpl" || abort "cannot write $work/gl.tmpl"
+    gl_src=${repo_root:-.}
+    # gitleaks splits --log-opts on single spaces, so a stray separator would
+    # become an empty revision argument.
+    # A read loop rather than mapfile, which bash 3.2 (macOS) lacks.
+    gl_revs=()
+    while IFS= read -r r; do gl_revs+=("$r"); done < "$work/revs" \
+      || abort "cannot read $work/revs"
+    gl_cmd=(gitleaks git --no-banner --no-color --redact --exit-code "$GL_LEAK"
+            --gitleaks-ignore-path "$gl_src"
+            --log-opts "-m ${gl_revs[*]}"
+            --report-format template --report-template "$work/gl.tmpl"
+            --report-path "$work/gl.report" "$gl_src")
+    [[ -n "$budget" ]] && gl_cmd=("$budget" "${LEAK_AUDIT_TIMEOUT:-300}" "${gl_cmd[@]}")
+    # Its WASM regex engine reserves a large address space and panics under a
+    # capped RLIMIT_AS, so the soft limit is raised as far as the hard one goes.
+    ( ulimit -S -v unlimited 2>/dev/null; "${gl_cmd[@]}" ) > "$work/gl.raw" 2>&1
+    gl_rc=$?
+    # A config error is logged before --no-color applies; strip the escapes.
+    sed -E $'s/\033\\[[0-9;]*m//g' "$work/gl.raw" > "$work/gl.log" \
+      || abort "cannot read the gitleaks log"
+    if [[ $gl_rc -eq 124 ]]; then
+      abort "gitleaks exceeded LEAK_AUDIT_TIMEOUT (${LEAK_AUDIT_TIMEOUT:-300}s)"
+    elif command grep -qE '^[^ ]* (ERR|FTL) ' "$work/gl.log"; then
+      command grep -m5 -E '^[^ ]* (ERR|FTL) ' "$work/gl.log" | gl_show
+      abort "gitleaks reported an error (exit $gl_rc), so its scan is unverified"
+    elif [[ $gl_rc -ne 0 && $gl_rc -ne $GL_LEAK ]]; then
+      tail -n 5 "$work/gl.log" | gl_show
+      abort "gitleaks failed (exit $gl_rc)"
+    elif ! command grep -q ' commits scanned' "$work/gl.log"; then
+      tail -n 5 "$work/gl.log" | gl_show
+      abort "gitleaks did not report scanning any commits"
+    elif [[ $gl_rc -eq $GL_LEAK ]]; then
+      n_gl=0
+      while IFS=$'\t' read -r rule commit file line; do
+        [[ -n "$rule" ]] || continue
+        note "LEAK  gitleaks ${rule} ${commit:0:12}  ${file//[[:cntrl:]]/?}:${line}"
+        n_gl=$((n_gl + 1))
+      done < <(sort -u "$work/gl.report" 2>/dev/null)
+      [[ $n_gl -gt 0 ]] || note "LEAK  gitleaks reported leaks but listed none; rerun it by hand"
+      note "FIX   take the value out of the outgoing commits (amend or rebase the"
+      note "      unpushed range) and rotate it if it was ever live. A false positive"
+      note "      goes in .gitleaks.toml as an allowlist, or in .gitleaksignore as"
+      note "      <commit>:<file>:<rule>:<line>."
+      fail=1
+    fi
+    if command grep -qE '^\.gitleaks(\.toml|ignore)$' "$work/paths.nl"; then
+      note "NOTE  outgoing commits change .gitleaks.toml or .gitleaksignore; the scan"
+      note "      used the working-tree copy, so review that change with this push"
+    fi
+  else
+    note "NOTE  gitleaks not installed; its rule set was skipped (the patterns above still ran)"
+  fi
+fi
 
 [[ "$fail" -ne 0 ]] && blocked
 

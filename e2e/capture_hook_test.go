@@ -142,7 +142,9 @@ func TestCaptureHookScript_HookMode(t *testing.T) {
 // without appearing in curl's argv (readable by every local account through ps)
 // or in curl's environment. A curl shim records both, plus ps's view of its own
 // process, then execs the real curl; the publish succeeding against a
-// token-protected server proves the header still arrives.
+// token-protected server proves the header still arrives. The caller exports a
+// variable named token, as the script's own holder is named: assigning to an
+// inherited export keeps it exported, which would hand the bearer to curl.
 func TestCaptureHookScript_TokenNotInArgv(t *testing.T) {
 	for _, bin := range []string{"bash", "curl", "jq"} {
 		if _, err := exec.LookPath(bin); err != nil {
@@ -185,6 +187,7 @@ func TestCaptureHookScript_TokenNotInArgv(t *testing.T) {
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"CAPTURE_TEST_ARGV="+argvDump, "CAPTURE_TEST_ENV="+envDump,
 		"CAPTURE_TEST_PS="+psDump, "CAPTURE_TEST_CURL="+realCurl,
+		"token=inherited-export",
 	)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -262,7 +265,13 @@ func TestCaptureHookScript_CaptureDir(t *testing.T) {
 		{name: "directory replaced before curl", path: "nested/note.html", replace: "directory", publish: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
+			// The hook opens every component below the configured root without
+			// following links, so the "filesystem root" case needs a temp path
+			// with no symlinked ancestor (macOS /var, a linked TMPDIR).
+			dir, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
 			root := filepath.Join(dir, "capture")
 			for _, sub := range []string{"capture/nested", "capture/directory.html", "capture-other", "tmp"} {
 				if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {

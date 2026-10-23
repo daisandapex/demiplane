@@ -40,8 +40,11 @@
 set -uo pipefail
 
 # The token reaches curl as a header line on stdin. Never in argv, which any
-# local account can read with ps, and never in a child's environment.
+# local account can read with ps, and never in a child's environment. A caller
+# that exports its own `token` would keep it exported through the assignment,
+# so the export attribute is dropped as well (export -n is bash 3.2 safe).
 token=${DEMIPLANE_TOKEN:-}
+export -n token
 unset DEMIPLANE_TOKEN
 
 log() { printf 'demiplane-capture: %s\n' "$*" >&2; }
