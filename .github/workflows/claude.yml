@@ -3,6 +3,10 @@
 # Who can start it: only the repository owner, org members and invited
 # collaborators. The job-level `if` checks author_association before any step
 # runs, so the token secret is never handed to a run started by anyone else.
+# Every trigger is one where the event's author is the actor who caused it
+# (new comments, reviews and issues; no `assigned`, whose author is not the
+# assigner). Reviews count only on pull requests from this repository: fork
+# review events get no secrets, so they could only fail.
 # The action also requires write access, and it rejects bot actors because
 # allowed_bots is left empty, so other review bots (Codex, CodeRabbit) can talk
 # on a PR without starting a Claude run, and nothing can trigger itself in a loop.
@@ -20,12 +24,15 @@ on:
   pull_request_review:
     types: [submitted]
   issues:
-    types: [opened, assigned]
+    types: [opened]
 
+# The workflow token only reads. The action writes with its own GitHub App
+# token, which it obtains through OIDC (id-token: write).
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
+  contents: read
+  pull-requests: read
+  issues: read
+  id-token: write
 
 concurrency:
   group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
@@ -38,9 +45,11 @@ jobs:
         && contains(github.event.comment.body, '@claude')
         && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
       || (github.event_name == 'pull_request_review_comment'
+        && github.event.pull_request.head.repo.full_name == github.repository
         && contains(github.event.comment.body, '@claude')
         && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
       || (github.event_name == 'pull_request_review'
+        && github.event.pull_request.head.repo.full_name == github.repository
         && contains(github.event.review.body, '@claude')
         && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association))
       || (github.event_name == 'issues'
