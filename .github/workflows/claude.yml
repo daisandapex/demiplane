@@ -20,6 +20,10 @@
 # the PR's head lives, so the first step asks the API and stops the job
 # before checkout or the action when it is a fork: Claude never reads files
 # or text an outsider controls while holding the secret and a write token.
+# For the same reason a comment on an issue runs only when the issue itself
+# was written by the owner, a member or a collaborator; read outside bug
+# reports yourself (or in a claude.ai/code session) instead. Comments by
+# outsiders in a trusted thread still reach Claude as context.
 #
 # Pins: actions by full commit SHA. claude-code-action v1.0.260 is the first
 # release that checks out the PR commit the comment was made on and skips the
@@ -54,6 +58,8 @@ jobs:
       ${{ !endsWith(github.actor, '[bot]') && !endsWith(github.triggering_actor, '[bot]') && (
       (github.event_name == 'issue_comment'
         && github.event.comment.user.type == 'User'
+        && (github.event.issue.pull_request
+          || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
         && contains(github.event.comment.body, '@claude')
         && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
       || (github.event_name == 'pull_request_review_comment'
