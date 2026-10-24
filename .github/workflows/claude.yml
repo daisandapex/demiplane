@@ -7,9 +7,16 @@
 # (new comments, reviews and issues; no `assigned`, whose author is not the
 # assigner). Reviews count only on pull requests from this repository: fork
 # review events get no secrets, so they could only fail.
-# The action also requires write access, and it rejects bot actors because
-# allowed_bots is left empty, so other review bots (Codex, CodeRabbit) can talk
-# on a PR without starting a Claude run, and nothing can trigger itself in a loop.
+# Humans only: the job also requires the event's author to be a User account
+# and the actor not to be a `[bot]`. The pinned action lets any `[bot]` actor
+# through whatever allowed_bots says, so the gate has to be here. Other review
+# bots (Codex, CodeRabbit) can therefore talk on a PR without starting a Claude
+# run, and nothing can trigger itself in a loop. The action also requires write
+# access.
+#
+# On a pull request from a fork, a member's comment runs Claude on code an
+# outsider wrote, with the secret present: read a fork PR before asking
+# @claude to work on it.
 #
 # Pins: actions by full commit SHA. claude-code-action v1.0.260 is the first
 # release that checks out the PR commit the comment was made on and skips the
@@ -41,20 +48,25 @@ concurrency:
 jobs:
   claude:
     if: >-
+      ${{ !endsWith(github.actor, '[bot]') && (
       (github.event_name == 'issue_comment'
+        && github.event.comment.user.type == 'User'
         && contains(github.event.comment.body, '@claude')
         && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
       || (github.event_name == 'pull_request_review_comment'
+        && github.event.comment.user.type == 'User'
         && github.event.pull_request.head.repo.full_name == github.repository
         && contains(github.event.comment.body, '@claude')
         && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
       || (github.event_name == 'pull_request_review'
+        && github.event.review.user.type == 'User'
         && github.event.pull_request.head.repo.full_name == github.repository
         && contains(github.event.review.body, '@claude')
         && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association))
       || (github.event_name == 'issues'
+        && github.event.issue.user.type == 'User'
         && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))
-        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
