@@ -7,16 +7,19 @@
 # (new comments, reviews and issues; no `assigned`, whose author is not the
 # assigner). Reviews count only on pull requests from this repository: fork
 # review events get no secrets, so they could only fail.
-# Humans only: the job also requires the event's author to be a User account
-# and the actor not to be a `[bot]`. The pinned action lets any `[bot]` actor
+# Humans only: the job also requires the event's author to be a User account,
+# and neither the actor nor the triggering actor to be a `[bot]` (a re-run
+# keeps the original actor, so an App with Actions write could otherwise
+# re-run an old job). The pinned action lets any `[bot]` actor
 # through whatever allowed_bots says, so the gate has to be here. Other review
 # bots (Codex, CodeRabbit) can therefore talk on a PR without starting a Claude
 # run, and nothing can trigger itself in a loop. The action also requires write
 # access.
 #
-# On a pull request from a fork, a member's comment runs Claude on code an
-# outsider wrote, with the secret present: read a fork PR before asking
-# @claude to work on it.
+# Pull requests from forks are refused. A comment event does not say where
+# the PR's head lives, so the first step asks the API and stops the job
+# before checkout or the action when it is a fork: Claude never reads files
+# or text an outsider controls while holding the secret and a write token.
 #
 # Pins: actions by full commit SHA. claude-code-action v1.0.260 is the first
 # release that checks out the PR commit the comment was made on and skips the
@@ -48,7 +51,7 @@ concurrency:
 jobs:
   claude:
     if: >-
-      ${{ !endsWith(github.actor, '[bot]') && (
+      ${{ !endsWith(github.actor, '[bot]') && !endsWith(github.triggering_actor, '[bot]') && (
       (github.event_name == 'issue_comment'
         && github.event.comment.user.type == 'User'
         && contains(github.event.comment.body, '@claude')
@@ -70,12 +73,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Refuse pull requests from forks
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.pull_request && github.event.issue.number || '' }}
+        run: |
+          if [ -z "$PR" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          head=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.repo.full_name // ""')
+          if [ "$head" = "$REPO" ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::@claude does not run on pull requests from forks"
+          fi
+
+      - if: steps.gate.outputs.ok == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           persist-credentials: false
 
-      - uses: anthropics/claude-code-action@8d70a0dd265122bd65b8e09d3d959e65373ae2a1 # v1.0.260
+      - if: steps.gate.outputs.ok == 'true'
+        uses: anthropics/claude-code-action@8d70a0dd265122bd65b8e09d3d959e65373ae2a1 # v1.0.260
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           use_commit_signing: true
