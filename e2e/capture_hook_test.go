@@ -418,10 +418,10 @@ func TestCaptureHookScript_CaptureDir(t *testing.T) {
 
 // TestCaptureHookScript_LogControlBytes: every stderr line the hook writes is
 // one demiplane-capture: line per message, with each control character
-// (C0, DEL, and the UTF-8 encoded C1 range) shown as '?', whatever the locale.
-// File names and the server's reply URL both reach those lines. Other
-// non-ASCII text, including bytes in 80-9f that are part of a longer UTF-8
-// sequence, is kept as it is.
+// (C0, DEL, and the UTF-8 encoded C1 range) shown as '?', under both C and
+// C.UTF-8. File names and the server's reply URL both reach those lines.
+// Other non-ASCII text, including bytes in 80-9f that are part of a longer
+// UTF-8 sequence, is kept as it is.
 func TestCaptureHookScript_LogControlBytes(t *testing.T) {
 	for _, bin := range []string{"bash", "curl", "jq", "python3"} {
 		if _, err := exec.LookPath(bin); err != nil {
@@ -436,6 +436,13 @@ func TestCaptureHookScript_LogControlBytes(t *testing.T) {
 		ctlURLOK = "http://synthetic.invalid/" + ctlShown
 	)
 	for _, locale := range []string{"C", "C.UTF-8"} {
+		// A locale the host lacks makes bash itself warn on stderr at startup.
+		probe := exec.Command("bash", "-c", ":")
+		probe.Env = append(os.Environ(), "LC_ALL="+locale)
+		if out, err := probe.CombinedOutput(); err != nil || len(out) != 0 {
+			t.Logf("skip locale %s: %v %q", locale, err, out)
+			continue
+		}
 		for _, tc := range []struct {
 			name, mode, file, reply string
 			unreadable              bool
@@ -535,6 +542,54 @@ func TestCaptureHookScript_LogControlBytes(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestCaptureHookScript_UnsetLocaleLogs: a caller whose LC_ALL names a
+// locale the host lacks gets bash's own startup warning, and log lines stay
+// one per message with no further warnings from the script.
+func TestCaptureHookScript_UnsetLocaleLogs(t *testing.T) {
+	for _, bin := range []string{"bash", "curl", "jq"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("skip: %s not on PATH", bin)
+		}
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"url":"http://synthetic.invalid/artifact"}`)
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	var files []string
+	for _, name := range []string{"one.html", "two.html"} {
+		f := filepath.Join(dir, name)
+		if err := os.WriteFile(f, []byte("<!doctype html><html>locale</html>\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, f)
+	}
+	cmd := exec.Command("bash", append([]string{filepath.Join(repoRoot, "companion/capture-hook/demiplane-capture.sh")}, files...)...)
+	cmd.Env = append(os.Environ(), "LC_ALL=xx_XX.UTF-8", "DEMIPLANE_URL="+srv.URL, "DEMIPLANE_TOKEN=",
+		"DEMIPLANE_SLUG=", "DEMIPLANE_PRIVATE=", "DEMIPLANE_RENDER=0")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("CLI failed: %v\nstderr: %q", err, stderr.Bytes())
+	}
+	var logs []byte
+	for _, line := range bytes.SplitAfter(stderr.Bytes(), []byte("\n")) {
+		if !bytes.HasPrefix(line, []byte("bash: warning: setlocale: ")) {
+			logs = append(logs, line...)
+		}
+	}
+	want := ""
+	for _, f := range files {
+		want += "demiplane-capture: published " + f + " → http://synthetic.invalid/artifact\n"
+	}
+	if string(logs) != want {
+		t.Fatalf("stderr = %q\nwant (after bash's startup warning) %q", stderr.Bytes(), want)
 	}
 }
 

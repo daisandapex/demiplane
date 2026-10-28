@@ -39,6 +39,10 @@
 
 set -uo pipefail
 
+# Bytes, not characters: log() below matches control bytes, and nothing else
+# here needs more than ASCII. C is always available, so this never warns.
+LC_ALL=C
+
 # The token reaches curl as a header line on stdin. Never in argv, which any
 # local account can read with ps, and never in a child's environment. A caller
 # that exports its own `token` would keep it exported through the assignment,
@@ -49,10 +53,10 @@ unset DEMIPLANE_TOKEN
 
 # log writes one stderr line per message. File names and server replies reach
 # it, so each control character becomes '?', as the leak audit does: C0 bytes,
-# DEL, and the UTF-8 encoding of C1 (c2 80 to c2 9f). LC_ALL=C makes the
+# DEL, and the UTF-8 encoding of C1 (c2 80 to c2 9f). Under LC_ALL=C the
 # patterns match bytes, so the result does not depend on the caller's locale.
 log() {
-	local LC_ALL=C msg="$*"
+	local msg="$*"
 	msg=${msg//$'\xc2'[$'\x80'-$'\x9f']/?}
 	msg=${msg//[$'\x01'-$'\x1f'$'\x7f']/?}
 	printf 'demiplane-capture: %s\n' "$msg" >&2
