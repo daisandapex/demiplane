@@ -47,7 +47,16 @@ token=${DEMIPLANE_TOKEN:-}
 export -n token
 unset DEMIPLANE_TOKEN
 
-log() { printf 'demiplane-capture: %s\n' "$*" >&2; }
+# log writes one stderr line per message. File names and server replies reach
+# it, so each control character becomes '?', as the leak audit does: C0 bytes,
+# DEL, and the UTF-8 encoding of C1 (c2 80 to c2 9f). LC_ALL=C makes the
+# patterns match bytes, so the result does not depend on the caller's locale.
+log() {
+	local LC_ALL=C msg="$*"
+	msg=${msg//$'\xc2'[$'\x80'-$'\x9f']/?}
+	msg=${msg//[$'\x01'-$'\x1f'$'\x7f']/?}
+	printf 'demiplane-capture: %s\n' "$msg" >&2
+}
 
 # Mirrors the server's --max-upload default (100 MiB) so a restricted capture
 # never snapshots a file the default server would refuse anyway.
@@ -206,6 +215,7 @@ if [[ -n ${DEMIPLANE_CAPTURE_DIR:-} ]]; then
 	if ! python3 - "$DEMIPLANE_CAPTURE_DIR" "$file" \
 		"${DEMIPLANE_CAPTURE_MAX_BYTES:-$default_capture_max_bytes}" >"$source" <<'PY'
 import os
+import re
 import stat
 import sys
 
@@ -265,8 +275,11 @@ try:
         sys.stdout.buffer.flush()
 except (OSError, ValueError) as exc:
     reason = exc.strerror if isinstance(exc, OSError) and exc.strerror else str(exc)
-    print(f"demiplane-capture: capture dir rejected {path}: {reason}",
-          file=sys.stderr)
+    # Same replacement as log(), on the path's own bytes.
+    line = os.fsencode(f"capture dir rejected {path}: {reason}")
+    line = re.sub(rb"\xc2[\x80-\x9f]|[\x00-\x1f\x7f]", b"?", line)
+    sys.stderr.buffer.write(b"demiplane-capture: " + line + b"\n")
+    sys.stderr.buffer.flush()
     sys.exit(1)
 PY
 	then

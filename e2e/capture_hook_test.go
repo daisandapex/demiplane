@@ -416,6 +416,147 @@ func TestCaptureHookScript_CaptureDir(t *testing.T) {
 	}
 }
 
+// TestCaptureHookScript_LogControlBytes: every stderr line the hook writes is
+// one demiplane-capture: line per message, with each control character
+// (C0, DEL, and the UTF-8 encoded C1 range) shown as '?', whatever the locale.
+// File names and the server's reply URL both reach those lines. Other
+// non-ASCII text, including bytes in 80-9f that are part of a longer UTF-8
+// sequence, is kept as it is.
+func TestCaptureHookScript_LogControlBytes(t *testing.T) {
+	for _, bin := range []string{"bash", "curl", "jq", "python3"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("skip: %s not on PATH", bin)
+		}
+	}
+	const (
+		ctl      = "a\tb\nc\x1bd\x01e\x7ff\xc2\x9bg"
+		ctlShown = "a?b?c?d?e?f?g"
+		plainURL = "http://synthetic.invalid/artifact"
+		ctlURL   = "http://synthetic.invalid/" + ctl
+		ctlURLOK = "http://synthetic.invalid/" + ctlShown
+	)
+	for _, locale := range []string{"C", "C.UTF-8"} {
+		for _, tc := range []struct {
+			name, mode, file, reply string
+			want                    []string
+		}{
+			{name: "hook file name", mode: "hook", file: ctl + ".html", reply: plainURL,
+				want: []string{"published " + ctlShown + ".html → " + plainURL}},
+			{name: "cli file name", mode: "cli", file: ctl + ".html", reply: plainURL,
+				want: []string{"published {dir}/" + ctlShown + ".html → " + plainURL}},
+			{name: "capture dir rejection", mode: "restricted", file: "outside/" + ctl + ".html", reply: plainURL,
+				want: []string{
+					"capture dir rejected {dir}/outside/" + ctlShown + ".html: outside capture directory",
+					"skipped {dir}/outside/" + ctlShown + ".html: not captured (reason logged above)",
+				}},
+			{name: "hook reply url", mode: "hook", file: "note.html", reply: ctlURL,
+				want: []string{"published note.html → " + ctlURLOK}},
+			{name: "cli reply url", mode: "cli", file: "note.html", reply: ctlURL,
+				want: []string{"published {dir}/note.html → " + ctlURLOK}},
+			{name: "hook non-ASCII name", mode: "hook", file: "世.html", reply: plainURL,
+				want: []string{"published 世.html → " + plainURL}},
+			{name: "cli non-ASCII name", mode: "cli", file: "世.html", reply: plainURL,
+				want: []string{"published {dir}/世.html → " + plainURL}},
+		} {
+			t.Run(locale+"/"+tc.name, func(t *testing.T) {
+				dir, err := filepath.EvalSymlinks(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, sub := range []string{"capture", "outside", "tmp"} {
+					if err := os.Mkdir(filepath.Join(dir, sub), 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				file := dir + "/" + tc.file
+				if err := os.WriteFile(file, []byte("<!doctype html><html>log</html>\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				reply, err := json.Marshal(map[string]string{"url": tc.reply})
+				if err != nil {
+					t.Fatal(err)
+				}
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					_, _ = io.Copy(io.Discard, r.Body)
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write(reply)
+				}))
+				defer srv.Close()
+
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				script := filepath.Join(repoRoot, "companion/capture-hook/demiplane-capture.sh")
+				var cmd *exec.Cmd
+				if tc.mode == "cli" {
+					cmd = exec.CommandContext(ctx, "bash", script, file)
+				} else {
+					cmd = exec.CommandContext(ctx, "bash", script)
+					input, err := json.Marshal(map[string]any{"tool_input": map[string]string{"file_path": file}})
+					if err != nil {
+						t.Fatal(err)
+					}
+					cmd.Stdin = bytes.NewReader(input)
+				}
+				captureDir := ""
+				if tc.mode == "restricted" {
+					captureDir = filepath.Join(dir, "capture")
+				}
+				cmd.Dir = dir
+				cmd.Env = append(os.Environ(), "LC_ALL="+locale, "DEMIPLANE_URL="+srv.URL,
+					"DEMIPLANE_TOKEN=", "DEMIPLANE_CAPTURE=1", "DEMIPLANE_CAPTURE_DIR="+captureDir,
+					"DEMIPLANE_SLUG=__derive__", "DEMIPLANE_PRIVATE=", "DEMIPLANE_RENDER=0",
+					"TMPDIR="+filepath.Join(dir, "tmp"))
+				// stdout carries the URL (CLI) or jq's JSON (hook); only stderr
+				// holds log lines, so it is captured on its own.
+				var stdout, stderr bytes.Buffer
+				cmd.Stdout = &stdout
+				cmd.Stderr = &stderr
+				if err := cmd.Run(); err != nil {
+					t.Fatalf("hook failed: %v\nstderr: %q", err, stderr.Bytes())
+				}
+				assertLogLines(t, stderr.Bytes(), len(tc.want))
+				var want strings.Builder
+				for _, line := range tc.want {
+					want.WriteString("demiplane-capture: " + strings.ReplaceAll(line, "{dir}", dir) + "\n")
+				}
+				if got := stderr.String(); got != want.String() {
+					t.Fatalf("stderr = %q\nwant     %q", got, want.String())
+				}
+			})
+		}
+	}
+}
+
+// assertLogLines fails unless stderr is exactly n newline-terminated lines,
+// each starting with "demiplane-capture: " and holding no C0 byte, no DEL and
+// no UTF-8 encoded C1 character.
+func assertLogLines(t *testing.T, stderr []byte, n int) {
+	t.Helper()
+	if n == 0 {
+		if len(stderr) != 0 {
+			t.Fatalf("unexpected stderr %q", stderr)
+		}
+		return
+	}
+	if !bytes.HasSuffix(stderr, []byte("\n")) {
+		t.Fatalf("stderr does not end in a newline: %q", stderr)
+	}
+	lines := bytes.Split(bytes.TrimSuffix(stderr, []byte("\n")), []byte("\n"))
+	if len(lines) != n {
+		t.Fatalf("stderr has %d lines, want %d: %q", len(lines), n, stderr)
+	}
+	for _, line := range lines {
+		if !bytes.HasPrefix(line, []byte("demiplane-capture: ")) {
+			t.Fatalf("line without the demiplane-capture: prefix: %q", line)
+		}
+		for i, c := range line {
+			if c < 0x20 || c == 0x7f || (c == 0xc2 && i+1 < len(line) && line[i+1] >= 0x80 && line[i+1] <= 0x9f) {
+				t.Fatalf("control byte %#x at offset %d in log line %q", c, i, line)
+			}
+		}
+	}
+}
+
 func jsonQuote(s string) string {
 	b := strings.Builder{}
 	b.WriteByte('"')
