@@ -613,6 +613,71 @@ func TestCaptureHookScript_UnsetLocaleLogs(t *testing.T) {
 	}
 }
 
+// TestCaptureHookScript_CurlKeepsCallerLocale: the script matches bytes under
+// LC_ALL=C, but curl runs with the caller's LC_ALL (curl can use the locale to
+// convert a non-ASCII host name), or with none when the caller set none.
+func TestCaptureHookScript_CurlKeepsCallerLocale(t *testing.T) {
+	for _, bin := range []string{"bash", "curl", "jq"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("skip: %s not on PATH", bin)
+		}
+	}
+	realCurl, err := exec.LookPath("curl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"url":"http://synthetic.invalid/artifact"}`)
+	}))
+	defer srv.Close()
+	for _, tc := range []struct{ name, lcAll, want string }{
+		{name: "caller LC_ALL", lcAll: "C.UTF-8", want: "C.UTF-8"},
+		{name: "caller without LC_ALL", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := filepath.Join(dir, "bin")
+			if err := os.Mkdir(bin, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			seen := filepath.Join(dir, "lc_all")
+			shim := "#!/usr/bin/env bash\nprintf '%s' \"${LC_ALL-}\" > \"$CURL_LOCALE_FILE\"\nexec \"$REAL_CURL\" \"$@\"\n"
+			if err := os.WriteFile(filepath.Join(bin, "curl"), []byte(shim), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(dir, "note.html")
+			if err := os.WriteFile(file, []byte("<!doctype html><html>locale</html>\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var env []string
+			for _, kv := range os.Environ() {
+				if !strings.HasPrefix(kv, "LC_ALL=") {
+					env = append(env, kv)
+				}
+			}
+			if tc.lcAll != "" {
+				env = append(env, "LC_ALL="+tc.lcAll)
+			}
+			cmd := exec.Command("bash", filepath.Join(repoRoot, "companion/capture-hook/demiplane-capture.sh"), file)
+			cmd.Env = append(env, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"CURL_LOCALE_FILE="+seen, "REAL_CURL="+realCurl, "DEMIPLANE_URL="+srv.URL,
+				"DEMIPLANE_TOKEN=", "DEMIPLANE_SLUG=", "DEMIPLANE_PRIVATE=", "DEMIPLANE_RENDER=0")
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("CLI failed: %v\n%s", err, out)
+			}
+			got, err := os.ReadFile(seen)
+			if err != nil {
+				t.Fatalf("curl shim did not run: %v", err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("curl ran with LC_ALL=%q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // assertLogLines fails unless stderr is exactly n newline-terminated lines,
 // each starting with "demiplane-capture: " and holding no C0 byte, no DEL and
 // no UTF-8 encoded C1 character.

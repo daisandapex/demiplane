@@ -41,6 +41,9 @@ set -uo pipefail
 
 # Bytes, not characters: log() below matches control bytes, and nothing else
 # here needs more than ASCII. C is always available, so this never warns.
+# curl gets the caller's value back, since it can use the locale to convert a
+# non-ASCII host name; an empty LC_ALL means the same as none.
+caller_lc_all=${LC_ALL-}
 LC_ALL=C
 
 # The token reaches curl as a header line on stdin. Never in argv, which any
@@ -155,7 +158,7 @@ publish() {
 
 	# Accept: application/json so we can pull the canonical URL out of the reply.
 	local resp http
-	resp=$(curl -fsS --max-time 30 \
+	resp=$(LC_ALL=$caller_lc_all curl -fsS --max-time 30 \
 		"${auth[@]}" \
 		-H 'Accept: application/json' \
 		--data-binary @"$source" \
