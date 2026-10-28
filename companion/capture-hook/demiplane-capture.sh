@@ -93,7 +93,9 @@ looks_like_artifact() {
 	*.html | *.htm)
 		# Self-contained heuristic: a real document declares <html> or a doctype.
 		# A fragment edited into a partial file is skipped on purpose.
-		grep -qiE '<!doctype html|<html' -- "$source"
+		# grep's own errors would name the file unreplaced; an unreadable file
+		# is simply not an artifact.
+		grep -qiE '<!doctype html|<html' -- "$source" 2>/dev/null
 		return $?
 		;;
 	*.md | *.markdown)

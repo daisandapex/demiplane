@@ -438,6 +438,7 @@ func TestCaptureHookScript_LogControlBytes(t *testing.T) {
 	for _, locale := range []string{"C", "C.UTF-8"} {
 		for _, tc := range []struct {
 			name, mode, file, reply string
+			unreadable              bool
 			want                    []string
 		}{
 			{name: "hook file name", mode: "hook", file: ctl + ".html", reply: plainURL,
@@ -457,6 +458,8 @@ func TestCaptureHookScript_LogControlBytes(t *testing.T) {
 				want: []string{"published 世.html → " + plainURL}},
 			{name: "cli non-ASCII name", mode: "cli", file: "世.html", reply: plainURL,
 				want: []string{"published {dir}/世.html → " + plainURL}},
+			// An unreadable file is not an artifact: nothing is published or logged.
+			{name: "hook unreadable file", mode: "hook", file: ctl + ".html", reply: plainURL, unreadable: true},
 		} {
 			t.Run(locale+"/"+tc.name, func(t *testing.T) {
 				dir, err := filepath.EvalSymlinks(t.TempDir())
@@ -471,6 +474,14 @@ func TestCaptureHookScript_LogControlBytes(t *testing.T) {
 				file := dir + "/" + tc.file
 				if err := os.WriteFile(file, []byte("<!doctype html><html>log</html>\n"), 0o600); err != nil {
 					t.Fatal(err)
+				}
+				if tc.unreadable {
+					if os.Geteuid() == 0 {
+						t.Skip("root reads a mode 000 file")
+					}
+					if err := os.Chmod(file, 0); err != nil {
+						t.Fatal(err)
+					}
 				}
 				reply, err := json.Marshal(map[string]string{"url": tc.reply})
 				if err != nil {
