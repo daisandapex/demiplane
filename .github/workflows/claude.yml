@@ -18,12 +18,16 @@
 #
 # Pull requests from forks are refused. A comment event does not say where
 # the PR's head lives, so the first step asks the API and stops the job
-# before checkout or the action when it is a fork: Claude never reads files
-# or text an outsider controls while holding the secret and a write token.
-# For the same reason a comment on an issue runs only when the issue itself
-# was written by the owner, a member or a collaborator; read outside bug
-# reports yourself (or in a claude.ai/code session) instead. Comments by
-# outsiders in a trusted thread still reach Claude as context.
+# before checkout or the action when it is a fork, so Claude does not check
+# out a fork's files while holding the secret and a write token. For the same
+# reason a comment on an issue runs only when the issue itself was written by
+# the owner, a member or a collaborator; read outside bug reports yourself
+# (or in a claude.ai/code session) instead.
+#
+# Context: only comments, reviews and review comments written by the logins
+# in include_comments_by_actor reach Claude as context; comments by anyone
+# else in the thread are left out. The list holds the accounts with write
+# access, by exact login, and has to change when collaborators change.
 #
 # Pins: actions by full commit SHA. claude-code-action v1.0.260 is the first
 # release that checks out the PR commit the comment was made on and skips the
@@ -109,3 +113,4 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           use_commit_signing: true
+          include_comments_by_actor: Benjamin-Connelly,TektonAura
