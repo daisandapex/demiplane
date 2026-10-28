@@ -24,9 +24,9 @@
 # the owner, a member or a collaborator; read outside bug reports yourself
 # (or in a claude.ai/code session) instead.
 #
-# Context: only comments, reviews and review comments written by the logins
-# in include_comments_by_actor reach Claude as context; comments by anyone
-# else in the thread are left out. The list holds the accounts with write
+# Context: of the thread's earlier comments, reviews and review comments,
+# only those written by the logins in include_comments_by_actor reach Claude;
+# those by anyone else are left out. The list holds the accounts with write
 # access, by exact login, and has to change when collaborators change.
 #
 # Pins: actions by full commit SHA. claude-code-action v1.0.260 is the first
