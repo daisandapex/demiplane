@@ -540,6 +540,26 @@ func TestCaptureHookScript_LogControlBytes(t *testing.T) {
 				if got := stderr.String(); got != want.String() {
 					t.Fatalf("stderr = %q\nwant     %q", got, want.String())
 				}
+				// stdout is output, not a log line: it carries the reply URL as sent.
+				switch {
+				case tc.unreadable || tc.mode == "restricted":
+				case tc.mode == "cli":
+					if got := stdout.String(); got != tc.reply+"\n" {
+						t.Fatalf("stdout = %q, want %q", got, tc.reply+"\n")
+					}
+				default:
+					var out struct {
+						HookSpecificOutput struct {
+							AdditionalContext string `json:"additionalContext"`
+						} `json:"hookSpecificOutput"`
+					}
+					if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+						t.Fatalf("hook stdout is not JSON: %v\n%q", err, stdout.Bytes())
+					}
+					if !strings.Contains(out.HookSpecificOutput.AdditionalContext, tc.reply) {
+						t.Fatalf("hook stdout lost the reply URL %q: %q", tc.reply, out.HookSpecificOutput.AdditionalContext)
+					}
+				}
 			})
 		}
 	}
