@@ -18,9 +18,11 @@ Upgrade notes:
 - The hook now needs curl 7.55 or newer, which reads the token header from
   standard input.
 - The pre-push leak audit reads a repository's own patterns from
-  `.git/info/leakpatterns`, no longer from `.leakpatterns` in the working tree.
-  A repository that still has the old file blocks its pushes until you move it
-  (`mv .leakpatterns .git/info/leakpatterns`); the hook prints that command.
+  `info/leakpatterns` in its common git directory (`.git/info/leakpatterns` in
+  a plain clone), no longer from `.leakpatterns` in the working tree. While the
+  new file is missing and the old one exists, pushes are blocked until you move
+  it: `mv .leakpatterns "$(git rev-parse --git-common-dir)/info/leakpatterns"`.
+  The hook prints the exact command.
 
 ### Security
 
@@ -50,7 +52,8 @@ Upgrade notes:
   commit messages and annotated tags, root and merge commits included,
   skipping only what the destination already holds. It checks restricted paths
   across the whole outgoing history, refuses patterns that use backreferences,
-  bounds each scan with `LEAK_AUDIT_TIMEOUT` (default 300 seconds), and blocks
+  bounds each scan with `LEAK_AUDIT_TIMEOUT` (default 300 seconds) when
+  `timeout` or `gtimeout` is installed, and blocks
   the push on any read or enumeration error instead of reporting clean. It
   also runs gitleaks over the outgoing commits when gitleaks is installed.
 
