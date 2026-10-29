@@ -13,6 +13,15 @@ Security fixes for the companion capture hook, described in
 The hook is a script you point at or copy: if you copied it, copy the new one.
 The server is unchanged.
 
+Upgrade notes:
+
+- The hook now needs curl 7.55 or newer, which reads the token header from
+  standard input.
+- The pre-push leak audit reads a repository's own patterns from
+  `.git/info/leakpatterns`, no longer from `.leakpatterns` in the working tree.
+  A repository that still has the old file blocks its pushes until you move it
+  (`mv .leakpatterns .git/info/leakpatterns`); the hook prints that command.
+
 ### Security
 
 - The capture hook enforces `DEMIPLANE_CAPTURE_DIR` with directory-relative
@@ -20,9 +29,9 @@ The server is unchanged.
   match, so `..` components, symlinks and hardlinks inside the capture
   directory could upload files from anywhere the user can read. Restricted
   captures now reject parent traversal, symlinks (even ones pointing inside the
-  directory), hardlinked files, and path replacement between inspection and
-  upload. Each rejection is logged to stderr with its reason; the hook still
-  exits 0.
+  directory) and hardlinked files, and replacing the path between inspection
+  and upload can no longer redirect the upload. Each rejection is logged to
+  stderr with its reason; the hook still exits 0.
 - New `DEMIPLANE_CAPTURE_MAX_BYTES` caps the snapshot a restricted capture
   takes, defaulting to the server's 100 MiB `--max-upload` default.
 - Setting `DEMIPLANE_CAPTURE_DIR` now requires `python3` on the machine running
@@ -36,9 +45,13 @@ The server is unchanged.
 - The capture hook replaces control characters in its log lines with `?`, so a
   file name or a server reply can no longer add lines that look like the
   hook's own.
-- The pre-push leak audit (`scripts/pre-push-leak-audit.sh`) blocks the push
-  when a scratch-file write, the commit count or the restricted-path filter
-  fails. Before, each could leave it auditing nothing and reporting clean. It
+- The pre-push leak audit (`scripts/pre-push-leak-audit.sh`) scans every
+  object a push sends: file contents (binary files included), file names,
+  commit messages and annotated tags, root and merge commits included,
+  skipping only what the destination already holds. It checks restricted paths
+  across the whole outgoing history, refuses patterns that use backreferences,
+  bounds each scan with `LEAK_AUDIT_TIMEOUT` (default 300 seconds), and blocks
+  the push on any read or enumeration error instead of reporting clean. It
   also runs gitleaks over the outgoing commits when gitleaks is installed.
 
 ## [3.1.0] - 2026-10-20
