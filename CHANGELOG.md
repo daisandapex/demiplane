@@ -44,9 +44,9 @@ Upgrade notes:
 - The capture hook drops the export attribute from its token holder, so a
   caller that already exported a variable named `token` no longer passes the
   bearer token to curl's environment.
-- The capture hook replaces control characters in its log lines with `?`, so a
-  file name or a server reply can no longer add lines that look like the
-  hook's own.
+- The capture hook replaces C0 control characters, DEL and UTF-8 encoded C1
+  controls in its log lines with `?`, so a file name or a server reply can no
+  longer add lines that look like the hook's own.
 - The pre-push leak audit (`scripts/pre-push-leak-audit.sh`) scans every
   object a push sends: file contents (binary files included), file names,
   commit messages and annotated tags, root and merge commits included,
