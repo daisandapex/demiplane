@@ -6,6 +6,13 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-10-29
+
+Security fixes for the companion capture hook, described in
+[GHSA-gvp3-c6vg-6hqj](https://github.com/daisandapex/demiplane/security/advisories/GHSA-gvp3-c6vg-6hqj).
+The hook is a script you point at or copy: if you copied it, copy the new one.
+The server is unchanged.
+
 ### Security
 
 - The capture hook enforces `DEMIPLANE_CAPTURE_DIR` with directory-relative
@@ -20,9 +27,15 @@ All notable changes to demiplane are documented here. The format follows
   takes, defaulting to the server's 100 MiB `--max-upload` default.
 - Setting `DEMIPLANE_CAPTURE_DIR` now requires `python3` on the machine running
   the hook. Without it, restricted captures are skipped and logged.
+- The capture hook passes the publish token to curl on standard input and
+  unsets `DEMIPLANE_TOKEN`, so the token no longer appears in the process list
+  or in the environment of the programs the hook runs.
 - The capture hook drops the export attribute from its token holder, so a
   caller that already exported a variable named `token` no longer passes the
   bearer token to curl's environment.
+- The capture hook replaces control characters in its log lines with `?`, so a
+  file name or a server reply can no longer add lines that look like the
+  hook's own.
 - The pre-push leak audit (`scripts/pre-push-leak-audit.sh`) blocks the push
   when a scratch-file write, the commit count or the restricted-path filter
   fails. Before, each could leave it auditing nothing and reporting clean. It
