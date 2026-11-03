@@ -25,8 +25,8 @@ to a box you own, reachable only from your own network.
 go install github.com/daisandapex/demiplane/v3/cmd/demiplane@latest
 ```
 
-Requires [Go 1.26.10 or newer](https://go.dev/dl/). An older Go 1.26 fetches
-1.26.10 on its own under the default `GOTOOLCHAIN=auto`. The binary lands in
+Requires [Go 1.26.10 or newer](https://go.dev/dl/). Go 1.21 and later fetch
+1.26.10 on their own under the default `GOTOOLCHAIN=auto`. The binary lands in
 `$(go env GOPATH)/bin`; a cold build takes about 30 seconds.
 
 **Why this, and why never `curl | bash`.** `go install` fetches the module
