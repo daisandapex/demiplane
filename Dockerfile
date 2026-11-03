@@ -6,7 +6,7 @@
 
 # Base images pinned by digest (immutable). Tags kept in comments for humans /
 # dependabot; bump both together.
-FROM golang:1.26-bookworm@sha256:5f68ec6805843bd3981a951ffada82a26a0bd2631045c8f7dba483fa868f5ec5 AS build
+FROM golang:1.26-bookworm@sha256:23ce71337b726608afb1bc00986e630a05034a87a87ea1fc2cd1ae5cf33387eb AS build
 WORKDIR /src
 
 # Cache module downloads.

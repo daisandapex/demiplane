@@ -23,7 +23,7 @@ jobs:
     # Run inside the official Go image so no setup-go action is needed; the only
     # pinned action is checkout. Image pinned by digest (tag golang:1.26-bookworm);
     # bump as new Go releases clear the supply-chain quarantine.
-    container: golang:1.26-bookworm@sha256:5f68ec6805843bd3981a951ffada82a26a0bd2631045c8f7dba483fa868f5ec5
+    container: golang:1.26-bookworm@sha256:23ce71337b726608afb1bc00986e630a05034a87a87ea1fc2cd1ae5cf33387eb
     strategy:
       # Optional modules are guarded by build tags, so a package only compiles on
       # the legs whose tag set selects it. Cover the full lattice — every module
@@ -82,7 +82,7 @@ jobs:
   e2e:
     name: e2e (process-level)
     runs-on: ubuntu-latest
-    container: golang:1.26-bookworm@sha256:5f68ec6805843bd3981a951ffada82a26a0bd2631045c8f7dba483fa868f5ec5
+    container: golang:1.26-bookworm@sha256:23ce71337b726608afb1bc00986e630a05034a87a87ea1fc2cd1ae5cf33387eb
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -139,9 +139,10 @@ jobs:
 
   # Reachable advisories in the standard library or a dependency fail the build.
   # This job runs on setup-go with go-version-file, like release.yml, rather
-  # than in the golang container: the container sets GOTOOLCHAIN=local and
-  # ignores the go.mod toolchain line, so it would scan a Go the release never
-  # ships. Scanning the release toolchain is the point.
+  # than in the golang container: the container's Go is whatever its digest
+  # pins, while setup-go installs exactly the go line, the Go the release
+  # binaries are built with. Scanning the release toolchain is the point, and
+  # the go line is also the floor `go install` users build with.
   govulncheck:
     name: govulncheck
     runs-on: ubuntu-latest
