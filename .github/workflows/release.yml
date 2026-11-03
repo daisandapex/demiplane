@@ -37,8 +37,10 @@ jobs:
     # Unlike ci.yml this job does NOT run inside the golang container. It needs
     # the runner's own `gh` (absent from the golang image) to create the release,
     # and the attestation action wants the host runner's node + OIDC plumbing.
-    # Go therefore comes from setup-go, reading the version straight out of go.mod
-    # so the release toolchain can never drift from the one CI compiles with.
+    # Go therefore comes from setup-go, which installs the go line in go.mod.
+    # CI's build-test and e2e jobs compile with the Go in the golang image digest
+    # instead, and nothing checks that the two agree: when the digest moves to a
+    # newer Go, raise the go line with it.
     permissions:
       contents: write      # create the release and upload its assets
       id-token: write      # OIDC token the provenance signer exchanges

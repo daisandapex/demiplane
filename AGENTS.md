@@ -6,7 +6,7 @@ the full contributor workflow and architecture reference.
 
 ## Build & test
 
-Go 1.26+ is required.
+Go 1.26.10 or newer is required, matching the `go` line in `go.mod`.
 
 ```sh
 go build ./...

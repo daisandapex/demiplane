@@ -6,6 +6,20 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- The minimum Go version is now 1.26.10, up from 1.26.3. A binary built on
+  1.26.3 carried 21 reachable standard library advisories, all fixed in
+  1.26.10. `go install` on an older Go 1.26 fetches 1.26.10 under the default
+  `GOTOOLCHAIN=auto` and stops with an error under `GOTOOLCHAIN=local`.
+- `golang.org/x/net` moves from v0.55.0 to v0.60.0, which fixes a reachable
+  advisory in its IDNA handling. Alongside it, `golang.org/x/crypto` moves to
+  v0.57.0, `golang.org/x/text` to v0.42.0 and `golang.org/x/sys` to v0.48.0.
+- The Docker image and CI now build with Go 1.26.10. The image was on Go
+  1.26.4.
+- A new govulncheck CI job fails the build on any reachable advisory in the
+  standard library or a dependency.
+
 ## [3.1.1] - 2026-10-29
 
 Security fixes for the companion capture hook, described in
