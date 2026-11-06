@@ -16,7 +16,7 @@ import (
 // The F layout is the masthead page's structure. Everything hangs on one
 // centred axis (theme.FrameCSS): the text column holds to --measure, tables
 // and code break out to --wide around the same centre, and the title and the
-// byline start at the text's left edge and may run to the wide edge. The page
+// byline hold to the text column, so they end at the text edge. The page
 // opens with the document: the title, then one byline line (date, author,
 // status, tags, read time) with the theme toggle at its end, then the text.
 // There is no top bar.
@@ -214,7 +214,7 @@ func bylineHTML(st *state, fields []metaField, published time.Time, words int, t
 	needsScript := false
 	dateUsed := false
 	for _, f := range fields {
-		if isDateKey(f.key) {
+		if isDateKey(f.key) && f.value != "" {
 			row, script := dateText(f.value)
 			items = append(items, row)
 			needsScript = script
@@ -232,7 +232,7 @@ func bylineHTML(st *state, fields []metaField, published time.Time, words int, t
 		k := strings.ToLower(f.key)
 		v := html.EscapeString(f.value)
 		switch {
-		case dateUsed && !skippedDate && isDateKey(f.key):
+		case dateUsed && !skippedDate && isDateKey(f.key) && f.value != "":
 			skippedDate = true
 		case k == "title" || f.value == "":
 		case k == "author" || k == "by":

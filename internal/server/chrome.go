@@ -55,8 +55,6 @@ func (s *Server) chromeToggle() bool { return !theme.Pinned(s.renderTheme) }
 // token, so the chrome re-skins cleanly under every palette, and the accent is
 // spent on links and the focus ring only.
 const chromeCSS = `
-.kicker{font:600 .875rem/1.5 var(--sans);font-size-adjust:none;color:var(--muted)}
-.tagline{font-family:var(--serif);font-size:1.1875rem;font-style:italic;color:var(--muted);margin:0 0 1.25rem}
 .scount{font-family:var(--mono);font-size:.82rem;color:var(--muted)}
 .sitehead{padding:0 1.25rem}
 .sitebar{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem 1.5rem;max-width:var(--wide);margin:0 auto;

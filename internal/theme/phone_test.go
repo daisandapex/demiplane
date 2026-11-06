@@ -125,3 +125,17 @@ func TestPhoneStackedTableLabelsTight(t *testing.T) {
 		}
 	}
 }
+
+// TestShortCodeWrapsOnNarrowPhones: a 40-character span is wider than the
+// text column below 390px, where html clips sideways overflow, so there short
+// code may wrap rather than lose its tail. 390px and up keeps it whole.
+func TestShortCodeWrapsOnNarrowPhones(t *testing.T) {
+	const mq = "@media (max-width:24.35rem){"
+	i := strings.Index(contentCSS, mq)
+	if i < 0 {
+		t.Fatalf("no %s block", mq)
+	}
+	if r := rule(contentCSS[i+len(mq):], ":not(pre)>code.nw"); !strings.Contains(r, "white-space:normal") {
+		t.Errorf("short code should wrap below 390px: {%s}", r)
+	}
+}

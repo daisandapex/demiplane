@@ -100,7 +100,7 @@ func colophon(opts Options) string {
 	}
 
 	b.WriteString(`<div class="meta">`)
-	d := html.EscapeString(opts.Published.Format("2006-01-02"))
+	d := html.EscapeString(opts.Published.UTC().Format("2006-01-02"))
 	b.WriteString(`<span><time datetime="` + d + `" title="Published">` + d + `</time></span>`)
 	b.WriteString(`<span>&middot;</span>`)
 	b.WriteString(`<span class="size">` + sizeSentinel + `</span>`)
@@ -160,5 +160,4 @@ const coloCSS = `
 .colo .credit a.mark{text-decoration:underline;text-decoration-color:var(--line-strong,oklch(0.714 0.018 85))}
 .colo .meta a{color:var(--muted,oklch(0.430 0.011 78))}
 .colo .meta a:hover{color:var(--accent,oklch(0.445 0.122 23));text-decoration:underline;text-underline-offset:2px}
-.colo .meta .r{margin-left:auto}
 `

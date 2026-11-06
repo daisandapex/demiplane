@@ -183,8 +183,8 @@ func TestFNavsFoldOnNarrowScreens(t *testing.T) {
 }
 
 // TestFOneAxis: the text column, the wide blocks and the title share one
-// centre: text at the measure, code and tables to the frame, the title from
-// the text's left edge to the frame's right edge.
+// centre: text at the measure, code and tables to the frame, the title held
+// to the text column.
 func TestFOneAxis(t *testing.T) {
 	out := string(Markdown([]byte(fDoc), Options{Header: true}))
 	for _, want := range []string{
@@ -325,5 +325,32 @@ func TestFToggleAnchorsToFirstLine(t *testing.T) {
 	out := string(Markdown([]byte(fDoc), Options{Header: true}))
 	if !strings.Contains(out, ".byline{display:flex;align-items:flex-start;") {
 		t.Error("byline should align the toggle to its first line")
+	}
+}
+
+// TestFBylineSkipsEmptyDate: an empty date field neither leaves an empty
+// timestamp and a dangling separator nor hides the publish date.
+func TestFBylineSkipsEmptyDate(t *testing.T) {
+	src := "---\ndate:\nauthor: Ben\n---\n# Plan\n\nText.\n"
+	out := string(Markdown([]byte(src), Options{Header: true, MetaHeader: true,
+		Published: time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)}))
+	line := between(t, out, `<p class="facts">`, "</p>")
+	want := `<p class="facts"><time class="tstamp" datetime="2026-11-06">2026-11-06</time>` +
+		`<span class="sep" aria-hidden="true"> · </span><span class="who">by Ben</span></p>`
+	if line != want {
+		t.Errorf("byline\n got %s\nwant %s", line, want)
+	}
+}
+
+// TestFBylineEmptyDateYieldsToPublished: an empty date field gives way to a
+// filled published field, which is then not repeated as a labelled field.
+func TestFBylineEmptyDateYieldsToPublished(t *testing.T) {
+	src := "---\ndate:\npublished: 2026-11-04\n---\n# Plan\n\nText.\n"
+	out := string(Markdown([]byte(src), Options{Header: true, MetaHeader: true,
+		Published: time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)}))
+	line := between(t, out, `<p class="facts">`, "</p>")
+	want := `<p class="facts"><time class="tstamp" datetime="2026-11-04">2026-11-04</time></p>`
+	if line != want {
+		t.Errorf("byline\n got %s\nwant %s", line, want)
 	}
 }

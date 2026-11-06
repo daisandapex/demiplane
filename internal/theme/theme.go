@@ -245,6 +245,7 @@ code{font-family:var(--mono);font-size:.875em;line-height:1;
   color:var(--code-ink);border:0;padding:.1em .3em;border-radius:3px;
   -webkit-box-decoration-break:clone;box-decoration-break:clone;overflow-wrap:break-word}
 :not(pre)>code.nw{white-space:nowrap}
+@media (max-width:24.35rem){:not(pre)>code.nw{white-space:normal}}
 :is(th,td) code{padding:.05em .22em}
 @media (max-width:40rem){
 :is(td,th) code{overflow-wrap:anywhere}
@@ -290,9 +291,8 @@ img{max-width:100%;height:auto;display:block;margin:0 auto}
 // frameCSS is the page frame every human surface shares, published pages and
 // operator pages alike: one centred axis with two widths on it. The text
 // column holds to --measure (near 70 characters); tables, code and other wide
-// blocks break out to --wide around the same centre. A page title starts at
-// the text's left edge and may run to the wide edge, so it is never squeezed
-// to the measure and never hangs left of the text. The margin navs (.mnav: a
+// blocks break out to --wide around the same centre. A page title holds to
+// the text column, so it never hangs left of the text or past its edge. The margin navs (.mnav: a
 // sequence on the left, the contents on the right) sit outside the wide frame
 // from 78.5rem, where both gutters have room for them, and fold to one-line
 // disclosures above the text below that, so on a phone the text still starts

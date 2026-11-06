@@ -142,3 +142,18 @@ func TestColophonOneLineOnPhones(t *testing.T) {
 		t.Error("phone rule hiding the size is missing")
 	}
 }
+
+// TestColophonDateIsUTC: the colophon dates the page in UTC, as the byline
+// does, so a page published near midnight off UTC shows one date, not two.
+func TestColophonDateIsUTC(t *testing.T) {
+	east := time.FixedZone("UTC-5", -5*3600)
+	out := string(Markdown([]byte("# X\n\nText.\n"), Options{Header: true, Colophon: true, Slug: "solo",
+		Published: time.Date(2026, 11, 5, 23, 30, 0, 0, east)}))
+	colo := between(t, out, `<div class="meta">`, "</div>")
+	if !strings.Contains(colo, `datetime="2026-11-06"`) {
+		t.Errorf("colophon should date the page in UTC (2026-11-06):\n%s", colo)
+	}
+	if !strings.Contains(out, `<time class="tstamp" datetime="2026-11-06">`) {
+		t.Errorf("byline should date the page in UTC (2026-11-06):\n%s", out)
+	}
+}
