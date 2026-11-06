@@ -150,7 +150,7 @@ func (s *Server) galleryCard(base string, a store.Artifact) string {
 	created := a.CreatedAt.Format("2006-01-02 15:04")
 	lock := ""
 	if a.HasPassword() {
-		lock = `<span class="glock" title="password-protected" aria-label="password protected">🔒</span>`
+		lock = `<span class="glock" title="password-protected">` + lockIcon + `</span>`
 	}
 	badge := shortTypeLabel(a.ContentType) // data-type only; not shown
 

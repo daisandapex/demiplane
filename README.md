@@ -14,7 +14,7 @@ to a box you own, reachable only from your own network.
 
 `single Go binary` · `no database server` · `AGPL-3.0-only`
 
-> **🔒 Loopback by default.** A fresh instance binds `127.0.0.1` and is reachable
+> **Loopback by default.** A fresh instance binds `127.0.0.1` and is reachable
 > from nowhere else. Nothing you publish is exposed until *you* bind a LAN or mesh
 > IP. That is the product, not a limitation — if you want a URL a stranger can
 > open, [use a public host instead](#when-not-to-use-it).

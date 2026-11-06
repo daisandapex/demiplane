@@ -110,11 +110,11 @@ func TestGalleryLockIconForPassword(t *testing.T) {
 	s := New(st, Config{})
 
 	locked := s.galleryCard("http://x", store.Artifact{Slug: "gated", ContentType: "text/html", PasswordHash: "abc"})
-	if !strings.Contains(locked, "🔒") {
+	if !strings.Contains(locked, `<svg class="lock"`) {
 		t.Errorf("password-gated card should show a lock icon")
 	}
 	open := s.galleryCard("http://x", store.Artifact{Slug: "open", ContentType: "text/html"})
-	if strings.Contains(open, "🔒") {
+	if strings.Contains(open, `<svg class="lock"`) {
 		t.Errorf("un-gated card should not show a lock icon")
 	}
 }

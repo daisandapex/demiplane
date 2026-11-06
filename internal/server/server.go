@@ -1420,7 +1420,7 @@ func (s *Server) artifactTable(r *http.Request) string {
 			}
 			label = fmt.Sprintf(`%s <span class="scount">(%s)</span> →`, label, n)
 		} else if row.locked {
-			label += " 🔒"
+			label += " " + lockIcon
 		}
 		fmt.Fprintf(&b,
 			`<tr><td><a href="%s/%s">%s</a></td><td>%s</td></tr>`,

@@ -81,6 +81,7 @@ header.top nav a.active,header.top nav a:hover{color:var(--accent)}
 .codeblock pre{margin:0;border:none;border-radius:0}
 footer{border-top:1px solid var(--line);color:var(--muted);font-size:.85rem;padding:1.5rem 0}
 footer .mark{font-family:var(--serif);color:var(--ink)}
+.lock{width:.85em;height:.85em;vertical-align:-.08em;color:var(--muted)}
 `
 
 const copyJS = `
@@ -92,6 +93,12 @@ document.addEventListener('click',function(e){
   });
 });
 `
+
+// lockIcon marks a password-protected artifact. It is an inline SVG, not the
+// lock emoji, so it renders on a machine without an emoji font.
+const lockIcon = `<svg class="lock" viewBox="0 0 24 24" role="img" aria-label="password protected" ` +
+	`fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">` +
+	`<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>`
 
 // navLink describes one top-nav entry.
 type navLink struct {

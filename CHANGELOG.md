@@ -40,6 +40,9 @@ All notable changes to demiplane are documented here. The format follows
   off the right edge.
 - On touch screens the permalink `#` shows beside section headings only, not
   beside the page title.
+- The lock on password-protected artifacts in the gallery and the home table
+  is an inline SVG, and the README drops its lock emoji, so neither shows a
+  missing-glyph box on a machine without an emoji font.
 
 ## [3.1.1] - 2026-10-29
 
