@@ -111,10 +111,11 @@ func (s *Server) handleDocsPage(w http.ResponseWriter, r *http.Request) {
 // stripLeadingHTML drops one raw HTML block (up to the first blank line) from
 // the top of a doc. README.md opens with a GitHub-only <p><picture> logo; the
 // markdown engine escapes raw HTML, so served as-is it would print the markup
-// as text above the H1. A doc that opens with markdown comes back unchanged.
+// as text above the H1. A doc that opens with markdown comes back unchanged,
+// including markdown that starts with "<", such as a <https://...> autolink.
 func stripLeadingHTML(src []byte) []byte {
 	rest := bytes.TrimLeft(bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n")), " \t\n")
-	if !bytes.HasPrefix(rest, []byte("<")) {
+	if !htmlBlockStart.Match(rest) {
 		return src
 	}
 	if loc := blankLine.FindIndex(rest); loc != nil {
@@ -122,6 +123,18 @@ func stripLeadingHTML(src []byte) []byte {
 	}
 	return nil // the doc is one HTML block: nothing to render
 }
+
+// htmlBlockStart matches a doc that opens with a complete HTML tag on its
+// first line (CommonMark's open and closing tag grammar), or a comment,
+// declaration, processing instruction or CDATA section. An autolink
+// (<https://...>, <me@example.com>) or stray "<" text fails it.
+var htmlBlockStart = regexp.MustCompile(`^(?:` +
+	`<[A-Za-z][A-Za-z0-9-]*` + // open tag name
+	`(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*` + // attribute name
+	`(?:[ \t]*=[ \t]*(?:[^ \t\n"'=<>\x60]+|'[^'\n]*'|"[^"\n]*"))?)*` + // value
+	`[ \t]*/?>` +
+	`|</[A-Za-z][A-Za-z0-9-]*[ \t]*>` +
+	`|<!--|<![A-Za-z]|<\?|<!\[CDATA\[)`)
 
 // blankLine ends a raw HTML block: a line holding only spaces or tabs.
 var blankLine = regexp.MustCompile(`\n[ \t]*\n`)

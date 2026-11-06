@@ -25,7 +25,8 @@ func TestDocsReadmeDropsRawHTML(t *testing.T) {
 }
 
 // TestStripLeadingHTML pins what the docs page strips: one leading raw HTML
-// block, and nothing when the doc opens with markdown.
+// block, and nothing when the doc opens with markdown, even markdown that
+// starts with "<" such as an autolink.
 func TestStripLeadingHTML(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
 		{"<p align=\"center\">\n  <img src=x>\n</p>\n\n# T\n", "# T\n"},
@@ -35,6 +36,20 @@ func TestStripLeadingHTML(t *testing.T) {
 		{"<p align=\"center\">\r\n  <img src=x>\r\n</p>\r\n\r\n# T\r\n", "# T\n"},
 		{"<p>\n</p>\n  \t\n# T\n", "# T\n"},
 		{"", ""},
+		{"<!-- note -->\n\n# T\n", "# T\n"},
+		{"</div>\n\n# T\n", "# T\n"},
+		{"<!DOCTYPE html>\n\n# T\n", "# T\n"},
+		{"<?xml version=\"1.0\"?>\n\n# T\n", "# T\n"},
+		{"<![CDATA[x]]>\n\n# T\n", "# T\n"},
+		{"<br/>\n\n# T\n", "# T\n"},
+		{"<div title=\"a < b\" hidden data-x='y' z=1>\nlogo\n</div>\n\n# T\n", "# T\n"},
+		// Markdown that opens with "<" is not an HTML block.
+		{"<hello = world>\n\n# T\n", "<hello = world>\n\n# T\n"},
+		{"<hello world\n\n# T\n", "<hello world\n\n# T\n"},
+		{"<https://example.com> is the home page.\n\n# T\n", "<https://example.com> is the home page.\n\n# T\n"},
+		{"<https://example.com>\nno blank line", "<https://example.com>\nno blank line"},
+		{"<me@example.com> wrote this.\n", "<me@example.com> wrote this.\n"},
+		{"< not a tag\n", "< not a tag\n"},
 	} {
 		if got := string(stripLeadingHTML([]byte(c.in))); got != c.want {
 			t.Errorf("stripLeadingHTML(%q) = %q, want %q", c.in, got, c.want)
