@@ -34,6 +34,8 @@ All notable changes to demiplane are documented here. The format follows
   a link back, for every error a listener returns: the control plane's 404,
   405 and 401, a missing site, a refused answer and the rest. Clients that do
   not ask for HTML (curl, agents, MCP) still get the plaintext reason.
+- The help, connect and gallery pages drop the em dashes from demiplane's own
+  copy, per the design rules.
 
 ## [3.1.1] - 2026-10-29
 

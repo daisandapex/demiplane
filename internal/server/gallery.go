@@ -96,7 +96,7 @@ func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
 			`<p>Publish your first page, then it shows up here. New to demiplane? ` +
 			`<a href="/connect">Connect your tools</a> to publish from your editor, ` +
 			`agent, or the command line.</p></div>`)
-		writeHTML(w, s.pageHTML("Gallery — demiplane", galleryNav(), b.String()))
+		writeHTML(w, s.pageHTML("Gallery · demiplane", galleryNav(), b.String()))
 		return
 	}
 
@@ -136,7 +136,7 @@ func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
 	}
 	b.WriteString(galleryScript)
 
-	writeHTML(w, s.pageHTML("Gallery — demiplane", galleryNav(), b.String()))
+	writeHTML(w, s.pageHTML("Gallery · demiplane", galleryNav(), b.String()))
 }
 
 // galleryCard renders one artifact as a slug-first card: the slug is the card,

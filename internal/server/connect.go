@@ -189,10 +189,10 @@ func mcpTile(name, where string) string {
 // dogfooding path behind it — not because the protocol says it ought to work.
 func harnessMatrix() string {
 	rows := []struct{ harness, method, verified string }{
-		{"Claude Code", "MCP (native tools) or capture hook", "Yes — tested and used daily"},
+		{"Claude Code", "MCP (native tools) or capture hook", "Yes, tested and used daily"},
 		{"Any MCP client", "MCP (standard stdio JSON-RPC server)", "Not yet verified"},
-		{"Aider", "shell /run + curl", "Yes — the curl path is tested"},
-		{"Any shell / CI", "curl or demiplane publish", "Yes — REST and CLI tests"},
+		{"Aider", "shell /run + curl", "Yes, the curl path is tested"},
+		{"Any shell / CI", "curl or demiplane publish", "Yes, REST and CLI tests"},
 	}
 	var b strings.Builder
 	b.WriteString(`<table><tr><th>Harness</th><th>How it connects</th><th>Verified</th></tr>`)
