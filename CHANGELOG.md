@@ -28,6 +28,8 @@ All notable changes to demiplane are documented here. The format follows
   tracked `DEMIPLANE` wordmark. The page starts with the document.
 - `/docs/readme` no longer prints the README's leading `<p
   align="center"><picture>` logo markup as escaped text above the title.
+- On a phone the top nav of the home, docs, gallery, help and connect pages
+  wraps onto its own rows instead of cutting off Gallery, Help and llms.txt.
 
 ## [3.1.1] - 2026-10-29
 

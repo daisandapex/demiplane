@@ -47,10 +47,12 @@ const chromeCSS = `
   letter-spacing:-0.012em;margin:.15rem 0 .7rem}
 .scount{font-family:var(--mono);font-size:.82rem;color:var(--muted)}
 header.top{border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5}
-header.top .wrap{display:flex;align-items:center;gap:1.25rem;height:3.4rem}
+header.top .wrap{display:flex;flex-wrap:wrap;align-items:center;column-gap:1.25rem;row-gap:.35rem;
+  min-height:3.4rem;padding-top:.5rem;padding-bottom:.5rem}
 .brand{font-family:var(--serif);font-weight:700;font-size:1.15rem;color:var(--ink)}
 .brand .dot{color:var(--accent)}
-header.top nav{margin-left:auto;display:flex;gap:1.1rem;font-size:.9rem}
+header.top nav{margin-left:auto;display:flex;flex-wrap:wrap;column-gap:1.1rem;row-gap:.25rem;font-size:.9rem}
+@media (max-width:40rem){header.top nav{margin-left:0;flex-basis:100%;column-gap:.9rem}}
 header.top nav a{color:var(--muted)}
 header.top nav a.active,header.top nav a:hover{color:var(--accent)}
 .ethos{display:inline-block;font-size:.92rem;color:var(--info-ink);background:var(--info-bg);
