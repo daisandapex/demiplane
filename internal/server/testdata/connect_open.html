@@ -130,10 +130,10 @@ tbody tr+tr td{border-top:1px solid var(--line)}
 .table-wrap:has(th:nth-child(4)):has(td[data-label]) :is(table,tbody,tr,td){display:block}
 .table-wrap:has(th:nth-child(4)):has(td[data-label]) tr{padding:.4rem 0}
 .table-wrap:has(th:nth-child(4)):has(td[data-label]) tbody tr+tr{border-top:1px solid var(--line)}
-.table-wrap:has(th:nth-child(4)):has(td[data-label]) td{position:relative;padding:.15rem .875rem .15rem 6rem;
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) td{display:flow-root;padding:.15rem .875rem .15rem 6rem;
   border-top:0}
-.table-wrap:has(th:nth-child(4)):has(td[data-label]) td::before{content:attr(data-label);position:absolute;
-  left:.875rem;width:4.75rem;color:var(--muted);font-weight:600;font-size:.75rem;overflow-wrap:anywhere}}
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) td::before{content:attr(data-label);float:left;
+  margin-left:-5.125rem;width:4.75rem;color:var(--muted);font-weight:600;font-size:.75rem;overflow-wrap:anywhere}}
 hr{border:0;width:5rem;height:1px;background:var(--line-strong);margin:2.375rem auto}
 img{max-width:100%;height:auto;display:block;margin:0 auto}
 @media (prefers-reduced-motion:reduce){a{transition:none}}

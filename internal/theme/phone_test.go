@@ -141,3 +141,18 @@ func TestShortCodeWrapsOnNarrowPhones(t *testing.T) {
 		t.Errorf("short code should wrap below 390px: {%s}", r)
 	}
 }
+
+// TestPhoneStackedTableLabelsInFlow: a stacked cell's label floats in the
+// cell's left padding instead of being positioned out of flow, so a header
+// that wraps to several lines makes its cell taller rather than overlapping
+// the next cell.
+func TestPhoneStackedTableLabelsInFlow(t *testing.T) {
+	const sel = ".table-wrap:has(th:nth-child(4)):has(td[data-label]) td"
+	if r := rule(contentCSS, sel); !strings.Contains(r, "display:flow-root") {
+		t.Errorf("a stacked cell must contain its floated label: {%s}", r)
+	}
+	r := rule(contentCSS, sel+"::before")
+	if !strings.Contains(r, "float:left") || !strings.Contains(r, "margin-left:-5.125rem") || strings.Contains(r, "position:absolute") {
+		t.Errorf("a stacked label must float in the cell's padding, in flow: {%s}", r)
+	}
+}
