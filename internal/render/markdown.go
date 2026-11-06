@@ -1605,16 +1605,18 @@ const docTail = `</body>
 </html>
 `
 
-// shortCode is the longest inline-code token, in escaped bytes, that is kept
-// on one line. A port, a flag or a query key ("?slug=reports") reads as one
-// word; a URL or a path longer than this may still break where it must.
-const shortCode = 30
+// shortCode is the longest inline-code span, in escaped bytes, that is kept
+// on one line. A port, a flag, a query key ("?slug=reports") or a short
+// command ("seat-land --check-authors") reads as one unit, and 40 monospace
+// characters still fit a phone's line; a URL or a longer command may break
+// where it must.
+const shortCode = 40
 
 // CodeOpen returns the opening tag for an inline code span holding the escaped
-// text esc: class "nw" (no wrap) for a short token without spaces, a bare
-// <code> otherwise.
+// text esc: class "nw" (no wrap) for a short single-line span, a bare <code>
+// otherwise.
 func CodeOpen(esc string) string {
-	if len(esc) <= shortCode && !strings.ContainsAny(esc, " \t\n") {
+	if len(esc) <= shortCode && !strings.ContainsAny(esc, "\t\n") {
 		return `<code class="nw">`
 	}
 	return "<code>"

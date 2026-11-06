@@ -77,3 +77,22 @@ func TestLinkStatesDiffer(t *testing.T) {
 		t.Errorf("hovered prose links should gain a wash: {%s}", r)
 	}
 }
+
+// TestCodeBlockScrollCue: a code block that scrolls sideways shows a soft
+// shadow at the hidden edge, covered again once that edge is reached.
+func TestCodeBlockScrollCue(t *testing.T) {
+	r := rule(contentCSS, "pre")
+	for _, want := range []string{"no-repeat local", "radial-gradient(farthest-side at 100% 50%,var(--shadow),transparent) right/.7rem 100% no-repeat scroll"} {
+		if !strings.Contains(r, want) {
+			t.Errorf("pre should carry a scroll cue (%q): {%s}", want, r)
+		}
+	}
+}
+
+// TestNavEntriesAvoidOrphans: a margin-nav entry that wraps never strands
+// one short word ("/") on its last line.
+func TestNavEntriesAvoidOrphans(t *testing.T) {
+	if !strings.Contains(frameCSS, "text-decoration:none;overflow-wrap:anywhere;text-wrap:pretty}") {
+		t.Error("margin-nav entries should wrap with text-wrap:pretty")
+	}
+}

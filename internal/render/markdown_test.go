@@ -909,8 +909,8 @@ func TestMarkdownCodeSpanProtectedFromEmphasis(t *testing.T) {
 	cases := map[string]string{
 		"`a_b_c`":                  "<code class=\"nw\">a_b_c</code>",
 		"`project_lms_pillars.md`": "<code class=\"nw\">project_lms_pillars.md</code>",
-		"`*not em*`":               "<code>*not em*</code>",
-		"`**not bold**`":           "<code>**not bold**</code>",
+		"`*not em*`":               "<code class=\"nw\">*not em*</code>",
+		"`**not bold**`":           "<code class=\"nw\">**not bold**</code>",
 	}
 	for src, want := range cases {
 		out := render(src)
@@ -1065,24 +1065,25 @@ func TestShortCodeKeepsTogether(t *testing.T) {
 		"?slug=reports":                  `<code class="nw">`,
 		strings.Repeat("x", shortCode):   `<code class="nw">`,
 		strings.Repeat("x", shortCode+1): "<code>",
-		"go test ./...":                  "<code>",
+		"seat-land --check-authors":      `<code class="nw">`,
+		"a\tb":                           "<code>",
 	} {
 		if got := CodeOpen(in); got != want {
 			t.Errorf("CodeOpen(%q) = %q, want %q", in, got, want)
 		}
 	}
 	for in, want := range map[string]string{
-		`Add <code>?slug=reports</code> now`:      `Add <code class="nw">?slug=reports</code> now`,
-		`<code>a long command with spaces</code>`: `<code>a long command with spaces</code>`,
-		`<code>x<b>y</b></code>`:                  `<code>x<b>y</b></code>`,
-		`<code class="nw">k</code>`:               `<code class="nw">k</code>`,
+		`Add <code>?slug=reports</code> now`:                         `Add <code class="nw">?slug=reports</code> now`,
+		`<code>a long command, with spaces, past forty bytes</code>`: `<code>a long command, with spaces, past forty bytes</code>`,
+		`<code>x<b>y</b></code>`:                                     `<code>x<b>y</b></code>`,
+		`<code class="nw">k</code>`:                                  `<code class="nw">k</code>`,
 	} {
 		if got := KeepShortCode(in); got != want {
 			t.Errorf("KeepShortCode(%q) = %q, want %q", in, got, want)
 		}
 	}
-	out := string(Markdown([]byte("Bind `127.0.0.1:8080` or run `go test ./...`.\n"), Options{}))
-	if !strings.Contains(out, `<code class="nw">127.0.0.1:8080</code>`) || !strings.Contains(out, "<code>go test ./...</code>") {
+	out := string(Markdown([]byte("Bind `127.0.0.1:8080` or run `go test -race -count=1 -tags reply,tls ./...`.\n"), Options{}))
+	if !strings.Contains(out, `<code class="nw">127.0.0.1:8080</code>`) || !strings.Contains(out, "<code>go test -race") {
 		t.Errorf("short token should keep together, spaced one not:\n%s", out)
 	}
 }

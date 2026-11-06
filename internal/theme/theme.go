@@ -249,6 +249,11 @@ code{font-family:var(--mono);font-size:.875em;line-height:1;
 :is(td,th) code{overflow-wrap:anywhere}
 :is(td,th) code.nw{white-space:normal}}
 pre{background:var(--code-bg);color:var(--code-ink);border:1px solid var(--code-border);
+  background:linear-gradient(to right,var(--code-bg) 40%,transparent) left/2rem 100% no-repeat local,
+  linear-gradient(to left,var(--code-bg) 40%,transparent) right/2rem 100% no-repeat local,
+  radial-gradient(farthest-side at 0 50%,var(--shadow),transparent) left/.7rem 100% no-repeat scroll,
+  radial-gradient(farthest-side at 100% 50%,var(--shadow),transparent) right/.7rem 100% no-repeat scroll,
+  var(--code-bg);
   border-radius:8px;padding:.875rem 1rem;margin:0 0 1.125em;overflow-x:auto;
   font-size:.8125rem;line-height:1.55;tab-size:2}
 pre code{background:none;border:0;color:inherit;padding:0;border-radius:0;font-size:1em;line-height:inherit}
@@ -321,7 +326,7 @@ const frameCSS = `
 .mnav ol{list-style:none;margin:0;padding:.2rem 0 .5rem}
 .mnav li{margin:0}
 .mnav a,.mnav [aria-current="page"]{display:block;padding:.22rem .5rem;margin-left:-.5rem;border-radius:6px;
-  color:var(--muted);text-decoration:none;overflow-wrap:anywhere}
+  color:var(--muted);text-decoration:none;overflow-wrap:anywhere;text-wrap:pretty}
 .mnav a:hover{color:var(--ink);background:var(--code-bg)}
 .mnav a[aria-current="true"],.mnav [aria-current="page"]{color:var(--ink);font-weight:600;background:var(--code-bg)}
 .outline .l3 a{padding-left:1.25rem}

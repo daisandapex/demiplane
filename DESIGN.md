@@ -162,7 +162,8 @@ Essay scale: 16px (`1rem`) serif body on 1.6 leading. Paragraphs and lists owe
 `1.5em` below, so the baseline step across a paragraph break is about 1.9x the
 line step (WCAG 2.2 SC 1.4.8 asks for at least 1.5x). Headings sit at least
 twice as far from the block above as from their own text. Inline code is a
-background-only chip (no border) at `line-height:1`, so it never widens a line. A short token (30 escaped bytes or fewer, no spaces: a port, a flag, `?slug=reports`) is
+background-only chip (no border) at `line-height:1`, so it never widens a line. A short span (40 escaped bytes or fewer on one line: a port, a flag, `?slug=reports`,
+`seat-land --check-authors`; 40 monospace characters still fit a phone's line) is
 tagged `class="nw"` and never splits; the renderer tags it, and the operator pages get the
 same tagging (`render.KeepShortCode`). A longer one breaks only where it must. On a phone a
 table cell lets any code break, so the cell can shrink. Headings are size-led at weight 700:
@@ -186,7 +187,9 @@ against each element's own font-size, so a larger heading got a wider centred
 box and hung left of the text. Tables and code blocks break out
 to the frame at every width (on a page under `--css`, to a centred
 `min(62rem, 100%)` over `60rem`) and scroll horizontally inside their own
-container (`.table-wrap` / `pre`), so the body never scrolls sideways
+container (`.table-wrap` / `pre`), so the body never scrolls sideways. A code block that
+scrolls shows a soft shadow at its hidden edge, which a covering gradient hides
+again once that edge is reached (`background-attachment: local` over `scroll`)
 (`overflow-x: clip` on `html, body` backstops it). Below `40rem` a table of four
 or more columns sets each row as a labelled stack: every body cell carries its
 header in `data-label`, the header row is visually hidden, and each cell shows
