@@ -108,36 +108,124 @@ func (s *Server) handleDocsPage(w http.ResponseWriter, r *http.Request) {
 	writeHTML(w, s.pageHTML(page.Title+" · demiplane", topNav(active), b.String()))
 }
 
-// stripLeadingHTML drops one raw HTML block (up to the first blank line) from
-// the top of a doc. README.md opens with a GitHub-only <p><picture> logo; the
-// markdown engine escapes raw HTML, so served as-is it would print the markup
-// as text above the H1. A doc that opens with markdown comes back unchanged,
-// including markdown that starts with "<", such as a <https://...> autolink.
+// stripLeadingHTML drops the raw HTML block a doc opens with, if it opens with
+// one. README.md starts with a GitHub-only <p><picture> logo; the markdown
+// engine escapes raw HTML, so served as-is it would print the markup as text
+// above the H1. A doc that opens with anything CommonMark does not treat as an
+// HTML block, such as a <https://...> autolink or an inline tag followed by
+// text, comes back unchanged.
 func stripLeadingHTML(src []byte) []byte {
-	rest := bytes.TrimLeft(bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n")), " \t\n")
-	if !htmlBlockStart.Match(rest) {
+	norm := bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
+	lines := bytes.SplitAfter(bytes.ReplaceAll(norm, []byte("\r"), []byte("\n")), []byte("\n"))
+	start := 0
+	for start < len(lines) && isBlankLine(lines[start]) {
+		start++
+	}
+	if start == len(lines) {
 		return src
 	}
-	if loc := blankLine.FindIndex(rest); loc != nil {
-		return bytes.TrimLeft(rest[loc[1]:], " \t\n")
+	end, ok := htmlBlockEnd(bytes.TrimSuffix(lines[start], []byte("\n")))
+	if !ok {
+		return src
 	}
-	return nil // the doc is one HTML block: nothing to render
+	next := start + 1
+	if end != nil {
+		// The line holding the end marker, the start line included, is the
+		// block's last line; with no such line the block runs to the end.
+		for next = start; next < len(lines) && !end.Match(asciiLower(lines[next])); next++ {
+		}
+		next++
+	} else {
+		for next < len(lines) && !isBlankLine(lines[next]) {
+			next++
+		}
+	}
+	for next < len(lines) && isBlankLine(lines[next]) {
+		next++
+	}
+	if next >= len(lines) {
+		return nil // the doc is one HTML block: nothing to render
+	}
+	return bytes.Join(lines[next:], nil)
 }
 
-// htmlBlockStart matches a doc that opens with a complete HTML tag on its
-// first line (CommonMark's open and closing tag grammar), or a comment,
-// declaration, processing instruction or CDATA section. An autolink
-// (<https://...>, <me@example.com>) or stray "<" text fails it.
-var htmlBlockStart = regexp.MustCompile(`^(?:` +
-	`<[A-Za-z][A-Za-z0-9-]*` + // open tag name
+// isBlankLine reports whether line holds only spaces or tabs.
+func isBlankLine(line []byte) bool {
+	return len(bytes.Trim(line, " \t\n")) == 0
+}
+
+// htmlBlockEnd reports whether line opens an HTML block under one of the seven
+// start conditions of CommonMark 0.31.2 §4.6 and returns the marker whose
+// line ends it. A nil marker means the block ends at a blank line (kinds 6
+// and 7). Kind 7 cannot interrupt a paragraph, which never matters here: the
+// line checked is the doc's first non-blank line.
+func htmlBlockEnd(line []byte) (end *regexp.Regexp, ok bool) {
+	lower := asciiLower(line)
+	for _, k := range htmlBlockKinds {
+		subject := line
+		if k.fold {
+			subject = lower
+		}
+		if k.start.Match(subject) {
+			return k.end, true
+		}
+	}
+	m := htmlTagLine.FindSubmatch(line)
+	if m == nil {
+		return nil, false
+	}
+	switch strings.ToLower(string(m[1]) + string(m[2])) {
+	case "pre", "script", "style", "textarea":
+		return nil, false
+	}
+	return nil, true
+}
+
+// asciiLower lowercases ASCII letters only. Tag names compare by ASCII case;
+// regexp's (?i) folds Unicode too, so "<\u017fcript>" would pass as <script>.
+func asciiLower(b []byte) []byte {
+	return bytes.Map(func(r rune) rune {
+		if 'A' <= r && r <= 'Z' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, b)
+}
+
+// htmlBlockKinds are CommonMark's HTML block kinds 1 to 6, in spec order. Each
+// start pattern allows the up to three spaces of indent a block may carry.
+// Kinds 1 and 6 match tag names in any ASCII case (fold): their patterns are
+// lowercase and see the line through asciiLower, as kind 1's end marker does.
+var htmlBlockKinds = []struct {
+	start, end *regexp.Regexp
+	fold       bool
+}{
+	{regexp.MustCompile(`^ {0,3}<(?:pre|script|style|textarea)(?:[ \t>]|$)`),
+		regexp.MustCompile(`</(?:pre|script|style|textarea)>`), true},
+	{regexp.MustCompile(`^ {0,3}<!--`), regexp.MustCompile(`-->`), false},
+	{regexp.MustCompile(`^ {0,3}<\?`), regexp.MustCompile(`\?>`), false},
+	{regexp.MustCompile(`^ {0,3}<![A-Za-z]`), regexp.MustCompile(`>`), false},
+	{regexp.MustCompile(`^ {0,3}<!\[CDATA\[`), regexp.MustCompile(`\]\]>`), false},
+	{regexp.MustCompile(`^ {0,3}</?(?:` +
+		`address|article|aside|base|basefont|blockquote|body|caption|center|` +
+		`col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|` +
+		`figure|footer|form|frame|frameset|h1|h2|h3|h4|h5|h6|head|header|hr|` +
+		`html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|` +
+		`optgroup|option|p|param|search|section|summary|table|tbody|td|` +
+		`tfoot|th|thead|title|tr|track|ul` +
+		`)(?:[ \t]|/?>|$)`), nil, true},
+}
+
+// htmlTagLine is kind 7: a line holding one complete open or closing tag
+// (CommonMark's tag grammar) and nothing else but spaces or tabs. The tag
+// name is captured so htmlBlockEnd can turn away the kind 1 names.
+var htmlTagLine = regexp.MustCompile(`^ {0,3}(?:` +
+	`<([A-Za-z][A-Za-z0-9-]*)` + // open tag name
 	`(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*` + // attribute name
 	`(?:[ \t]*=[ \t]*(?:[^ \t\n"'=<>\x60]+|'[^'\n]*'|"[^"\n]*"))?)*` + // value
 	`[ \t]*/?>` +
-	`|</[A-Za-z][A-Za-z0-9-]*[ \t]*>` +
-	`|<!--|<![A-Za-z]|<\?|<!\[CDATA\[)`)
-
-// blankLine ends a raw HTML block: a line holding only spaces or tabs.
-var blankLine = regexp.MustCompile(`\n[ \t]*\n`)
+	`|</([A-Za-z][A-Za-z0-9-]*)[ \t]*>` + // closing tag
+	`)[ \t]*$`)
 
 // writeHTML writes an HTML response.
 func writeHTML(w http.ResponseWriter, body string) {
