@@ -58,7 +58,7 @@ header.top nav a.active,header.top nav a:hover{color:var(--accent)}
 .ethos{display:inline-block;font-size:.92rem;color:var(--info-ink);background:var(--info-bg);
   border:1px solid var(--info-line);border-radius:999px;padding:.3rem .9rem;margin:.4rem 0 1rem}
 .badge{display:inline-block;font-family:var(--mono);font-size:.72rem;font-weight:700;
-  letter-spacing:.04em;padding:.15rem .5rem;border-radius:5px;color:oklch(0.985 0.004 95);vertical-align:middle}
+  letter-spacing:.04em;padding:.15rem .5rem;border-radius:5px;color:var(--on-badge);vertical-align:middle}
 .badge.post{background:var(--accent)}
 .badge.get{background:var(--navy)}
 .badge.delete{background:var(--danger)}

@@ -265,9 +265,9 @@ summary.rail-h::-webkit-details-marker{display:none}
 .outline li,.ftree li{margin:0}
 .outline a,.ftree a,.ftree [aria-current]{display:block;padding:.22rem .5rem;margin-left:-.5rem;border-radius:6px;
   color:var(--muted,oklch(0.462 0.011 78));text-decoration:none;overflow-wrap:anywhere}
-.outline a:hover,.ftree a:hover{color:var(--ink,oklch(0.237 0.009 75));background:var(--code-bg,oklch(0.955 0.008 88))}
+.outline a:hover,.ftree a:hover{color:var(--ink,oklch(0.237 0.009 75));background:var(--code-bg,oklch(0.953 0.010 87))}
 .outline a[aria-current="true"],.ftree [aria-current="page"]{color:var(--ink,oklch(0.237 0.009 75));font-weight:600;
-  background:var(--code-bg,oklch(0.955 0.008 88))}
+  background:var(--code-bg,oklch(0.953 0.010 87))}
 .outline .l3 a{padding-left:1.25rem}
 .fjs .outline .l3{display:none}
 .fjs .outline .l3.open{display:block}

@@ -47,6 +47,7 @@ Color strategy: **Restrained** (warm tinted neutrals + one accent, links only).
 | `--code-border` | `oklch(0.883 0.017 88)` | `oklch(0.342 0.015 85)` | code block hairline border (inline chips are background only) |
 | `--navy` | `oklch(0.420 0.085 245)` | `oklch(0.620 0.095 240)` | secondary accent (landing GET badge) |
 | `--danger` | `oklch(0.520 0.165 28)` | `oklch(0.700 0.150 28)` | destructive accent (DELETE badge) |
+| `--on-badge` | `oklch(0.985 0.004 95)` | `oklch(0.985 0.004 95)` | method-badge label text, every palette |
 | `--info-bg/-line/-ink` | blue-grey trio | blue-grey trio | landing ethos pill |
 | `--shadow` | `oklch(0.250 0.010 80 / 0.14)` | `oklch(0.100 0.008 80 / 0.45)` | scrolled-masthead shadow |
 | `--sel` | `oklch(0.909 0.025 43)` | `oklch(0.369 0.023 48)` | text selection |

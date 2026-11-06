@@ -62,7 +62,7 @@ const lightVars = `
   --muted:oklch(0.462 0.011 78); --line:oklch(0.910 0.013 87); --line-strong:oklch(0.714 0.018 85);
   --accent:oklch(0.445 0.122 23);
   --code-bg:oklch(0.953 0.010 87); --code-ink:oklch(0.261 0.010 89); --code-border:oklch(0.883 0.017 88);
-  --navy:oklch(0.420 0.085 245); --danger:oklch(0.520 0.165 28);
+  --navy:oklch(0.420 0.085 245); --danger:oklch(0.520 0.165 28); --on-badge:oklch(0.985 0.004 95);
   --info-bg:oklch(0.945 0.020 235); --info-line:oklch(0.895 0.030 235); --info-ink:oklch(0.420 0.080 245);
   --shadow:oklch(0.250 0.010 80 / 0.14); --sel:oklch(0.909 0.025 43);
   --tok-key:oklch(0.445 0.122 23); --tok-fn:oklch(0.470 0.077 253); --tok-str:oklch(0.470 0.072 150); --tok-com:oklch(0.462 0.011 78);`
@@ -79,7 +79,7 @@ const darkVars = `
   --muted:oklch(0.708 0.012 77); --line:oklch(0.330 0.010 81); --line-strong:oklch(0.461 0.015 87);
   --accent:oklch(0.749 0.082 29);
   --code-bg:oklch(0.205 0.008 85); --code-ink:oklch(0.871 0.015 85); --code-border:oklch(0.342 0.015 85);
-  --navy:oklch(0.620 0.095 240); --danger:oklch(0.700 0.150 28);
+  --navy:oklch(0.620 0.095 240); --danger:oklch(0.700 0.150 28); --on-badge:oklch(0.985 0.004 95);
   --info-bg:oklch(0.300 0.030 235); --info-line:oklch(0.400 0.040 235); --info-ink:oklch(0.780 0.060 235);
   --shadow:oklch(0.100 0.008 80 / 0.45); --sel:oklch(0.369 0.023 48);
   --tok-key:oklch(0.749 0.082 29); --tok-fn:oklch(0.746 0.055 253); --tok-str:oklch(0.766 0.062 140); --tok-com:oklch(0.708 0.012 77);`
@@ -115,7 +115,7 @@ const catppuccinVars = `
   --muted:oklch(0.751 0.040 274); --line:oklch(0.404 0.032 280); --line-strong:oklch(0.500 0.032 280);
   --accent:oklch(0.787 0.119 305);
   --code-bg:oklch(0.216 0.025 284); --code-ink:oklch(0.879 0.043 272); --code-border:oklch(0.324 0.032 282);
-  --navy:oklch(0.500 0.100 262); --danger:oklch(0.560 0.170 10);
+  --navy:oklch(0.500 0.100 262); --danger:oklch(0.560 0.170 10); --on-badge:oklch(0.985 0.004 95);
   --info-bg:oklch(0.320 0.045 268); --info-line:oklch(0.400 0.050 266); --info-ink:oklch(0.820 0.070 265);
   --shadow:oklch(0.120 0.020 284 / 0.5); --sel:oklch(0.477 0.034 279);
   --tok-key:oklch(0.787 0.119 305); --tok-fn:oklch(0.766 0.111 260); --tok-str:oklch(0.858 0.109 143); --tok-com:oklch(0.618 0.037 276);`
@@ -128,7 +128,7 @@ const draculaVars = `
   --muted:oklch(0.715 0.050 272); --line:oklch(0.400 0.030 278); --line-strong:oklch(0.500 0.030 278);
   --accent:oklch(0.742 0.149 302);
   --code-bg:oklch(0.255 0.019 280); --code-ink:oklch(0.918 0.012 280); --code-border:oklch(0.360 0.026 278);
-  --navy:oklch(0.500 0.100 252); --danger:oklch(0.560 0.170 25);
+  --navy:oklch(0.500 0.100 252); --danger:oklch(0.560 0.170 25); --on-badge:oklch(0.985 0.004 95);
   --info-bg:oklch(0.320 0.045 270); --info-line:oklch(0.400 0.050 270); --info-ink:oklch(0.820 0.070 270);
   --shadow:oklch(0.150 0.020 278 / 0.5); --sel:oklch(0.403 0.032 278);
   --tok-key:oklch(0.755 0.183 347); --tok-fn:oklch(0.871 0.220 148); --tok-str:oklch(0.955 0.134 113); --tok-com:oklch(0.612 0.073 273);`
@@ -141,7 +141,7 @@ const oneDarkVars = `
   --muted:oklch(0.705 0.022 264); --line:oklch(0.386 0.024 266); --line-strong:oklch(0.480 0.024 266);
   --accent:oklch(0.730 0.121 245);
   --code-bg:oklch(0.263 0.013 258); --code-ink:oklch(0.903 0.010 261); --code-border:oklch(0.335 0.018 262);
-  --navy:oklch(0.500 0.100 250); --danger:oklch(0.560 0.150 20);
+  --navy:oklch(0.500 0.100 250); --danger:oklch(0.560 0.150 20); --on-badge:oklch(0.985 0.004 95);
   --info-bg:oklch(0.320 0.040 255); --info-line:oklch(0.400 0.045 255); --info-ink:oklch(0.820 0.070 250);
   --shadow:oklch(0.140 0.015 264 / 0.5); --sel:oklch(0.386 0.024 266);
   --tok-key:oklch(0.694 0.164 318); --tok-fn:oklch(0.730 0.121 245); --tok-str:oklch(0.768 0.110 133); --tok-com:oklch(0.622 0.026 264);`

@@ -1553,18 +1553,19 @@ const mastheadCSS = `
 // sane @page margins. The selector list repeats the token override at the
 // specificity of the screen sheet's guarded dark blocks so printing from an
 // OS-dark machine still gets light ink. Ink is a warm near-black (not pure
-// #000) to keep the house's no-pure-black spirit and spare toner.
+// #000) and paper the --panel near-white (not pure #fff), per the house
+// refusal, and the near-black spares toner.
 const printCSS = `
 @media print{
   :root,:root:not([data-theme="light"]),:root[data-theme="dark"]{
-    --bg:#ffffff;--panel:#ffffff;--ink:#1a1815;--muted:#4c4944;
+    --bg:oklch(0.995 0.002 95);--panel:oklch(0.995 0.002 95);--ink:#1a1815;--muted:#4c4944;
     --line:#d6d2c9;--line-strong:#8f8a80;--accent:#6e2828;
     --code-bg:#f4f2ec;--code-ink:#1a1815;--code-border:#b9b4aa;
     --shadow:transparent;--sel:transparent;
     --tok-key:#6e2828;--tok-fn:#1c5474;--tok-str:#1f6b3b;--tok-com:#4c4944;
   }
   html{scroll-padding-top:0}
-  body{background:#ffffff;color:#1a1815;font-size:11pt;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  body{background:var(--bg);color:#1a1815;font-size:11pt;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   a{color:var(--accent);text-decoration:underline;text-decoration-color:currentColor;text-underline-offset:2px}
   .docbar{position:static;box-shadow:none;border-bottom:1px solid #d6d2c9}
   .themetoggle{display:none}

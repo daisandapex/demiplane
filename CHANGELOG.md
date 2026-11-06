@@ -46,6 +46,9 @@ All notable changes to demiplane are documented here. The format follows
 - Every page with chrome opens with a "Skip to content" link that appears on
   keyboard focus. Published pages have one banner landmark instead of two, and
   the site nav is labelled.
+- Colours outside the token set are gone: the method-badge label is the new
+  `--on-badge` token, the print sheet's paper is near-white instead of pure
+  `#ffffff`, and the F layout's `--code-bg` fallback matches the token.
 
 ## [3.1.1] - 2026-10-29
 

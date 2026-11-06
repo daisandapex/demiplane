@@ -366,11 +366,11 @@ func TestMarkdownPrintStylesheet(t *testing.T) {
 	}
 	printCSS := out[pi:]
 	for _, marker := range []string{
-		"--bg:#ffffff",              // forced light paper
-		".themetoggle{display:none", // interactive chrome hidden
-		".docbar{position:static",   // masthead unstuck
-		"white-space:pre-wrap",      // code wraps instead of clipping
-		"@page{margin:2cm}",         // page margins
+		"--bg:oklch(0.995 0.002 95)", // forced light paper, near-white
+		".themetoggle{display:none",  // interactive chrome hidden
+		".docbar{position:static",    // masthead unstuck
+		"white-space:pre-wrap",       // code wraps instead of clipping
+		"@page{margin:2cm}",          // page margins
 	} {
 		if !strings.Contains(printCSS, marker) {
 			t.Errorf("print sheet missing %q:\n%s", marker, printCSS)
