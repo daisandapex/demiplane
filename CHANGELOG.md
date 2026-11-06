@@ -26,6 +26,19 @@ All notable changes to demiplane are documented here. The format follows
   body sets its serif at Charter's x-height, so Linux and Android readers get a
   book face or a DejaVu page with the same measure.
 
+- The text measure widens to 33rem (about 65 characters per line). Title,
+  byline rule and toggle end at the text edge; the toggle stays level with
+  the byline's first line.
+- The series list names the current page by its title and siblings by what
+  sets their slugs apart ("Part 2"), not the raw slug.
+- Short inline code (40 bytes or fewer on one line: ports, flags, query keys,
+  short commands) never splits across lines.
+- Prose links show four distinct states: a hover wash, a quieter visited
+  oxblood, and the focus ring. The dark code slab sits above the page, and a
+  code block that scrolls sideways shows a shadow at its hidden edge.
+- Operator pages head the frame with their title, so on a phone the folded
+  navs follow it. The phone colophon fits one line.
+
 ### Security
 
 - The minimum Go version is now 1.26.10, up from 1.26.3. A binary built on

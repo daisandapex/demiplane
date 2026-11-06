@@ -245,14 +245,15 @@ code{font-family:var(--mono);font-size:.875em;line-height:1;
   color:var(--code-ink);border:0;padding:.1em .3em;border-radius:3px;
   -webkit-box-decoration-break:clone;box-decoration-break:clone;overflow-wrap:break-word}
 :not(pre)>code.nw{white-space:nowrap}
+:is(th,td) code{padding:.05em .22em}
 @media (max-width:40rem){
 :is(td,th) code{overflow-wrap:anywhere}
 :is(td,th) code.nw{white-space:normal}}
 pre{background:var(--code-bg);color:var(--code-ink);border:1px solid var(--code-border);
   background:linear-gradient(to right,var(--code-bg) 40%,transparent) left/2rem 100% no-repeat local,
   linear-gradient(to left,var(--code-bg) 40%,transparent) right/2rem 100% no-repeat local,
-  radial-gradient(farthest-side at 0 50%,var(--shadow),transparent) left/.7rem 100% no-repeat scroll,
-  radial-gradient(farthest-side at 100% 50%,var(--shadow),transparent) right/.7rem 100% no-repeat scroll,
+  radial-gradient(farthest-side at 0 50%,color-mix(in srgb,var(--ink) 22%,transparent),transparent) left/1rem 100% no-repeat scroll,
+  radial-gradient(farthest-side at 100% 50%,color-mix(in srgb,var(--ink) 22%,transparent),transparent) right/1rem 100% no-repeat scroll,
   var(--code-bg);
   border-radius:8px;padding:.875rem 1rem;margin:0 0 1.125em;overflow-x:auto;
   font-size:.8125rem;line-height:1.55;tab-size:2}
@@ -297,7 +298,7 @@ img{max-width:100%;height:auto;display:block;margin:0 auto}
 // on the first screen. The theme toggle is styled here because both kinds of
 // page carry it.
 const frameCSS = `
-:root{--measure:30rem;--wide:46rem;--side:13rem}
+:root{--measure:33rem;--wide:46rem;--side:13rem}
 .frame{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:"head" "seq" "toc" "body";
   padding:0 1.25rem}
 .frame>*{min-width:0;width:100%;max-width:var(--wide);justify-self:center}

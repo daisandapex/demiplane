@@ -608,7 +608,7 @@ func TestMarkdownLeadParagraph(t *testing.T) {
 	}
 	// Editorial measure is applied to the document column through the token.
 	for _, want := range []string{
-		":root{--measure:30rem}",
+		":root{--measure:33rem}",
 		"main.wrap>*{max-width:var(--measure);margin-inline:auto}",
 		".docbar>.wrap,.docfoot>.wrap{max-width:calc(var(--measure) + 2.5rem)",
 	} {

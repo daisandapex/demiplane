@@ -175,13 +175,13 @@ headers are muted weight-600, never uppercase. Uppercase tracking is not used
 anywhere: the byline is normal case, so author names keep their case. `text-wrap: pretty` on paragraphs,
 `balance` on headings.
 
-The measure is one root-relative token, `--measure: 30rem`, applied to every
+The measure is one root-relative token, `--measure: 33rem`, applied to every
 block child of the document column, so headings, paragraphs, lists, the lead and
 blockquotes share one left edge. The frame (`theme.FrameCSS()`) puts that column
 and a `--wide: 46rem` frame on one centred axis, on published and operator pages
 alike: tables and code break out to the frame, and the page title and byline
 hold to the measure, so a page has one left and one right edge for its text,
-its title, its byline rule and its toggle. It holds the body near 70 characters per line
+its title, its byline rule and its toggle. It holds the body near 65 characters per line
 (SC 1.4.8 caps it at 80). A `ch` measure is avoided on purpose: `ch` resolves
 against each element's own font-size, so a larger heading got a wider centred
 box and hung left of the text. Tables and code blocks break out
@@ -281,7 +281,9 @@ the last column.
 
 Home, `/docs`, `/docs/{page}`, `/help`, `/connect`, `/gallery` and the status
 pages wear the published pages' frame: the same measure, the same wide blocks,
-the same margin navs, the same light/dark contract and toggle.
+the same margin navs, the same light/dark contract and toggle. A page that opens
+with an h1 lifts it into the frame's head (`.dochead`), so it runs title, navs,
+text like a published page, and on a phone the folded navs follow the title.
 
 - **Site bar**: the name "demiplane" in the serif at body weight 700, ink, then
   the nav (sans, muted, the current page in ink weight 600 with

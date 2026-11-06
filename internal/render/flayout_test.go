@@ -188,7 +188,7 @@ func TestFNavsFoldOnNarrowScreens(t *testing.T) {
 func TestFOneAxis(t *testing.T) {
 	out := string(Markdown([]byte(fDoc), Options{Header: true}))
 	for _, want := range []string{
-		":root{--measure:30rem;--wide:46rem;",
+		":root{--measure:33rem;--wide:46rem;",
 		".doc>*{max-width:var(--measure);margin-inline:auto}",
 		".f main.wrap>pre,.f main.wrap>.table-wrap{max-width:100%}",
 		".dochead>*,.doc>h1{margin-left:max(0px,calc((100% - var(--measure)) / 2));margin-right:0}",

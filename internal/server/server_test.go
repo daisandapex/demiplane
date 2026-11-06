@@ -1388,3 +1388,29 @@ func TestOperatorPagesKeepShortCodeTogether(t *testing.T) {
 		t.Error("landing should keep ?slug=reports on one line")
 	}
 }
+
+// TestOperatorTitleHeadsTheFrame: an operator page lifts its h1 out of main
+// into the frame's head, ahead of the margin navs, the way a published page
+// does, so on a phone the folded navs follow the title.
+func TestOperatorTitleHeadsTheFrame(t *testing.T) {
+	for _, c := range []struct{ in, h1, rest string }{
+		{`<h1>Help</h1><p>x</p>`, `<h1>Help</h1>`, `<p>x</p>`},
+		{`<h1 id="a">A <a class="heading-anchor" href="#a">#</a></h1><h2>b</h2>`, `<h1 id="a">A <a class="heading-anchor" href="#a">#</a></h1>`, `<h2>b</h2>`},
+		{`<p>no title</p>`, ``, `<p>no title</p>`},
+		{`<h1>unclosed`, ``, `<h1>unclosed`},
+	} {
+		if h1, rest := splitTitle(c.in); h1 != c.h1 || rest != c.rest {
+			t.Errorf("splitTitle(%q) = %q, %q; want %q, %q", c.in, h1, rest, c.h1, c.rest)
+		}
+	}
+	ts := newTestServer(t, "")
+	_, body := get(t, ts.URL+"/help")
+	page := string(body)
+	head, nav, main := strings.Index(page, `<header class="dochead"><h1`), strings.Index(page, `<details class="mnav`), strings.Index(page, `<main id="dp-main"`)
+	if head < 0 || nav < 0 || main < 0 || !(head < nav && nav < main) {
+		t.Errorf("help should run title, navs, main; got head=%d nav=%d main=%d", head, nav, main)
+	}
+	if strings.Contains(page[main:], "<h1") {
+		t.Error("the title should no longer sit inside main")
+	}
+}

@@ -1512,7 +1512,7 @@ window.addEventListener('scroll',f,{passive:true});}
 // main.wrap, and the masthead and footer columns, share a single left edge. A
 // per-child ch value resolved against each element's own font-size: an h2 at
 // 1.5rem got a box 1.5x wider than a paragraph's and, being centred, hung far
-// left of the text column. 30rem holds the body near 70 characters of the
+// left of the text column. 33rem holds the body near 65 characters of the
 // serif at 1rem (WCAG 1.4.8 caps the measure at 80).
 //
 // Colors are theme tokens (with OKLCH fallbacks matching the current rojo
@@ -1525,7 +1525,7 @@ window.addEventListener('scroll',f,{passive:true});}
 // reading column there and wraps, so nothing here clips it. A --css page keeps
 // the plain masthead and adds mastheadCSS.
 const docChromeCSS = `
-:root{--measure:30rem}
+:root{--measure:33rem}
 .docbar>.wrap,.docfoot>.wrap{max-width:calc(var(--measure) + 2.5rem);padding:0 1.25rem}
 main.wrap{max-width:none;padding:2.6rem 1.25rem 5rem}
 main.wrap>*{max-width:var(--measure);margin-inline:auto}

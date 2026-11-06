@@ -82,7 +82,7 @@ func TestLinkStatesDiffer(t *testing.T) {
 // shadow at the hidden edge, covered again once that edge is reached.
 func TestCodeBlockScrollCue(t *testing.T) {
 	r := rule(contentCSS, "pre")
-	for _, want := range []string{"no-repeat local", "radial-gradient(farthest-side at 100% 50%,var(--shadow),transparent) right/.7rem 100% no-repeat scroll"} {
+	for _, want := range []string{"no-repeat local", "radial-gradient(farthest-side at 100% 50%,color-mix(in srgb,var(--ink) 22%,transparent),transparent) right/1rem 100% no-repeat scroll"} {
 		if !strings.Contains(r, want) {
 			t.Errorf("pre should carry a scroll cue (%q): {%s}", want, r)
 		}
@@ -94,5 +94,13 @@ func TestCodeBlockScrollCue(t *testing.T) {
 func TestNavEntriesAvoidOrphans(t *testing.T) {
 	if !strings.Contains(frameCSS, "text-decoration:none;overflow-wrap:anywhere;text-wrap:pretty}") {
 		t.Error("margin-nav entries should wrap with text-wrap:pretty")
+	}
+}
+
+// TestTableCodeChipsTighter: code chips in a table cell carry less padding
+// than in prose, so a cell of several chips stays calm.
+func TestTableCodeChipsTighter(t *testing.T) {
+	if r := rule(contentCSS, ":is(th,td) code"); !strings.Contains(r, "padding:.05em .22em") {
+		t.Errorf("table code chips should be tighter: {%s}", r)
 	}
 }

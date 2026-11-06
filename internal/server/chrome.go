@@ -73,6 +73,10 @@ const chromeCSS = `
 .sitebar>.brand+.themetoggle{margin-left:auto}
 .frame>main.doc{padding:2.75rem 0 4rem}
 @media (min-width:78.5rem){.sitehead+.frame>.mnav{margin-top:3rem}}
+.sitehead+.frame>.dochead{padding-top:2.75rem}
+.sitehead+.frame>.dochead>h1{max-width:var(--measure);margin-top:0;margin-bottom:.6rem}
+.frame>.dochead~main.doc{padding-top:.75rem}
+@media (min-width:78.5rem){.sitehead+.frame>.dochead~.mnav{margin-top:.75rem}}
 .ethos{display:block;font-size:1.0625rem;color:var(--ink);margin:0 auto 1.5em}
 .badge{display:inline-block;min-width:3.6rem;font:600 .72rem/1.5 var(--mono);letter-spacing:.04em;
   padding:.05rem .45rem;border-radius:5px;color:var(--ink);background:var(--code-bg);
@@ -191,7 +195,12 @@ func (s *Server) framePage(title string, nav []navLink, seq, toc, inner string) 
 		b.WriteString(render.ToggleButton(s.renderTheme))
 	}
 	b.WriteString("</div></header>\n")
-	b.WriteString("<div class=\"frame\">\n" + seq + toc)
+	title, inner = splitTitle(inner)
+	b.WriteString("<div class=\"frame\">\n")
+	if title != "" {
+		b.WriteString("<header class=\"dochead\">" + render.KeepShortCode(title) + "</header>\n")
+	}
+	b.WriteString(seq + toc)
 	b.WriteString("<main id=\"dp-main\" class=\"doc\">")
 	b.WriteString(render.KeepShortCode(inner))
 	b.WriteString("<footer class=\"colo\">Sealed by default, shared by choice.</footer>")
@@ -200,6 +209,21 @@ func (s *Server) framePage(title string, nav []navLink, seq, toc, inner string) 
 	b.WriteString(render.FrameScripts())
 	b.WriteString("</body></html>\n")
 	return b.String()
+}
+
+// splitTitle lifts a page's leading h1 out of inner, so an operator page heads
+// its frame with the title the way a published page does and, on a phone, the
+// folded navs come after the title rather than above it. A page that does not
+// open with an h1 is returned whole.
+func splitTitle(inner string) (h1, rest string) {
+	if !strings.HasPrefix(inner, "<h1") {
+		return "", inner
+	}
+	i := strings.Index(inner, "</h1>")
+	if i < 0 {
+		return "", inner
+	}
+	return inner[:i+len("</h1>")], inner[i+len("</h1>"):]
 }
 
 // topNav returns the standard nav with the given path marked active.
