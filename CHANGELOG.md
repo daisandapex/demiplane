@@ -43,6 +43,9 @@ All notable changes to demiplane are documented here. The format follows
 - The lock on password-protected artifacts in the gallery and the home table
   is an inline SVG, and the README drops its lock emoji, so neither shows a
   missing-glyph box on a machine without an emoji font.
+- Every page with chrome opens with a "Skip to content" link that appears on
+  keyboard focus. Published pages have one banner landmark instead of two, and
+  the site nav is labelled.
 
 ## [3.1.1] - 2026-10-29
 

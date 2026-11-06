@@ -134,11 +134,12 @@ func treeHTML(st *state, slug string, fam []string, base string) (string, error)
 
 // topbar is the one-row sticky bar of an F page: the tree button (series pages
 // only) and the theme toggle at the right. The page opens with the document, so
-// the bar carries no wordmark. The title is not here; it heads the reading
+// the bar carries no wordmark. It is a div, not a header: the title's dochead is
+// the page's one banner landmark, and the skip link comes first. The title is not here; it heads the reading
 // column so it can wrap.
 func topbar(serverTheme string, toggle, tree bool) string {
 	var b strings.Builder
-	b.WriteString(`<header class="docbar"><div class="wrap"><div class="tools">`)
+	b.WriteString(skipLink + `<div class="docbar"><div class="wrap"><div class="tools">`)
 	if tree {
 		b.WriteString(`<button class="treebtn" type="button" aria-controls="ftree" aria-expanded="false" hidden ` +
 			`aria-label="Show or hide the series list" title="Series list ([)">` + treeSVG + `</button>`)
@@ -152,7 +153,7 @@ func topbar(serverTheme string, toggle, tree bool) string {
 			`aria-label="Toggle light or dark theme" title="Toggle theme">` +
 			sunSVG + moonSVG + `</button>`)
 	}
-	b.WriteString("</div></div></header>\n")
+	b.WriteString("</div></div></div>\n")
 	return b.String()
 }
 

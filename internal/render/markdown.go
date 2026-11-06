@@ -299,7 +299,11 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 	case opts.Header:
 		pg.add(masthead(title, themeName, toggle))
 	}
-	pg.add("<main class=\"wrap\">\n")
+	if opts.Header {
+		pg.add(`<main class="wrap" id="` + mainID + "\">\n")
+	} else {
+		pg.add("<main class=\"wrap\">\n")
+	}
 	pg.keep(metaHTML)
 	pg.keep(body.String())
 	if opts.ReplySlug != "" {
@@ -421,6 +425,14 @@ func firstH1(st *state, l *lines, from int) (titleHTML string, line int, err err
 	return "", -1, nil
 }
 
+// mainID is the masthead page's main column id, the skip link's target. The
+// slugger reserves it, so no heading can take it.
+const mainID = "dp-main"
+
+// skipLink opens every masthead page so a keyboard reader can jump past the
+// bar to the text.
+const skipLink = `<a class="skip" href="#` + mainID + `">Skip to content</a>` + "\n"
+
 // masthead renders the plain sticky title bar a --css page keeps in place of
 // the F top bar: the document title set as the page's single display-serif H1
 // (no wordmark above it), and, when toggle is set, the
@@ -429,7 +441,7 @@ func firstH1(st *state, l *lines, from int) (titleHTML string, line int, err err
 // parameter keeps the two bars' signatures alike.
 func masthead(titleHTML, serverTheme string, toggle bool) string {
 	var b strings.Builder
-	b.WriteString(`<header class="docbar"><div class="wrap"><div class="masthead">`)
+	b.WriteString(skipLink + `<header class="docbar"><div class="wrap"><div class="masthead">`)
 	b.WriteString(`<h1 class="doctitle">` + titleHTML + `</h1>`)
 	b.WriteString(`</div>`)
 	if toggle {
@@ -512,7 +524,7 @@ type slugger struct {
 }
 
 func newSlugger() slugger {
-	return slugger{used: map[string]bool{}, next: map[string]int{}}
+	return slugger{used: map[string]bool{mainID: true}, next: map[string]int{}}
 }
 
 func (sg slugger) unique(text string) string {
@@ -1519,6 +1531,10 @@ html:not([data-theme="light"]) .themetoggle .i-moon{display:block}}
 // relaxes to a two-line clamp (demiplane-ycd). The full title is always in
 // <head><title>.
 const mastheadCSS = `
+.skip{position:absolute;left:1rem;top:-4rem;z-index:20;padding:.5rem .8rem;border-radius:6px;
+  background:var(--panel,oklch(0.995 0.002 95));color:var(--accent,oklch(0.445 0.122 23));
+  border:1px solid var(--line-strong,oklch(0.714 0.018 85));font:600 .875rem/1.4 var(--sans,system-ui,sans-serif)}
+.skip:focus{top:.75rem}
 .docbar .masthead{display:flex;flex-direction:column;gap:.22rem;min-width:0}
 .docbar .doctitle{font-family:var(--serif);font-size:1.5rem;font-weight:700;margin:0;
   line-height:1.3;letter-spacing:-.02em;border:none;padding:0 0 .14em;color:var(--ink,oklch(0.237 0.009 75));

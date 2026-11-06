@@ -201,6 +201,9 @@ a{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;
   transition:text-decoration-color .2s cubic-bezier(.22,1,.36,1)}
 a:hover,a:active{text-decoration-thickness:2px;text-decoration-color:var(--accent)}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.skip{position:absolute;left:1rem;top:-4rem;z-index:20;padding:.5rem .8rem;border-radius:6px;
+  background:var(--panel);color:var(--accent);border:1px solid var(--line-strong);font:600 .875rem/1.4 var(--sans)}
+.skip:focus{top:.75rem}
 h1,h2,h3,h4,h5,h6{font-family:var(--serif);font-weight:700;color:var(--ink);
   line-height:1.15;text-wrap:balance}
 h1{font-size:2.125rem;letter-spacing:-.02em;margin:.3em 0 .35em}

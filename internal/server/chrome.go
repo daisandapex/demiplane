@@ -117,8 +117,9 @@ func (s *Server) pageHTML(title string, nav []navLink, inner string) string {
 	fmt.Fprintf(&b, "<title>%s</title>\n", html.EscapeString(title))
 	b.WriteString(faviconChromeLinks)
 	b.WriteString("<style>" + s.chromeStyle() + "</style>\n</head>\n<body>\n")
+	b.WriteString("<a class=\"skip\" href=\"#dp-main\">Skip to content</a>\n")
 	b.WriteString("<header class=\"top\"><div class=\"wrap\">")
-	b.WriteString("<a class=\"brand\" href=\"/\">demiplane<span class=\"dot\">.</span></a><nav>")
+	b.WriteString("<a class=\"brand\" href=\"/\">demiplane<span class=\"dot\">.</span></a><nav aria-label=\"Site\">")
 	for _, n := range nav {
 		cls := ""
 		if n.active {
@@ -127,7 +128,7 @@ func (s *Server) pageHTML(title string, nav []navLink, inner string) string {
 		fmt.Fprintf(&b, "<a href=\"%s\"%s>%s</a>", html.EscapeString(n.href), cls, html.EscapeString(n.label))
 	}
 	b.WriteString("</nav></div></header>\n")
-	b.WriteString("<main><div class=\"wrap\">")
+	b.WriteString("<main id=\"dp-main\"><div class=\"wrap\">")
 	b.WriteString(inner)
 	b.WriteString("</div></main>\n")
 	b.WriteString("<footer><div class=\"wrap\"><span class=\"mark\">demiplane</span>")
