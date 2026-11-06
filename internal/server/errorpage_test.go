@@ -4,8 +4,10 @@
 package server
 
 import (
+	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -132,5 +134,38 @@ func TestThemedErrorEdges(t *testing.T) {
 		if got := acceptsHTML(accept); got != want {
 			t.Errorf("acceptsHTML(%q) = %v, want %v", accept, got, want)
 		}
+	}
+}
+
+// failFlusher is a writer whose flush fails.
+type failFlusher struct{ *httptest.ResponseRecorder }
+
+var errFlush = errors.New("flush failed")
+
+func (failFlusher) FlushError() error { return errFlush }
+
+// TestErrorWriterSemantics: headers changed after the error was written do
+// not reach the themed page, and a failed flush still reports its error.
+func TestErrorWriterSemantics(t *testing.T) {
+	s := &Server{}
+	h := s.themedErrors(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "denied", http.StatusForbidden)
+		w.Header().Set("X-Late", "1")
+	}))
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Accept", "text/html")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || rec.Header().Get("X-Late") != "" {
+		t.Errorf("late header leaked or status lost: %d %v", rec.Code, rec.Header())
+	}
+
+	var got error
+	h = s.themedErrors(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = http.NewResponseController(w).Flush()
+	}))
+	h.ServeHTTP(failFlusher{httptest.NewRecorder()}, httptest.NewRequest("GET", "/", nil))
+	if !errors.Is(got, errFlush) {
+		t.Errorf("flush error = %v, want %v", got, errFlush)
 	}
 }

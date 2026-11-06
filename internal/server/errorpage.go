@@ -27,7 +27,13 @@ func (s *Server) themedErrors(next http.Handler) http.Handler {
 		ew := &errorPageWriter{ResponseWriter: w, html: acceptsHTML(r.Header.Get("Accept"))}
 		next.ServeHTTP(ew, r)
 		if ew.code != 0 {
+			// Headers set after the error was written would have been
+			// ignored without this wrapper; restore the committed set.
 			h := w.Header()
+			clear(h)
+			for k, v := range ew.held {
+				h[k] = v
+			}
 			h.Set("Content-Type", "text/html; charset=utf-8")
 			// Headers that describe the body the handler meant to send do
 			// not describe this page: an attachment's disposition would
@@ -66,7 +72,8 @@ func acceptsHTML(accept string) bool {
 // its body depends on it. Every other response passes through untouched.
 type errorPageWriter struct {
 	http.ResponseWriter
-	html   bool // the client accepts text/html
+	html   bool        // the client accepts text/html
+	held   http.Header // the headers as they stood when the error was held
 	wrote  bool
 	code   int // set when the response is held back
 	reason strings.Builder
@@ -85,6 +92,7 @@ func (e *errorPageWriter) WriteHeader(code int) {
 		e.Header().Add("Vary", "Accept")
 		if e.html {
 			e.code = code
+			e.held = e.Header().Clone()
 			return
 		}
 	}
@@ -106,13 +114,19 @@ func (e *errorPageWriter) Write(b []byte) (int, error) {
 
 // Flush commits an implicit 200 like net/http does, so a later error status
 // cannot be held back after the headers went out.
-func (e *errorPageWriter) Flush() {
+func (e *errorPageWriter) Flush() { _ = e.FlushError() }
+
+// FlushError is Flush that reports the underlying writer's error, which
+// http.ResponseController prefers, so a streaming handler still sees a
+// failed flush.
+func (e *errorPageWriter) FlushError() error {
 	if !e.wrote {
 		e.WriteHeader(http.StatusOK)
 	}
-	if e.code == 0 {
-		_ = http.NewResponseController(e.ResponseWriter).Flush()
+	if e.code != 0 {
+		return nil
 	}
+	return http.NewResponseController(e.ResponseWriter).Flush()
 }
 
 // Unwrap lets http.ResponseController reach the underlying writer.
