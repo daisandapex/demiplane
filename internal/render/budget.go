@@ -258,10 +258,6 @@ func (o *out) WriteString(s string) {
 func (o *out) Len() int       { return o.b.Len() }
 func (o *out) String() string { return o.b.String() }
 
-// keep appends s, which an earlier out already charged, without charging it
-// again (the frontmatter moving into the byline).
-func (o *out) keep(s string) { o.b.WriteString(s) }
-
 // output fails once n bytes exceed the output cap.
 func (st *state) output(n int) error {
 	if n > st.lim.MaxOutputBytes {

@@ -296,8 +296,13 @@ func TestRerenderReplaysPublishDate(t *testing.T) {
 	}
 
 	_, body := get(t, ts.URL+"/dated")
-	if !strings.Contains(string(body), ">2020-01-02</time>") {
-		t.Errorf("rebaked page did not replay the original publish date:\n%s", body)
+	for _, want := range []string{
+		`<time datetime="2020-01-02" title="Published">2020-01-02</time>`, // colophon
+		`<time class="tstamp" datetime="2020-01-02">2020-01-02</time>`,    // byline
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("rebaked page did not replay the original publish date as %s:\n%s", want, body)
+		}
 	}
 }
 
