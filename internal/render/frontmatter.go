@@ -217,7 +217,7 @@ el.textContent=utc+' · '+loc;
 })();</script>
 `
 
-// metaHeadCSS styles the meta-header as the document byline: a letterspaced
+// metaHeadCSS styles the meta-header block a --css or headerless page keeps: a letterspaced
 // small sans over a closing hairline (the approved design's .meta grammar),
 // then a definition-list of muted labels and body-ink values. The accent stays
 // out of it (links only).

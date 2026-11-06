@@ -25,7 +25,7 @@ to 0.025), so the paper reads as stock, not screen grey. There is no pure black
 or white anywhere: the card surface stops just short of white (`--panel`
 L 0.995) and the darkest ink keeps a trace of warmth. The accent (an oxblood
 red, h ~ 23 to 29, a dusty terracotta on the dark face) is spent on links and
-the keyboard focus ring only; headings, list markers, the kicker, and inline
+the keyboard focus ring only; headings, list markers and inline
 code are all ink or muted. Link hover deepens the underline (1px to 2px, tint
 to full accent), not the color, so there is no second accent token.
 

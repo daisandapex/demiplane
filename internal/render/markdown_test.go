@@ -1087,3 +1087,18 @@ func TestShortCodeKeepsTogether(t *testing.T) {
 		t.Errorf("short token should keep together, spaced one not:\n%s", out)
 	}
 }
+
+// TestTableDataLabelEscapes: a column header carrying a quote, markup or an
+// ampersand reaches data-label as escaped plain text, so it cannot close the
+// attribute or open an element.
+func TestTableDataLabelEscapes(t *testing.T) {
+	src := "| a\"b <i>x</i> & `c` | d |\n|---|---|\n| 1 | 2 |\n"
+	out := string(Markdown([]byte(src), Options{}))
+	want := `<td data-label="a&#34;b &lt;i&gt;x&lt;/i&gt; &amp; c">1</td>`
+	if !strings.Contains(out, want) {
+		t.Errorf("data-label not escaped plain text, want %s in:\n%s", want, out)
+	}
+	if strings.Contains(out, "<i>") {
+		t.Errorf("header markup reached the page:\n%s", out)
+	}
+}

@@ -21,7 +21,11 @@ func regexInline(s string) string {
 	var spans []string
 	s = reCode.ReplaceAllStringFunc(s, func(m string) string {
 		c := reCode.FindStringSubmatch(m)[1]
-		spans = append(spans, CodeOpen(c)+c+"</code>")
+		open := "<code>"
+		if len(c) <= 40 && !strings.ContainsAny(c, "\t\n") {
+			open = `<code class="nw">`
+		}
+		spans = append(spans, open+c+"</code>")
 		return codeSentinel + strconv.Itoa(len(spans)-1) + codeSentinel
 	})
 	s = reLink.ReplaceAllStringFunc(s, func(match string) string {

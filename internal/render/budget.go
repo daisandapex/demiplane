@@ -17,7 +17,7 @@ import (
 // page. The render therefore keeps two kinds of bound:
 //
 //   - One output budget (MaxOutputBytes). Every byte the render produces, in
-//     the body, the meta-header, the rail, the outline and the page chrome, is
+//     the body, the byline, the outline and the page chrome, is
 //     written through an out (below), which charges it to the budget before
 //     appending it and fails, sticky, once the budget would be exceeded. Text
 //     that is built before it is written (a paragraph, a code block, a table
@@ -70,7 +70,7 @@ const (
 //
 // The output default sits above the worst ordinary expansion measured for an
 // 8 MiB input (TestDefaultOutputCapFitsMaxInput, full chrome): the README as
-// prose renders at 1.68x its source (14.1 MB) and highlighted Go at 1.84x
+// prose renders at 1.65x its source (14.1 MB) and highlighted Go at 1.84x
 // (15.4 MB). 32 MiB leaves about twice that for denser markup and escapes,
 // and still bounds the transient copies a render makes of its output.
 //
@@ -171,7 +171,7 @@ type state struct {
 	headings int
 	// lead tags the body's first block, when it is a paragraph, as the lead;
 	// codeFirst tags a top-level paragraph that opens with inline code (the F
-	// layout hangs its chip); outline collects h2/h3 entries for the rail.
+	// layout hangs its chip); outline collects h2/h3 entries for the contents nav.
 	lead, codeFirst, collectOutline bool
 	blocks                          int // top-level blocks written so far
 	outline                         []outlineItem
@@ -240,7 +240,7 @@ func (st *state) limit(name string, max int) error {
 // out is a budgeted output buffer. Every write is charged to the render's
 // one output budget before it is appended; a write that does not fit is
 // dropped and the render's error is set, so a buffer never holds more than
-// the budget allows. A render may keep several (body, meta-header, rail);
+// the budget allows. A render may keep several (body, byline, contents);
 // they share the budget.
 type out struct {
 	st *state
@@ -259,7 +259,7 @@ func (o *out) Len() int       { return o.b.Len() }
 func (o *out) String() string { return o.b.String() }
 
 // keep appends s, which an earlier out already charged, without charging it
-// again (the meta-header moving into the rail).
+// again (the frontmatter moving into the byline).
 func (o *out) keep(s string) { o.b.WriteString(s) }
 
 // output fails once n bytes exceed the output cap.
