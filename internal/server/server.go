@@ -1295,11 +1295,8 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	base := s.requestBase(r)
 
 	var b strings.Builder
-	b.WriteString(`<span class="kicker">Self-hosted publishing</span>`)
-	b.WriteString(`<h1>demiplane</h1>`)
-	b.WriteString(`<p class="tagline">Your private publishing plane.</p>`)
-	b.WriteString(`<span class="ethos">Sealed by default, shared by choice.</span>`)
-	b.WriteString(`<p>POST a file, get a URL, fetch it back, over your own network. ` +
+	b.WriteString(`<h1>Your private publishing plane</h1>`)
+	b.WriteString(`<p class="ethos">POST a file, get a URL, fetch it back, over your own network. ` +
 		`The honest inverse of public paste/host services.</p>`)
 
 	b.WriteString(`<h2>Publish your first page</h2>`)
@@ -1324,7 +1321,7 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	if s.authToken != "" {
 		authState = "bearer token required for write/list"
 	}
-	fmt.Fprintf(&b, `<p class="kicker">This instance</p><p>auth: %s</p>`, html.EscapeString(authState))
+	fmt.Fprintf(&b, `<h2>This instance</h2><p>Auth: %s.</p>`, html.EscapeString(authState))
 	if s.browse {
 		b.WriteString(s.artifactTable(r))
 	}

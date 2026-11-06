@@ -8,7 +8,7 @@ import (
 	"net/http"
 
 	demiplane "github.com/daisandapex/demiplane/v3"
-	"github.com/daisandapex/demiplane/v3/internal/theme"
+	"github.com/daisandapex/demiplane/v3/internal/render"
 )
 
 // notfound.go gives the CONTENT origin (where every published/bookmarked view
@@ -31,13 +31,14 @@ func (s *Server) serveContentNotFound(w http.ResponseWriter, r *http.Request) {
 }
 
 // notFoundHTML builds the self-contained themed 404 document. It uses the
-// configured render theme (the default house style when unset) as a single fixed
-// palette (no toggle: a 404 needs no chrome script). The "back to the index" link
+// operator pages' stylesheet, light/dark contract and toggle, under a site bar
+// that holds only the name (linking to the index) and the toggle. The "back to the index" link
 // targets the operator-advertised base URL when configured (the control plane /
 // landing lives on a different origin than this content plane), else the origin
 // root as a best-effort fallback.
 func (s *Server) notFoundHTML() string {
-	return s.statusPage("Not found", `<h1 class="nf-h">This document doesn't exist or has expired</h1>
+	return s.statusPage("Not found", `<p class="nf-code">404 · Not Found</p>
+<h1 class="nf-h">This document doesn't exist or has expired</h1>
 <p class="nf-p">The link may be mistyped, or the artifact reached its expiry and was
 removed. Nothing here is stored forever by design.</p>
 `)
@@ -47,36 +48,37 @@ removed. Nothing here is stored forever by design.</p>
 // self-contained themed status document shared by the 404 and the error pages
 // (errorpage.go), with title in <head> and the link back to the index.
 func (s *Server) statusPage(title, inner string) string {
-	css := theme.CSS(s.renderTheme)
-	initial := s.renderTheme
-	if initial == "" {
-		initial = theme.Default
-	}
 	index := s.baseURL
 	if index == "" {
 		index = "/"
 	}
+	tag := `<html lang="en">`
+	if s.renderTheme != "" {
+		tag = `<html lang="en" data-theme="` + html.EscapeString(s.renderTheme) + `">`
+	}
+	head, foot, tools := "", "", ""
+	if s.chromeToggle() {
+		head = render.ThemeInitScript() + "\n"
+		foot = render.FrameScripts()
+		tools = render.ToggleButton(s.renderTheme)
+	}
 	return `<!DOCTYPE html>
-<html lang="en" data-theme="` + html.EscapeString(initial) + `">
+` + tag + `
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>` + html.EscapeString(title) + ` · demiplane</title>
 <link rel="icon" type="image/svg+xml" href="` + demiplane.FaviconDataURI + `">
-<style>` + css + `
-main.wrap{max-width:40rem;padding-top:4rem}
-.nf-code{font-family:var(--sans);font-size:.85rem;color:var(--muted);margin:0}
-.nf-h{font-family:var(--serif);font-size:2rem;font-weight:600;color:var(--ink);
-  line-height:1.2;letter-spacing:-.012em;margin:.4rem 0 .6rem}
-.nf-p{color:var(--muted);margin:0 0 1.4em}
-.nf-back{font-weight:600}
-</style>
-</head>
+<style>` + s.chromeStyle() + `</style>
+` + head + `</head>
 <body>
-<main class="wrap">
+<header class="sitehead"><div class="sitebar"><a class="brand" href="` + html.EscapeString(index) + `">demiplane</a>` + tools + `</div></header>
+<div class="frame">
+<main class="doc">
 ` + inner + `<p><a class="nf-back" href="` + html.EscapeString(index) + `">Back to the index &rarr;</a></p>
 </main>
-</body>
+</div>
+` + foot + `</body>
 </html>
 `
 }

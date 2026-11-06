@@ -43,7 +43,7 @@ func TestComputeSeries(t *testing.T) {
 }
 
 // TestColophonSeriesRendering pins the mock's nav row for a mid-series artifact:
-// muted previous, position, accented next, and the muted wordmark, with sibling
+// muted previous, position and accented next (no wordmark), with sibling
 // links minted against the content base, plus the meta row.
 func TestColophonSeriesRendering(t *testing.T) {
 	pub := time.Date(2026, 7, 15, 9, 0, 0, 0, time.UTC)
@@ -60,16 +60,18 @@ func TestColophonSeriesRendering(t *testing.T) {
 		`<a class="prev" href="https://c.example/dispatch-07">`,
 		`<span class="pos">2 of 3</span>`,
 		`<a class="next" href="https://c.example/dispatch-09">`,
-		`<span class="mark">demiplane</span>`,
-		`published 2026-07-15`,
-		`<a href="https://demiplane.example/gallery">all artifacts`,
+		`<time datetime="2026-07-15" title="Published">2026-07-15</time>`,
+		`<a href="https://demiplane.example/gallery">All artifacts`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("colophon missing %q\n%s", want, out)
 		}
 	}
 	// The token colors and colophon styling are wired in.
-	for _, css := range []string{"--tok-key", ".colo .nav a.next", ".colo .mark"} {
+	if strings.Contains(out, `<span class="mark">`) {
+		t.Errorf("the series row must not carry a wordmark:\n%s", out)
+	}
+	for _, css := range []string{"--tok-key", ".colo .nav a.next", ".colo .meta{"} {
 		if !strings.Contains(out, css) {
 			t.Errorf("colophon output missing CSS %q", css)
 		}
@@ -93,7 +95,7 @@ func TestColophonSingletonNoNav(t *testing.T) {
 	if strings.Contains(out, `class="nav"`) || strings.Contains(out, `class="prev"`) || strings.Contains(out, `class="next"`) {
 		t.Errorf("singleton colophon must not render a nav row:\n%s", out)
 	}
-	if !strings.Contains(out, `<div class="meta">`) || !strings.Contains(out, "published 2026-07-15") {
+	if !strings.Contains(out, `<div class="meta">`) || !strings.Contains(out, ">2026-07-15</time>") {
 		t.Errorf("singleton colophon must still render the meta row:\n%s", out)
 	}
 }

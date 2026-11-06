@@ -8,20 +8,24 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/daisandapex/demiplane/v3/internal/theme"
 )
 
-// The F layout is the masthead page's structure: a one-row top bar, an optional
-// series tree on the left, the reading column (title, then body), and a right
-// rail carrying the frontmatter facts and an outline of the page. It is the
-// single-page form of the KB's F layout. Palettes are untouched: F is layout
-// only, so every --theme value and the light/dark contract work as before.
+// The F layout is the masthead page's structure. Everything hangs on one
+// centred axis (theme.FrameCSS): the text column holds to --measure, tables
+// and code break out to --wide around the same centre, and the title and the
+// byline start at the text's left edge and may run to the wide edge. The page
+// opens with the document: the title, then one byline line (date, author,
+// status, tags, read time) with the theme toggle at its end, then the text.
+// There is no top bar.
 //
-// The reading column keeps one left edge: the title, every heading and every
-// text block start at the column edge and stop at --measure; code and tables
-// may use the whole column. The tree starts closed below 1410 px and `[`
-// toggles it, the choice stored in localStorage and applied in <head> before
-// paint, so it holds on every page. Below 51.25rem the layout is one column
-// with the rail under the title.
+// Two optional margin navs sit outside the wide frame on a wide screen and
+// fold to a one-line disclosure under the byline on a narrow one: the series
+// list on the left (a series of two or more), the contents on the right (three
+// or more h2 sections). Palettes are untouched: the layout is CSS only, so
+// every --theme value and the light/dark contract work as before.
 
 type outlineItem struct {
 	level int
@@ -29,54 +33,51 @@ type outlineItem struct {
 	text  string // plain text, entities still escaped
 }
 
-// railHTML renders the right rail: the facts (the frontmatter meta-header, when
-// there is one) above the outline. An outline of fewer than two headings is
-// not worth a rail; a page with neither part renders no rail at all ("").
+// minOutlineSections is the number of h2 sections from which a page gets a
+// contents list. A two-section lesson reads top to bottom and needs none.
+const minOutlineSections = 3
+
+// tocHTML renders the contents list, or "" when the page has fewer than
+// minOutlineSections h2 sections.
 //
-// The rail counts against the render's output budget like the body: used is
-// the output the page already holds, and the rail is checked as it grows, so
-// a document with many headings is refused before its outline is built rather
-// than after. Each entry names its section by a short index (data-sec="s3"),
-// never by repeating the section's heading id.
-func railHTML(st *state, metaHTML string, outline []outlineItem) (string, error) {
-	if len(outline) < 2 {
-		outline = nil
+// The list counts against the render's output budget like the body: it is
+// checked as it grows, so a document with many headings is refused before its
+// outline is built rather than after. Each entry names its section by a short
+// index (data-sec="s3"), never by repeating the section's heading id.
+func tocHTML(st *state, outline []outlineItem) (string, error) {
+	sections := 0
+	for _, it := range outline {
+		if it.level == 2 {
+			sections++
+		}
 	}
-	if metaHTML == "" && outline == nil {
+	if sections < minOutlineSections {
 		return "", nil
 	}
 	b := st.newOut()
-	b.WriteString(`<aside class="frail" aria-label="About this page">`)
-	if metaHTML != "" {
-		b.WriteString(`<section class="rail-facts"><p class="rail-h">Details</p>`)
-		b.keep(metaHTML) // charged when the meta-header was built
-		b.WriteString(`</section>`)
-	}
-	if outline != nil {
-		b.WriteString(`<details class="rail-outline" open><summary class="rail-h">On this page</summary><ol class="outline">`)
-		sec, n := "", 0
-		for _, it := range outline {
-			if err := st.tick(); err != nil {
-				return "", err
-			}
-			if st.err != nil {
-				return "", st.err
-			}
-			if it.level == 2 {
-				n++
-				sec = "s" + strconv.Itoa(n)
-			}
-			cls := "l2"
-			if it.level == 3 {
-				cls = "l3"
-			}
-			b.WriteString(`<li class="` + cls + `" data-sec="` + sec + `"><a href="#` + it.id + `">`)
-			b.WriteString(it.text)
-			b.WriteString(`</a></li>`)
+	b.WriteString(`<details class="mnav toc"><summary>Contents</summary>` +
+		`<nav aria-label="Contents"><ol class="outline">`)
+	sec, n := "", 0
+	for _, it := range outline {
+		if err := st.tick(); err != nil {
+			return "", err
 		}
-		b.WriteString(`</ol></details>`)
+		if st.err != nil {
+			return "", st.err
+		}
+		if it.level == 2 {
+			n++
+			sec = "s" + strconv.Itoa(n)
+		}
+		cls := "l2"
+		if it.level == 3 {
+			cls = "l3"
+		}
+		b.WriteString(`<li class="` + cls + `" data-sec="` + sec + `"><a href="#` + it.id + `">`)
+		b.WriteString(it.text)
+		b.WriteString(`</a></li>`)
 	}
-	b.WriteString("</aside>\n")
+	b.WriteString("</ol></nav></details>\n")
 	if st.err != nil {
 		return "", st.err
 	}
@@ -105,13 +106,21 @@ func seriesFamily(slug string, siblings []string) []string {
 	return fam
 }
 
-// treeHTML renders the series tree: every member of the family, the current
-// page marked and unlinked. It writes through the render's budgeted out, each
-// entry held to the remaining budget before it is built; the family is at
-// most MaxSeriesMembers long.
+// treeHTML renders the series list: every member of the family, the current
+// page marked and unlinked, under a summary that says where the reader is
+// ("Series 2 of 3"). It writes through the render's budgeted out, each entry
+// held to the remaining budget before it is built; the family is at most
+// MaxSeriesMembers long.
 func treeHTML(st *state, slug string, fam []string, base string) (string, error) {
+	pos := 0
+	for i, s := range fam {
+		if s == slug {
+			pos = i + 1
+		}
+	}
 	b := st.newOut()
-	b.WriteString(`<nav class="ftree" id="ftree" aria-label="Series"><p class="rail-h">Series</p><ol>`)
+	b.WriteString(`<details class="mnav seq" id="ftree"><summary>Series <span class="pos">` +
+		strconv.Itoa(pos) + ` of ` + strconv.Itoa(len(fam)) + `</span></summary><nav aria-label="Series"><ol>`)
 	for _, s := range fam {
 		if err := st.tick(); err != nil {
 			return "", err
@@ -125,80 +134,149 @@ func treeHTML(st *state, slug string, fam []string, base string) (string, error)
 		}
 		b.WriteString(`<li><a href="` + navHref(base, s) + `">` + html.EscapeString(s) + `</a></li>`)
 	}
-	b.WriteString("</ol></nav>\n")
+	b.WriteString("</ol></nav></details>\n")
 	if st.err != nil {
 		return "", st.err
 	}
 	return b.String(), nil
 }
 
-// topbar is the one-row sticky bar of an F page: the tree button (series pages
-// only) and the theme toggle at the right. The page opens with the document, so
-// the bar carries no wordmark. It is a div, not a header: the title's dochead is
-// the page's one banner landmark, and the skip link comes first. The title is not here; it heads the reading
-// column so it can wrap.
-func topbar(serverTheme string, toggle, tree bool) string {
-	var b strings.Builder
-	b.WriteString(skipLink + `<div class="docbar"><div class="wrap"><div class="tools">`)
-	if tree {
-		b.WriteString(`<button class="treebtn" type="button" aria-controls="ftree" aria-expanded="false" hidden ` +
-			`aria-label="Show or hide the series list" title="Series list ([)">` + treeSVG + `</button>`)
-	}
-	if toggle {
-		pressed := "false"
-		if serverTheme == "dark" {
-			pressed = "true"
+// wordsPerMinute sets the read time in the byline. A read time shows only
+// from two minutes: "1 min read" on a three-line note is noise.
+const wordsPerMinute = 230
+
+// countWords counts whitespace-separated runs in s without allocating.
+func countWords(s string) int {
+	n, in := 0, false
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case ' ', '\n', '\t', '\r':
+			in = false
+		default:
+			if !in {
+				n++
+			}
+			in = true
 		}
-		b.WriteString(`<button class="themetoggle" type="button" aria-pressed="` + pressed + `" ` +
-			`aria-label="Toggle light or dark theme" title="Toggle theme">` +
-			sunSVG + moonSVG + `</button>`)
 	}
-	b.WriteString("</div></div></div>\n")
-	return b.String()
+	return n
 }
 
-const treeSVG = `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" ` +
-	`stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">` +
-	`<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15"/></svg>`
+// bylineHTML renders the masthead's one line of facts under the title, in
+// this order: the date (the frontmatter date or published field, else the
+// publish date), "by" the author, the status, the tags, any other field as
+// "Key: value", and the read time. The title field is never repeated: the H1
+// above already says it. tools (the theme toggle) closes the line. It returns
+// whether the localize script is needed (a full timestamp was rendered).
+func bylineHTML(st *state, fields []metaField, published time.Time, words int, tools string) (string, bool, error) {
+	var items []string
+	needsScript := false
+	dateUsed := false
+	for _, f := range fields {
+		if isDateKey(f.key) {
+			row, script := dateText(f.value)
+			items = append(items, row)
+			needsScript = script
+			dateUsed = true
+			break
+		}
+	}
+	if !dateUsed && !published.IsZero() {
+		d := published.UTC().Format("2006-01-02")
+		items = append(items, `<time class="tstamp" datetime="`+d+`">`+d+`</time>`)
+	}
+	var who, status, tags, rest []string
+	skippedDate := false
+	for _, f := range fields {
+		k := strings.ToLower(f.key)
+		v := html.EscapeString(f.value)
+		switch {
+		case dateUsed && !skippedDate && isDateKey(f.key):
+			skippedDate = true
+		case k == "title" || f.value == "":
+		case k == "author" || k == "by":
+			who = append(who, `<span class="who">by `+v+`</span>`)
+		case k == "status":
+			status = append(status, `<span class="status">`+v+`</span>`)
+		case k == "tags" || k == "tag":
+			tags = append(tags, `<span class="tags">`+v+`</span>`)
+		default:
+			rest = append(rest, `<span>`+titleCase(f.key)+`: `+v+`</span>`)
+		}
+	}
+	items = append(append(append(append(items, who...), status...), tags...), rest...)
+	if m := words / wordsPerMinute; m >= 2 {
+		items = append(items, `<span class="rt">`+strconv.Itoa(m)+` min read</span>`)
+	}
+	b := st.newOut()
+	b.WriteString(`<div class="byline"><p class="facts">`)
+	for i, it := range items {
+		if err := st.tick(); err != nil {
+			return "", false, err
+		}
+		if i > 0 {
+			b.WriteString(`<span class="sep" aria-hidden="true"> · </span>`)
+		}
+		b.WriteString(it)
+	}
+	b.WriteString(`</p>` + tools + "</div>\n")
+	if st.err != nil {
+		return "", false, st.err
+	}
+	return b.String(), needsScript, nil
+}
 
-// fInitScript runs in <head> before paint: it opens the tree when the stored
-// choice says so, or with no stored choice at 1410 px and wider.
-const fInitScript = `<script>(function(){var r=document.documentElement,p=null;r.classList.add('fjs');` +
-	`try{p=localStorage.getItem('demiplane-nav');}catch(e){}` +
-	`var w=window.matchMedia&&matchMedia('(min-width:1410px)').matches;` +
-	`if(p==='open'||(p!=='closed'&&w))r.classList.add('nav-on');})();</script>`
+// dateText renders the byline's date: a full timestamp gets the server-side
+// UTC text plus a data-localize hook, a bare date renders as the date, and an
+// unparseable value is shown verbatim.
+func dateText(v string) (string, bool) {
+	t, hasTime, ok := parseDate(v)
+	switch {
+	case !ok:
+		return `<span class="tstamp">` + html.EscapeString(v) + `</span>`, false
+	case !hasTime:
+		d := t.UTC().Format("2006-01-02")
+		return `<time class="tstamp" datetime="` + d + `">` + d + `</time>`, false
+	}
+	iso := t.UTC().Format(time.RFC3339)
+	return `<time class="tstamp" data-localize datetime="` + iso + `">` +
+		t.UTC().Format("2006-01-02 · 15:04") + ` UTC</time>`, true
+}
 
-// fScript wires the tree button and `[`, folds the outline in the narrow flow,
-// and marks the outline entry for the section in view (showing only that
-// section's h3s, as F does).
+// ToggleButton is the sun / moon theme switch, shared by published pages and
+// the operator pages. aria-pressed starts true when the server stamps dark.
+func ToggleButton(serverTheme string) string {
+	pressed := "false"
+	if serverTheme == "dark" {
+		pressed = "true"
+	}
+	return `<button class="themetoggle" type="button" aria-pressed="` + pressed + `" ` +
+		`aria-label="Dark theme" title="Switch light or dark">` + sunSVG + moonSVG + `</button>`
+}
+
+// ThemeInitScript re-applies a stored light or dark choice before paint, where
+// the page's origin can store one (the control plane; a sandboxed content page
+// cannot, and follows the OS or the server theme).
+func ThemeInitScript() string { return initThemeScript() }
+
+// FrameScripts wires the theme toggle and the margin navs. The operator pages
+// end their body with it; published pages add the same two scripts.
+func FrameScripts() string { return docChromeScript + fScript }
+
+// fScript opens the margin navs on a wide screen and folds them on a narrow
+// one, and marks the contents entry for the section in view (showing only that
+// section's h3s).
 const fScript = `<script>(function(){
-var r=document.documentElement,b=document.body,K='demiplane-nav',btn=document.querySelector('.treebtn');
-var narrow=matchMedia('(max-width:51.24rem)'),wide=matchMedia('(min-width:1410px)');
-var pref=function(){try{return localStorage.getItem(K);}catch(e){return null;}};
-var isOpen=function(){return r.classList.contains(narrow.matches?'nav-drawer':'nav-on');};
-var paint=function(){if(btn)btn.setAttribute('aria-expanded',isOpen()?'true':'false');};
-var toggle=function(){
-if(!b.classList.contains('has-tree'))return;
-if(narrow.matches){r.classList.toggle('nav-drawer');}
-else{var o=!r.classList.contains('nav-on');r.classList.toggle('nav-on',o);
-try{localStorage.setItem(K,o?'open':'closed');}catch(e){}}
-paint();};
-var on=function(m,f){if(m.addEventListener)m.addEventListener('change',f);else m.addListener(f);};
-if(btn){btn.hidden=false;btn.addEventListener('click',toggle);}
-on(wide,function(){var p=pref();if(p!=='open'&&p!=='closed'){r.classList.toggle('nav-on',wide.matches);paint();}});
-on(narrow,function(){r.classList.remove('nav-drawer');paint();var d=document.querySelector('.rail-outline');if(d)d.open=!narrow.matches;});
-document.addEventListener('keydown',function(e){
-if(e.key!=='['||e.metaKey||e.ctrlKey||e.altKey)return;
-var t=e.target;if(t&&(t.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))return;
-if(!b.classList.contains('has-tree'))return;e.preventDefault();toggle();});
-paint();
-var det=document.querySelector('.rail-outline');if(det&&narrow.matches)det.open=false;
+var r=document.documentElement;r.classList.add('fjs');
+var wide=matchMedia('(min-width:78.5rem)'),navs=document.querySelectorAll('details.mnav');
+var fold=function(){for(var i=0;i<navs.length;i++)navs[i].open=wide.matches;};
+fold();if(wide.addEventListener)wide.addEventListener('change',fold);else wide.addListener(fold);
 var links={};document.querySelectorAll('.outline a').forEach(function(a){links[a.getAttribute('href').slice(1)]=a;});
 var heads=[].filter.call(document.querySelectorAll('main h2[id],main h3[id]'),function(h){return links[h.id];});
 if(!heads.length)return;
 var cur=null,mark=function(){
-var bar=document.querySelector('.docbar'),y=(bar?bar.offsetHeight:52)+24,c=heads[0];
-for(var i=0;i<heads.length;i++){if(heads[i].getBoundingClientRect().top-y<=0)c=heads[i];else break;}
+var c=heads[0];
+for(var i=0;i<heads.length;i++){if(heads[i].getBoundingClientRect().top-32<=0)c=heads[i];else break;}
 if(c===cur)return;cur=c;
 Object.keys(links).forEach(function(k){links[k].removeAttribute('aria-current');});
 links[c.id].setAttribute('aria-current','true');
@@ -209,98 +287,32 @@ mark();
 })();</script>
 `
 
-// fCSS lays out an F page. The column template is one set of custom properties
-// on body, chosen by the has-tree/has-rail classes and the nav-on state, and the
-// top bar, the page grid and the footer all use it, so the tools, the title,
-// the text and the footer share one left edge whatever is open. Token
-// references carry literal fallbacks for a --css override that ships none.
+// fCSS lays out the parts of an F page the operator pages do not share: the
+// masthead (title and byline) and the reading column inside the frame.
 const fCSS = `
-:root{--top-h:3.25rem;--col:46rem;--rail-w:15rem;--tree-w:14rem;--fgap:2.5rem;--gutter:1.25rem;
-  scroll-padding-top:calc(var(--top-h) + 1rem)}
-.f{--fcols:minmax(0,var(--col));--fareas:"head" "body";--fbar:"head";--frows:auto 1fr}
-.f.has-rail{--fcols:minmax(0,var(--col)) var(--rail-w);--fareas:"head rail" "body rail";--fbar:"head rail"}
-@media (min-width:51.25rem){
-html.nav-on .f.has-tree{--fcols:var(--tree-w) minmax(0,var(--col));--fareas:"tree head" "tree body";--fbar:"tree head"}
-html.nav-on .f.has-tree.has-rail{--fcols:var(--tree-w) minmax(0,var(--col)) var(--rail-w);
-  --fareas:"tree head rail" "tree body rail";--fbar:"tree head rail"}
-html.nav-on .f.has-tree .ftree{display:block}}
-@media (max-width:51.24rem){
-.f,.f.has-rail{--fcols:minmax(0,1fr);--fareas:"tree" "head" "rail" "body";--fbar:"head";--frows:none}
-body.f.has-rail .docbar .tools{grid-area:head}
-html.nav-drawer .f.has-tree .ftree{display:block}}
-.f .fgrid,.f .docbar>.wrap,.f .docfoot>.wrap{display:grid;grid-template-columns:var(--fcols);
-  column-gap:var(--fgap);justify-content:center;max-width:none;margin:0;padding:0 var(--gutter)}
-.f .fgrid{grid-template-areas:var(--fareas);grid-template-rows:var(--frows)}
-.f .docbar>.wrap,.f .docfoot>.wrap{grid-template-areas:var(--fbar)}
-.f .docbar>.wrap{height:var(--top-h);padding-top:0;padding-bottom:0;align-items:center}
-.f .docbar .tools{grid-area:head;justify-self:end;display:flex;gap:.5rem;align-items:center}
-.f.has-rail .docbar .tools{grid-area:rail}
-.f .docfoot .fcell{grid-area:head}
-.f .themetoggle{margin-left:0}
-.treebtn{display:inline-flex;align-items:center;justify-content:center;width:2.15rem;height:2.15rem;cursor:pointer;
-  color:var(--muted,oklch(0.462 0.011 78));background:var(--panel,oklch(0.995 0.002 95));
-  border:1px solid var(--line,oklch(0.910 0.013 87));border-radius:999px}
-.treebtn:hover{color:var(--ink,oklch(0.237 0.009 75));border-color:var(--line-strong,oklch(0.714 0.018 85))}
-.treebtn[aria-expanded="true"]{color:var(--accent,oklch(0.445 0.122 23))}
-.treebtn svg{width:1.05rem;height:1.05rem;display:block}
-.treebtn[hidden]{display:none}
-.dochead{grid-area:head;min-width:0;padding-top:2.4rem}
-.dochead .doctitle{max-width:var(--measure);margin:0 0 1.4rem;line-height:1.2;overflow-wrap:break-word;
-  white-space:normal}
-.f main.wrap{grid-area:body;min-width:0;max-width:none;margin:0;padding:0 0 5rem}
-.f main.wrap>*{max-width:var(--measure);margin-inline:0}
-.f main.wrap>pre,.f main.wrap>.table-wrap{max-width:none}
+.f main.wrap{padding:0 0 4rem}
+.f main.wrap>pre,.f main.wrap>.table-wrap{max-width:100%}
 .f main.wrap>p.code-first>code:first-child{margin-left:-.3em}
-.frail,.ftree{min-width:0;position:sticky;top:var(--top-h);align-self:start;max-height:calc(100vh - var(--top-h));
-  overflow-y:auto;overscroll-behavior:contain;padding:2.6rem 0 1.5rem;font:.875rem/1.45 var(--sans)}
-.frail{grid-area:rail}
-.ftree{grid-area:tree;display:none}
-.rail-h{display:block;margin:0;padding:0 0 .35rem;font:600 .75rem/1.45 var(--sans);letter-spacing:.08em;
-  text-transform:uppercase;color:var(--muted,oklch(0.462 0.011 78));
-  border-bottom:1px solid var(--line-strong,oklch(0.714 0.018 85))}
-summary.rail-h{cursor:pointer;list-style:none}
-summary.rail-h::-webkit-details-marker{display:none}
-.rail-facts+.rail-outline{margin-top:1.75rem}
-.outline,.ftree ol{list-style:none;margin:0;padding:.35rem 0 0}
-.outline li,.ftree li{margin:0}
-.outline a,.ftree a,.ftree [aria-current]{display:block;padding:.22rem .5rem;margin-left:-.5rem;border-radius:6px;
-  color:var(--muted,oklch(0.462 0.011 78));text-decoration:none;overflow-wrap:anywhere}
-.outline a:hover,.ftree a:hover{color:var(--ink,oklch(0.237 0.009 75));background:var(--code-bg,oklch(0.953 0.010 87))}
-.outline a[aria-current="true"],.ftree [aria-current="page"]{color:var(--ink,oklch(0.237 0.009 75));font-weight:600;
-  background:var(--code-bg,oklch(0.953 0.010 87))}
-.outline .l3 a{padding-left:1.25rem}
-.fjs .outline .l3{display:none}
-.fjs .outline .l3.open{display:block}
-@media (max-width:51.24rem){
-.dochead{padding-top:1.6rem}
-.frail,.ftree{position:static;max-height:none;overflow:visible;padding:0 0 1.5rem;max-width:var(--measure)}
-.frail .outline{columns:2 11rem;column-gap:1.5rem}
-.frail .outline li{break-inside:avoid}
-.fjs .frail .outline .l3,.fjs .frail .outline .l3.open{display:none}
-summary.rail-h::after{content:" +"}
-details[open]>summary.rail-h::after{content:" \2212"}}
+.dochead .doctitle{margin-top:0;margin-bottom:.9rem;overflow-wrap:break-word}
+.byline{display:flex;align-items:center;gap:1rem;padding-bottom:1rem;margin-bottom:2rem;
+  border-bottom:1px solid var(--line)}
+.byline .facts{flex:1 1 auto;min-width:0;margin:0;font:.875rem/1.5 var(--sans);color:var(--muted);
+  font-size-adjust:none;font-variant-numeric:tabular-nums;text-wrap:pretty}
+.byline .tstamp{color:var(--ink);font-weight:600}
+.byline .themetoggle{margin-block:-.4rem}
+.frame>.mnav:last-of-type{margin-bottom:1.5rem}
+@media (min-width:78.5rem){.frame>.mnav:last-of-type{margin-bottom:0}}
+@media (max-width:40rem){.dochead{padding-top:1.75rem}.dochead .doctitle{font-size:1.875rem}
+  .byline{margin-bottom:1.25rem}}
 `
 
-// fMetaCSS restyles the meta-header as the rail's facts list. Added only when
-// the rail carries facts, so a page without frontmatter names no metahead.
-const fMetaCSS = `
-.frail .metahead{margin:0;padding:0;border:0}
-.frail .metahead .metadate{margin:0;padding:.45rem 0;border-bottom:1px solid var(--line,oklch(0.910 0.013 87))}
-.frail .metahead .metafields{gap:0}
-.frail .metahead .metarow{display:grid;grid-template-columns:minmax(0,1fr);gap:.1rem;padding:.45rem 0;
-  border-bottom:1px solid var(--line,oklch(0.910 0.013 87))}
-.frail .metahead .metarow dt{min-width:0}
-.frail .metahead .metarow dd{overflow-wrap:break-word;font-family:var(--sans)}
-`
-
-// fPrintCSS prints an F page as one column, the tree hidden even when open:
-// the open-state selectors outrank a bare .ftree, so they are named again here,
-// later in the sheet.
+// fPrintCSS prints an F page as one column with no navs or toggle.
 const fPrintCSS = `
 @media print{
-.f .fgrid{display:flex;flex-direction:column;padding:0}
-.dochead{order:0}.frail{order:1}.f main.wrap{order:2}
-.frail{position:static;max-height:none;overflow:visible;padding:0 0 1rem}
-.ftree,html.nav-on .f.has-tree .ftree,html.nav-drawer .f.has-tree .ftree,.treebtn,.rail-outline{display:none}
-.f .docbar>.wrap{height:auto;padding:.6rem 0}}
+.frame{display:block;padding:0}
+.mnav,.themetoggle{display:none}
+.byline{border-bottom-color:#d6d2c9}}
 `
+
+// frameCSS is the shared frame plus the F page's own rules.
+func frameCSS() string { return theme.FrameCSS() + fCSS + fPrintCSS }

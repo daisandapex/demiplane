@@ -48,10 +48,8 @@ func findDocPage(slug string) (docPage, bool) {
 // ht-ml.app, makes everything public; demiplane keeps your data home).
 func (s *Server) handleDocsIndex(w http.ResponseWriter, r *http.Request) {
 	var b strings.Builder
-	b.WriteString(`<span class="kicker">Documentation</span>`)
-	b.WriteString(`<h1>demiplane docs</h1>`)
-	b.WriteString(`<span class="ethos">Sealed by default, shared by choice.</span>`)
-	b.WriteString(`<p>Self-hosted, internal-first static &amp; HTML publishing with a REST API: ` +
+	b.WriteString(`<h1>Documentation</h1>`)
+	b.WriteString(`<p class="ethos">Self-hosted, internal-first static &amp; HTML publishing with a REST API: ` +
 		`a superset of pico's <code>pgs</code> with first-class HTTP + SSH ingest, per-artifact ` +
 		`privacy, passwords, and TTL. This very page is rendered by demiplane's own markdown engine ` +
 		`from the docs embedded in the binary.</p>`)
@@ -61,8 +59,7 @@ func (s *Server) handleDocsIndex(w http.ResponseWriter, r *http.Request) {
 			html.EscapeString(p.Slug), html.EscapeString(p.Title), html.EscapeString(p.Blurb))
 	}
 	b.WriteString(`</div>`)
-	b.WriteString(`<p><span class="kicker">For agents</span><br>` +
-		`Machine-readable references: <a href="/llms.txt">/llms.txt</a> (one-fetch plain-text) ` +
+	b.WriteString(`<h2>For agents</h2><p>Machine-readable references: <a href="/llms.txt">/llms.txt</a> (one-fetch plain-text) ` +
 		`and <a href="/help.json">/help.json</a> (self-describing JSON).</p>`)
 
 	writeHTML(w, s.pageHTML("docs · demiplane", topNav("/docs"), b.String()))
@@ -83,21 +80,28 @@ func (s *Server) handleDocsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var b strings.Builder
-	// Sub-nav across the curated docs (full-width pills, active highlighted).
-	b.WriteString(`<p class="kicker">Documentation · `)
+	// Wayfinding is the published pages' sequence nav: the curated docs as a
+	// list in the left margin on a wide screen, a one-line disclosure under
+	// the site bar on a narrow one. The page's contents take the right margin
+	// once it has three sections, as a published page's do.
+	var nav strings.Builder
+	pos := 0
 	for i, p := range docPages {
-		if i > 0 {
-			b.WriteString(" · ")
-		}
 		if p.Slug == page.Slug {
-			fmt.Fprintf(&b, `<strong>%s</strong>`, html.EscapeString(p.Title))
-		} else {
-			fmt.Fprintf(&b, `<a href="/docs/%s">%s</a>`, html.EscapeString(p.Slug), html.EscapeString(p.Title))
+			pos = i + 1
 		}
 	}
-	b.WriteString(`</p>`)
-	b.WriteString(render.Body(stripLeadingHTML(src)))
+	fmt.Fprintf(&nav, `<details class="mnav seq"><summary>Docs <span class="pos">%d of %d</span></summary>`+
+		`<nav aria-label="Documentation"><ol>`, pos, len(docPages))
+	for _, p := range docPages {
+		if p.Slug == page.Slug {
+			fmt.Fprintf(&nav, `<li><span aria-current="page">%s</span></li>`, html.EscapeString(p.Title))
+		} else {
+			fmt.Fprintf(&nav, `<li><a href="/docs/%s">%s</a></li>`, html.EscapeString(p.Slug), html.EscapeString(p.Title))
+		}
+	}
+	nav.WriteString("</ol></nav></details>\n")
+	body, toc := render.BodyContents(stripLeadingHTML(src))
 
 	// The API reference is the target of the top-nav "API" link (/docs/api), so
 	// mark that entry active there; every other curated doc keeps "Docs" active.
@@ -105,7 +109,7 @@ func (s *Server) handleDocsPage(w http.ResponseWriter, r *http.Request) {
 	if page.Slug == "api" {
 		active = "/docs/api"
 	}
-	writeHTML(w, s.pageHTML(page.Title+" · demiplane", topNav(active), b.String()))
+	writeHTML(w, s.framePage(page.Title+" · demiplane", topNav(active), nav.String(), toc, body))
 }
 
 // stripLeadingHTML drops the raw HTML block a doc opens with, if it opens with

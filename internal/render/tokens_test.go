@@ -28,7 +28,7 @@ func TestLayoutFallbacksMatchTokens(t *testing.T) {
 		tok[m[1]] = strings.TrimSpace(m[2])
 	}
 	fb := regexp.MustCompile(`var\((--[a-z-]+),([^)]*\))\)`)
-	for name, sheet := range map[string]string{"fCSS": fCSS, "fMetaCSS": fMetaCSS, "docChromeCSS": docChromeCSS} {
+	for name, sheet := range map[string]string{"fCSS": fCSS, "coloCSS": coloCSS, "docChromeCSS": docChromeCSS} {
 		for _, m := range fb.FindAllStringSubmatch(sheet, -1) {
 			want, ok := tok[m[1]]
 			if ok && m[2] != want {

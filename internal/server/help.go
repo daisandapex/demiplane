@@ -27,14 +27,12 @@ func (s *Server) handleHelpPage(w http.ResponseWriter, r *http.Request) {
 
 	var b strings.Builder
 
-	b.WriteString(`<span class="kicker">Getting started</span>`)
-	b.WriteString(`<h1>demiplane help</h1>`)
+	b.WriteString(`<h1>Help</h1>`)
 	b.WriteString(`<p>demiplane is self-hosted, internal-first publishing: you POST a file ` +
 		`to your own server and get back a URL only your network can reach. This page ` +
 		`walks you from install to your first published page. For the full REST surface ` +
 		`see the <a href="/docs/api">API reference</a>; to wire demiplane into a coding ` +
 		`harness see <a href="/connect">Connect</a>.</p>`)
-	b.WriteString(`<span class="ethos">Sealed by default, shared by choice.</span>`)
 
 	// --- Install ---
 	b.WriteString(`<h2 id="install">Install</h2>`)

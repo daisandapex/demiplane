@@ -478,7 +478,7 @@ func TestMarkdownRendererSharesThemeWithChrome(t *testing.T) {
 // H1 is lifted out of the body (no duplicate giant title).
 func TestMarkdownHeaderLiftsH1(t *testing.T) {
 	out := string(Markdown([]byte("# My Doc\n\nbody text"), Options{Header: true, Title: "slug-fallback"}))
-	if !strings.Contains(out, `class="docbar"`) || !strings.Contains(out, `class="doctitle">My Doc</h1>`) {
+	if !strings.Contains(out, `class="dochead"`) || !strings.Contains(out, `class="doctitle">My Doc</h1>`) {
 		t.Errorf("masthead title missing:\n%s", out)
 	}
 	if n := strings.Count(out, "<h1"); n != 1 {
@@ -494,19 +494,19 @@ func TestMarkdownHeaderLiftsH1(t *testing.T) {
 // phone), which lost most of a long title.
 func TestDoctitleWraps(t *testing.T) {
 	out := string(Markdown([]byte("# Overnight pages: a deep g/y/p/j\n\nbody"), Options{Header: true}))
-	if !strings.Contains(out, `<header class="dochead"><h1 class="doctitle">Overnight pages: a deep g/y/p/j</h1></header>`) {
+	if !strings.Contains(out, `<header class="dochead"><h1 class="doctitle">Overnight pages: a deep g/y/p/j</h1>`+"\n"+`<div class="byline">`) {
 		t.Errorf("title should head the reading column:\n%s", out)
 	}
-	if strings.Contains(out, `<div class="docbar"><div class="wrap"><div class="tools"><button class="themetoggle"`) == false {
-		t.Errorf("top bar should hold only the tools:\n%s", out)
+	if strings.Contains(out, `class="docbar"`) {
+		t.Errorf("an F page has no top bar:\n%s", out)
 	}
 	for _, bad := range []string{"text-overflow:ellipsis", "line-clamp", "white-space:nowrap"} {
 		if strings.Contains(out, bad) {
 			t.Errorf("title must wrap, found %q:\n%s", bad, out)
 		}
 	}
-	if !regexp.MustCompile(`\.dochead \.doctitle\{[^}]*white-space:normal`).MatchString(out) {
-		t.Errorf("doctitle rule should set white-space:normal:\n%s", out)
+	if !regexp.MustCompile(`\.dochead \.doctitle\{[^}]*overflow-wrap:break-word`).MatchString(out) {
+		t.Errorf("doctitle rule should break a long word:\n%s", out)
 	}
 }
 
@@ -893,11 +893,11 @@ func TestHeadingAnchorTouchAndPrintCSS(t *testing.T) {
 }
 
 // TestScrollPaddingPresent: the rendered stylesheet sets scroll-padding-top on
-// the scroll root so an #anchor jump clears the sticky masthead.
+// the scroll root so an #anchor jump does not land flush on the viewport edge.
 func TestScrollPaddingPresent(t *testing.T) {
 	out := string(Markdown([]byte("# T\n\n## S"), Options{Header: true}))
-	if !strings.Contains(out, "scroll-padding-top:6rem") {
-		t.Errorf("stylesheet missing scroll-padding-top for the sticky masthead:\n%s", out)
+	if !strings.Contains(out, "scroll-padding-top:1.5rem") {
+		t.Errorf("stylesheet missing scroll-padding-top:\n%s", out)
 	}
 }
 

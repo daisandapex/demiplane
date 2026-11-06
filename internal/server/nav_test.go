@@ -12,11 +12,11 @@ import (
 // TestTopNavWrapsOnPhones: the chrome nav may not clip items on a narrow
 // screen: the row wraps, and the bar grows to hold it.
 func TestTopNavWrapsOnPhones(t *testing.T) {
-	nav := regexp.MustCompile(`header\.top nav\{([^}]*)\}`).FindStringSubmatch(chromeCSS)
+	nav := regexp.MustCompile(`\.sitebar nav\{([^}]*)\}`).FindStringSubmatch(chromeCSS)
 	if nav == nil || !strings.Contains(nav[1], "flex-wrap:wrap") {
 		t.Errorf("top nav does not wrap: %v", nav)
 	}
-	bar := regexp.MustCompile(`header\.top \.wrap\{([^}]*)\}`).FindStringSubmatch(chromeCSS)
+	bar := regexp.MustCompile(`\.sitebar\{([^}]*)\}`).FindStringSubmatch(chromeCSS)
 	if bar == nil || regexp.MustCompile(`(^|;)height:`).MatchString(bar[1]) {
 		t.Errorf("top bar has a fixed height, so a wrapped nav would overflow it: %v", bar)
 	}

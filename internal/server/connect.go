@@ -45,7 +45,6 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	var b strings.Builder
 
-	b.WriteString(`<span class="kicker">Works with your harness</span>`)
 	b.WriteString(`<h1>Connect demiplane</h1>`)
 	b.WriteString(`<p>demiplane publishes from any coding harness, agent, or shell. ` +
 		`Pick your tool below and copy the block. Every snippet targets this instance ` +

@@ -16,15 +16,41 @@
   --info-bg:oklch(0.945 0.020 235); --info-line:oklch(0.895 0.030 235); --info-ink:oklch(0.420 0.080 245);
   --shadow:oklch(0.250 0.010 80 / 0.14); --sel:oklch(0.909 0.025 43);
   --tok-key:oklch(0.445 0.122 23); --tok-fn:oklch(0.470 0.077 253); --tok-str:oklch(0.470 0.072 150); --tok-com:oklch(0.462 0.011 78);
-  --serif:"Charter","Bitstream Charter","Iowan Old Style","Palatino Linotype",Georgia,Cambria,serif;
+  --serif:"Charter","Bitstream Charter","Charis SIL","Iowan Old Style","Palatino Linotype","Palatino","P052",
+    "URW Palladio L",Georgia,Cambria,"Noto Serif",serif;
   --sans:system-ui,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,"DejaVu Sans Mono",monospace;
 }
+@media (prefers-color-scheme: dark){
+:root:not([data-theme="light"]){
+  color-scheme:dark;
+  --bg:oklch(0.228 0.006 78); --panel:oklch(0.261 0.008 85); --ink:oklch(0.923 0.009 85);
+  --muted:oklch(0.708 0.012 77); --line:oklch(0.330 0.010 81); --line-strong:oklch(0.461 0.015 87);
+  --accent:oklch(0.749 0.082 29);
+  --code-bg:oklch(0.205 0.008 85); --code-ink:oklch(0.871 0.015 85); --code-border:oklch(0.342 0.015 85);
+  --navy:oklch(0.620 0.095 240); --danger:oklch(0.700 0.150 28); --on-badge:oklch(0.985 0.004 95);
+  --info-bg:oklch(0.300 0.030 235); --info-line:oklch(0.400 0.040 235); --info-ink:oklch(0.780 0.060 235);
+  --shadow:oklch(0.100 0.008 80 / 0.45); --sel:oklch(0.369 0.023 48);
+  --tok-key:oklch(0.749 0.082 29); --tok-fn:oklch(0.746 0.055 253); --tok-str:oklch(0.766 0.062 140); --tok-com:oklch(0.708 0.012 77);
+}
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:oklch(0.228 0.006 78); --panel:oklch(0.261 0.008 85); --ink:oklch(0.923 0.009 85);
+  --muted:oklch(0.708 0.012 77); --line:oklch(0.330 0.010 81); --line-strong:oklch(0.461 0.015 87);
+  --accent:oklch(0.749 0.082 29);
+  --code-bg:oklch(0.205 0.008 85); --code-ink:oklch(0.871 0.015 85); --code-border:oklch(0.342 0.015 85);
+  --navy:oklch(0.620 0.095 240); --danger:oklch(0.700 0.150 28); --on-badge:oklch(0.985 0.004 95);
+  --info-bg:oklch(0.300 0.030 235); --info-line:oklch(0.400 0.040 235); --info-ink:oklch(0.780 0.060 235);
+  --shadow:oklch(0.100 0.008 80 / 0.45); --sel:oklch(0.369 0.023 48);
+  --tok-key:oklch(0.749 0.082 29); --tok-fn:oklch(0.746 0.055 253); --tok-str:oklch(0.766 0.062 140); --tok-com:oklch(0.708 0.012 77);
+}
 *{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%;scroll-padding-top:6rem}
+html{-webkit-text-size-adjust:100%;scroll-padding-top:1.5rem}
 html,body{overflow-x:clip}
 body{margin:0;background:var(--bg);color:var(--ink);
-  font:1rem/1.6 var(--serif);text-rendering:optimizeLegibility}
+  font:1rem/1.6 var(--serif);font-size-adjust:.48;text-rendering:optimizeLegibility}
+code,pre,table,button,input,select,textarea{font-size-adjust:none}
 ::selection{background:var(--sel)}
 .wrap{max-width:54rem;margin:0 auto;padding:0 1.3rem}
 main{padding:2.2rem 0 3.5rem}
@@ -82,57 +108,131 @@ table{border-collapse:collapse;width:100%;margin:1.6em 0;font:.875rem/1.45 var(-
 thead th{font-size:.8125rem;font-weight:600;color:var(--muted);border-bottom:1px solid var(--line-strong)}
 th,td{text-align:left;vertical-align:top;padding:.45rem .875rem;font-variant-numeric:tabular-nums}
 tbody tr+tr td{border-top:1px solid var(--line)}
+@media (max-width:40rem){
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) thead{position:absolute;width:1px;height:1px;overflow:hidden;
+  clip-path:inset(50%)}
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) :is(table,tbody,tr,td){display:block}
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) tr{padding:.5rem 0}
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) tbody tr+tr{border-top:1px solid var(--line)}
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) td{position:relative;padding:.2rem .875rem .2rem 7.25rem;
+  border-top:0}
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) td::before{content:attr(data-label);position:absolute;
+  left:.875rem;width:5.75rem;color:var(--muted);font-weight:600;font-size:.8125rem;overflow-wrap:anywhere}}
 hr{border:0;width:5rem;height:1px;background:var(--line-strong);margin:2.375rem auto}
 img{max-width:100%;height:auto;display:block;margin:0 auto}
 @media (prefers-reduced-motion:reduce){a{transition:none}}
 
-.kicker{font-family:var(--sans);font-size:.72rem;font-weight:700;letter-spacing:.16em;
-  text-transform:uppercase;color:var(--accent)}
-.tagline{font-family:var(--serif);font-size:1.35rem;font-style:italic;color:var(--muted);
-  letter-spacing:-0.012em;margin:.15rem 0 .7rem}
+:root{--measure:30rem;--wide:46rem;--side:13rem}
+.frame{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:"head" "seq" "toc" "body";
+  padding:0 1.25rem}
+.frame>*{min-width:0;width:100%;max-width:var(--wide);justify-self:center}
+.frame>.dochead{grid-area:head}.frame>.seq{grid-area:seq}.frame>.toc{grid-area:toc}.frame>main{grid-area:body}
+.frame>.mnav{max-width:var(--measure)}
+.dochead{padding-top:3rem}
+.dochead>*,.doc>h1{margin-left:max(0px,calc((100% - var(--measure)) / 2));margin-right:0}
+.doc>*{max-width:var(--measure);margin-inline:auto}
+.doc>:is(pre,.table-wrap,.codeblock,.wide){max-width:100%}
+@media (min-width:78.5rem){
+.frame{grid-template-columns:minmax(0,1fr) minmax(0,var(--wide)) minmax(0,1fr);column-gap:2rem;
+  grid-template-areas:". head ." "seq body toc";grid-template-rows:auto 1fr}
+.frame>.mnav{position:sticky;top:1.5rem;align-self:start;max-width:var(--side);
+  max-height:calc(100vh - 3rem);overflow-y:auto;overscroll-behavior:contain;margin:0}
+.frame>.seq{justify-self:end}.frame>.toc{justify-self:start}}
+.mnav{font:.8125rem/1.45 var(--sans);font-size-adjust:none;color:var(--muted);margin:0 auto}
+.mnav>summary{display:flex;align-items:baseline;gap:.45rem;padding:.3rem 0;cursor:pointer;list-style:none;
+  font-weight:600;color:var(--muted)}
+.mnav>summary::-webkit-details-marker{display:none}
+.mnav>summary::before{content:"";flex:0 0 auto;width:.38rem;height:.38rem;border:solid currentColor;
+  border-width:0 1.5px 1.5px 0;transform:translateY(-.12rem) rotate(-45deg);
+  transition:transform .25s cubic-bezier(.22,1,.36,1)}
+.mnav[open]>summary::before{transform:translateY(-.2rem) rotate(45deg)}
+.mnav>summary:hover{color:var(--ink)}
+.mnav>summary .pos{font-weight:400}
+.mnav ol{list-style:none;margin:0;padding:.2rem 0 .5rem}
+.mnav li{margin:0}
+.mnav a,.mnav [aria-current="page"]{display:block;padding:.22rem .5rem;margin-left:-.5rem;border-radius:6px;
+  color:var(--muted);text-decoration:none;overflow-wrap:anywhere}
+.mnav a:hover{color:var(--ink);background:var(--code-bg)}
+.mnav a[aria-current="true"],.mnav [aria-current="page"]{color:var(--ink);font-weight:600;background:var(--code-bg)}
+.outline .l3 a{padding-left:1.25rem}
+.fjs .outline .l3{display:none}
+.fjs .outline .l3.open{display:block}
+@media (max-width:78.49rem){.fjs .outline .l3,.fjs .outline .l3.open{display:none}}
+.themetoggle{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  width:2.15rem;height:2.15rem;padding:0;cursor:pointer;color:var(--muted);
+  background:var(--panel);border:1px solid var(--line);border-radius:999px;
+  transition:color .25s cubic-bezier(.22,1,.36,1),border-color .25s cubic-bezier(.22,1,.36,1)}
+.themetoggle:hover{color:var(--ink);border-color:var(--line-strong)}
+.themetoggle svg{width:1.05rem;height:1.05rem;display:block;transition:transform .35s cubic-bezier(.22,1,.36,1)}
+.themetoggle:hover svg{transform:rotate(11deg) scale(1.06)}
+.themetoggle .i-moon{display:none}
+html[data-theme="dark"] .themetoggle .i-sun{display:none}
+html[data-theme="dark"] .themetoggle .i-moon{display:block}
+@media (prefers-color-scheme: dark){
+html:not([data-theme="light"]) .themetoggle .i-sun{display:none}
+html:not([data-theme="light"]) .themetoggle .i-moon{display:block}}
+.colo{margin-top:3.5rem;padding-top:1rem;border-top:1px solid var(--line);
+  font:.8rem/1.7 var(--sans);font-size-adjust:none;color:var(--muted)}
+.colo a{color:var(--muted)}
+.colo a:hover{color:var(--accent)}
+@media (prefers-reduced-motion:reduce){.mnav>summary::before,.themetoggle,.themetoggle svg{transition:none}
+  .themetoggle:hover svg{transform:none}}
+@media print{.mnav,.themetoggle{display:none}}
+
+.kicker{font:600 .875rem/1.5 var(--sans);font-size-adjust:none;color:var(--muted)}
+.tagline{font-family:var(--serif);font-size:1.1875rem;font-style:italic;color:var(--muted);margin:0 0 1.25rem}
 .scount{font-family:var(--mono);font-size:.82rem;color:var(--muted)}
-header.top{border-bottom:1px solid var(--line);background:var(--panel);position:sticky;top:0;z-index:5}
-header.top .wrap{display:flex;flex-wrap:wrap;align-items:center;column-gap:1.25rem;row-gap:.35rem;
-  min-height:3.4rem;padding-top:.5rem;padding-bottom:.5rem}
-.brand{font-family:var(--serif);font-weight:700;font-size:1.15rem;color:var(--ink)}
-.brand .dot{color:var(--accent)}
-header.top nav{margin-left:auto;display:flex;flex-wrap:wrap;column-gap:1.1rem;row-gap:.25rem;font-size:.9rem}
-@media (max-width:40rem){header.top nav{margin-left:0;flex-basis:100%;column-gap:.9rem}}
-header.top nav a{color:var(--muted)}
-header.top nav a.active,header.top nav a:hover{color:var(--accent)}
-.ethos{display:inline-block;font-size:.92rem;color:var(--info-ink);background:var(--info-bg);
-  border:1px solid var(--info-line);border-radius:999px;padding:.3rem .9rem;margin:.4rem 0 1rem}
-.badge{display:inline-block;font-family:var(--mono);font-size:.72rem;font-weight:700;
-  letter-spacing:.04em;padding:.15rem .5rem;border-radius:5px;color:var(--on-badge);vertical-align:middle}
-.badge.post{background:var(--accent)}
-.badge.get{background:var(--navy)}
-.badge.delete{background:var(--danger)}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1rem 1.15rem;margin:.7rem 0}
-.card .path{font-family:var(--mono);font-size:.95rem;margin-left:.5rem}
-.card .desc{color:var(--muted);font-size:.92rem;margin:.4rem 0 0}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:.7rem;margin:1rem 0}
-.tile{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
-  padding:.9rem 1rem}
-.tile:hover{border-color:var(--accent);text-decoration:none}
-.tile .t{font-family:var(--serif);font-size:1.05rem;color:var(--ink)}
-.tile .d{color:var(--muted);font-size:.85rem;margin-top:.2rem}
-.codeblock{margin:1rem 0;border-radius:10px;overflow:hidden;border:1px solid var(--code-border)}
-.codeblock .cbhead{display:flex;align-items:center;justify-content:space-between;
-  background:var(--code-bg);color:var(--code-ink);font-family:var(--mono);font-size:.7rem;
-  letter-spacing:.12em;text-transform:uppercase;padding:.45rem .9rem}
-.codeblock .cbhead button{font:inherit;letter-spacing:.08em;background:transparent;
-  color:var(--code-ink);border:1px solid var(--code-border);border-radius:5px;padding:.1rem .55rem;cursor:pointer}
-.codeblock .cbhead button:hover{background:var(--code-border);color:var(--code-ink)}
-.codeblock pre{margin:0;border:none;border-radius:0}
-footer{border-top:1px solid var(--line);color:var(--muted);font-size:.85rem;padding:1.5rem 0}
-footer .mark{font-family:var(--serif);color:var(--ink)}
+.sitehead{padding:0 1.25rem}
+.sitebar{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem 1.5rem;max-width:var(--wide);margin:0 auto;
+  padding:1.25rem 0 1rem;border-bottom:1px solid var(--line)}
+.brand{font:700 1.0625rem/1.2 var(--serif);letter-spacing:-.01em;color:var(--ink);text-decoration:none}
+.brand:hover{text-decoration:underline;text-decoration-color:var(--line-strong)}
+.sitebar nav{margin-left:auto;display:flex;flex-wrap:wrap;column-gap:1.1rem;row-gap:.25rem;
+  font:.875rem/1.5 var(--sans);font-size-adjust:none}
+.sitebar nav a{color:var(--muted);text-decoration:none}
+.sitebar nav a:hover{color:var(--ink);text-decoration:underline;text-decoration-color:var(--line-strong)}
+.sitebar nav a[aria-current="page"]{color:var(--ink);font-weight:600}
+@media (max-width:40rem){.sitebar .themetoggle{order:2;margin-left:auto}
+  .sitebar nav{order:3;margin-left:0;flex-basis:100%;column-gap:1rem}}
+.sitebar>.brand+.themetoggle{margin-left:auto}
+.frame>main.doc{padding:2.75rem 0 4rem}
+@media (min-width:78.5rem){.sitehead+.frame>.mnav{margin-top:3rem}}
+.ethos{display:block;font-size:1.0625rem;color:var(--ink);margin:0 auto 1.5em}
+.badge{display:inline-block;min-width:3.6rem;font:600 .72rem/1.5 var(--mono);letter-spacing:.04em;
+  padding:.05rem .45rem;border-radius:5px;color:var(--ink);background:var(--code-bg);
+  border:1px solid var(--code-border);text-align:center;vertical-align:.08em}
+.card{background:none;border:0;border-top:1px solid var(--line);border-radius:0;padding:.8rem 0;margin:0 auto}
+.card+:not(.card){margin-top:1.5em}
+.card:last-of-type{border-bottom:1px solid var(--line)}
+.card .path{font-family:var(--mono);font-size:.9rem;margin-left:.6rem}
+.card .desc{color:var(--muted);font-size:.9375rem;margin:.3rem 0 0}
+.grid{display:block;margin:0 auto 1.5em;border-top:1px solid var(--line)}
+.tile{display:block;padding:.75rem 0;border-bottom:1px solid var(--line);text-decoration:none}
+.tile .t{font:700 1.0625rem/1.35 var(--serif);color:var(--accent);text-decoration:underline;
+  text-decoration-thickness:1px;text-underline-offset:.18em;
+  text-decoration-color:color-mix(in srgb,var(--accent) 55%,transparent)}
+.tile:hover .t{text-decoration-thickness:2px;text-decoration-color:var(--accent)}
+.tile .d{color:var(--muted);font-size:.9375rem;margin-top:.15rem}
+.codeblock{margin:0 auto 1.125em}
+.codeblock .cbhead{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;
+  padding:0 0 .35rem;font:600 .8125rem/1.4 var(--sans);font-size-adjust:none;color:var(--muted)}
+.codeblock .cbhead button{font:500 .75rem/1.4 var(--sans);color:var(--muted);background:var(--panel);
+  border:1px solid var(--line);border-radius:999px;padding:.1rem .65rem;cursor:pointer}
+.codeblock .cbhead button:hover{color:var(--ink);border-color:var(--line-strong)}
+.codeblock pre{margin:0}
 .lock{width:.85em;height:.85em;vertical-align:-.08em;color:var(--muted)}
+.nf-code{font:600 .875rem/1.5 var(--sans);color:var(--muted);margin:0 auto .5rem;font-variant-numeric:tabular-nums}
+.nf-h{margin-top:0}
+.nf-p{color:var(--muted)}
 </style>
+<script>(function(){try{var s=localStorage.getItem('demiplane-theme');if(s==='light'||s==='dark'){document.documentElement.setAttribute('data-theme',s);}}catch(e){}})();</script>
 </head>
 <body>
 <a class="skip" href="#dp-main">Skip to content</a>
-<header class="top"><div class="wrap"><a class="brand" href="/">demiplane<span class="dot">.</span></a><nav aria-label="Site"><a href="/">Home</a><a href="/docs">Docs</a><a href="/docs/api">API</a><a href="/connect" class="active">Connect</a><a href="/gallery">Gallery</a><a href="/help">Help</a><a href="/llms.txt">llms.txt</a></nav></div></header>
-<main id="dp-main"><div class="wrap"><span class="kicker">Works with your harness</span><h1>Connect demiplane</h1><p>demiplane publishes from any coding harness, agent, or shell. Pick your tool below and copy the block. Every snippet targets this instance (<code>https://demiplane.example</code>) and each publish returns a URL only your network can reach.</p><span class="ethos">This instance is open (no bearer token configured). The snippets below work as-is; if the operator later enables auth, save your token to <code>~/.config/demiplane/token</code> and the same blocks keep working.</span><h2>Compatibility</h2><table><tr><th>Harness</th><th>How it connects</th><th>Verified</th></tr><tr><td>Claude Code</td><td>MCP (native tools) or capture hook</td><td>Yes, tested and used daily</td></tr><tr><td>Any MCP client</td><td>MCP (standard stdio JSON-RPC server)</td><td>Not yet verified</td></tr><tr><td>Aider</td><td>shell /run + curl</td><td>Yes, the curl path is tested</td></tr><tr><td>Any shell / CI</td><td>curl or demiplane publish</td><td>Yes, REST and CLI tests</td></tr></table><p class="desc">demiplane speaks plain MCP and plain HTTP, so the list of clients it works with is longer than the list we verify. The table says which is which. Got it running in another MCP client? Open an issue and we will add it.</p><h2 id="mcp">MCP clients</h2><p><code>demiplane mcp</code> is a standard stdio JSON-RPC MCP server, so any MCP-capable client can drive it. Register demiplane once and <code>publish</code>, <code>list</code>, <code>get</code>, and <code>delete</code> become native tools. The stanza below is the same everywhere; only the config file location differs, and your client's own docs name that path.</p><div class="codeblock"><div class="cbhead"><span>mcp.json (mcpServers stanza)</span><button data-copy>Copy</button></div><pre><code>{
+<header class="sitehead"><div class="sitebar"><a class="brand" href="/">demiplane</a><nav aria-label="Site"><a href="/docs">Docs</a><a href="/docs/api">API</a><a href="/connect" aria-current="page">Connect</a><a href="/gallery">Gallery</a><a href="/help">Help</a><a href="/llms.txt">llms.txt</a></nav><button class="themetoggle" type="button" aria-pressed="false" aria-label="Dark theme" title="Switch light or dark"><svg class="i-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="4.1"/><path d="M12 2.6v2.1M12 19.3v2.1M2.6 12h2.1M19.3 12h2.1M5.1 5.1l1.5 1.5M17.4 17.4l1.5 1.5M18.9 5.1l-1.5 1.5M6.6 17.4l-1.5 1.5"/></svg><svg class="i-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.3A8.2 8.2 0 0 1 9.7 3.5a8.2 8.2 0 1 0 10.8 10.8z"/></svg></button></div></header>
+<div class="frame">
+<details class="mnav toc"><summary>Contents</summary><nav aria-label="Contents"><ol class="outline"><li class="l2" data-sec="s1"><a href="#mcp">MCP clients</a></li><li class="l2" data-sec="s2"><a href="#hook">Claude Code capture hook</a></li><li class="l2" data-sec="s3"><a href="#curl">Bare curl</a></li><li class="l2" data-sec="s4"><a href="#cli">Command-line client</a></li><li class="l2" data-sec="s5"><a href="#aider">Aider and shell-command harnesses</a></li></ol></nav></details>
+<main id="dp-main" class="doc"><h1>Connect demiplane</h1><p>demiplane publishes from any coding harness, agent, or shell. Pick your tool below and copy the block. Every snippet targets this instance (<code>https://demiplane.example</code>) and each publish returns a URL only your network can reach.</p><span class="ethos">This instance is open (no bearer token configured). The snippets below work as-is; if the operator later enables auth, save your token to <code>~/.config/demiplane/token</code> and the same blocks keep working.</span><h2>Compatibility</h2><table><tr><th>Harness</th><th>How it connects</th><th>Verified</th></tr><tr><td>Claude Code</td><td>MCP (native tools) or capture hook</td><td>Yes, tested and used daily</td></tr><tr><td>Any MCP client</td><td>MCP (standard stdio JSON-RPC server)</td><td>Not yet verified</td></tr><tr><td>Aider</td><td>shell /run + curl</td><td>Yes, the curl path is tested</td></tr><tr><td>Any shell / CI</td><td>curl or demiplane publish</td><td>Yes, REST and CLI tests</td></tr></table><p class="desc">demiplane speaks plain MCP and plain HTTP, so the list of clients it works with is longer than the list we verify. The table says which is which. Got it running in another MCP client? Open an issue and we will add it.</p><h2 id="mcp">MCP clients</h2><p><code>demiplane mcp</code> is a standard stdio JSON-RPC MCP server, so any MCP-capable client can drive it. Register demiplane once and <code>publish</code>, <code>list</code>, <code>get</code>, and <code>delete</code> become native tools. The stanza below is the same everywhere; only the config file location differs, and your client's own docs name that path.</p><div class="codeblock"><div class="cbhead"><span>mcp.json (mcpServers stanza)</span><button data-copy>Copy</button></div><pre><code>{
   &#34;mcpServers&#34;: {
     &#34;demiplane&#34;: {
       &#34;command&#34;: &#34;demiplane&#34;,
@@ -165,8 +265,8 @@ demiplane publish --url https://demiplane.example --token-file ~/.config/demipla
 # or set the environment once and drop the flags
 export DEMIPLANE_URL=https://demiplane.example
 export DEMIPLANE_TOKEN_FILE=~/.config/demiplane/token
-demiplane publish index.html</code></pre></div><h2 id="aider">Aider and shell-command harnesses</h2><p>Harnesses that expose a shell command (Aider's <code>/run</code>, for example) publish through the same curl. Run it and paste the returned URL back:</p><div class="codeblock"><div class="cbhead"><span>Aider /run</span><button data-copy>Copy</button></div><pre><code>/run curl --data-binary @index.html https://demiplane.example/publish</code></pre></div><h2>Fetch it back</h2><p>Every publish returns a URL. Fetch it from anything on your network:</p><div class="codeblock"><div class="cbhead"><span>Read</span><button data-copy>Copy</button></div><pre><code>curl https://demiplane.example/shadow-specter</code></pre></div><h2>Learn more</h2><div class="grid"><a class="tile" href="/docs"><div class="t">Docs</div><div class="d">Full guide, served by demiplane itself.</div></a><a class="tile" href="/docs/api"><div class="t">API reference</div><div class="d">Full REST surface with per-language examples.</div></a><a class="tile" href="/llms.txt"><div class="t">llms.txt</div><div class="d">One-fetch reference for agents.</div></a></div></div></main>
-<footer><div class="wrap"><span class="mark">demiplane</span> · your private publishing plane.</div></footer>
+demiplane publish index.html</code></pre></div><h2 id="aider">Aider and shell-command harnesses</h2><p>Harnesses that expose a shell command (Aider's <code>/run</code>, for example) publish through the same curl. Run it and paste the returned URL back:</p><div class="codeblock"><div class="cbhead"><span>Aider /run</span><button data-copy>Copy</button></div><pre><code>/run curl --data-binary @index.html https://demiplane.example/publish</code></pre></div><h2>Fetch it back</h2><p>Every publish returns a URL. Fetch it from anything on your network:</p><div class="codeblock"><div class="cbhead"><span>Read</span><button data-copy>Copy</button></div><pre><code>curl https://demiplane.example/shadow-specter</code></pre></div><h2>Learn more</h2><div class="grid"><a class="tile" href="/docs"><div class="t">Docs</div><div class="d">Full guide, served by demiplane itself.</div></a><a class="tile" href="/docs/api"><div class="t">API reference</div><div class="d">Full REST surface with per-language examples.</div></a><a class="tile" href="/llms.txt"><div class="t">llms.txt</div><div class="d">One-fetch reference for agents.</div></a></div><footer class="colo">Sealed by default, shared by choice.</footer></main>
+</div>
 <script>
 document.addEventListener('click',function(e){
   var b=e.target.closest('button[data-copy]'); if(!b)return;
@@ -176,4 +276,40 @@ document.addEventListener('click',function(e){
   });
 });
 </script>
+<script>(function(){
+var k='demiplane-theme',root=document.documentElement,btn=document.querySelector('.themetoggle');
+var eff=function(){var t=root.getAttribute('data-theme');
+if(t==='dark'||t==='light')return t;
+return (window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';};
+if(btn){
+var sync=function(){btn.setAttribute('aria-pressed',eff()==='dark'?'true':'false');};
+sync();
+btn.addEventListener('click',function(){
+var next=eff()==='dark'?'light':'dark';
+root.setAttribute('data-theme',next);
+sync();
+try{localStorage.setItem(k,next);}catch(e){}});}
+var bar=document.querySelector('.docbar');
+if(bar){var f=function(){bar.classList.toggle('scrolled',window.scrollY>4);};f();
+window.addEventListener('scroll',f,{passive:true});}
+})();</script>
+<script>(function(){
+var r=document.documentElement;r.classList.add('fjs');
+var wide=matchMedia('(min-width:78.5rem)'),navs=document.querySelectorAll('details.mnav');
+var fold=function(){for(var i=0;i<navs.length;i++)navs[i].open=wide.matches;};
+fold();if(wide.addEventListener)wide.addEventListener('change',fold);else wide.addListener(fold);
+var links={};document.querySelectorAll('.outline a').forEach(function(a){links[a.getAttribute('href').slice(1)]=a;});
+var heads=[].filter.call(document.querySelectorAll('main h2[id],main h3[id]'),function(h){return links[h.id];});
+if(!heads.length)return;
+var cur=null,mark=function(){
+var c=heads[0];
+for(var i=0;i<heads.length;i++){if(heads[i].getBoundingClientRect().top-32<=0)c=heads[i];else break;}
+if(c===cur)return;cur=c;
+Object.keys(links).forEach(function(k){links[k].removeAttribute('aria-current');});
+links[c.id].setAttribute('aria-current','true');
+var sec=links[c.id].parentNode.getAttribute('data-sec');
+document.querySelectorAll('.outline .l3').forEach(function(li){li.classList.toggle('open',li.getAttribute('data-sec')===sec);});};
+var q=false;window.addEventListener('scroll',function(){if(!q){q=true;requestAnimationFrame(function(){q=false;mark();});}},{passive:true});
+mark();
+})();</script>
 </body></html>

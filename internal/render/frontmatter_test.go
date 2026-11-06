@@ -22,7 +22,9 @@ Body text.
 // renderMeta renders with the meta-header (and masthead) enabled, the publish
 // path's normal configuration.
 func renderMeta(src string) string {
-	return string(Markdown([]byte(src), Options{Header: true, MetaHeader: true}))
+	// No masthead: an F page sets the frontmatter as its byline (flayout_test),
+	// so the meta-header block is what a page without one carries.
+	return string(Markdown([]byte(src), Options{MetaHeader: true}))
 }
 
 func TestFrontmatterMetaHeader(t *testing.T) {
@@ -53,8 +55,8 @@ func TestFrontmatterMetaHeader(t *testing.T) {
 		}
 	}
 
-	// The H1 still becomes the masthead title; frontmatter is NOT in the body.
-	if !strings.Contains(out, `<h1 class="doctitle">Overnight Report</h1>`) {
+	// The H1 still renders; frontmatter is NOT in the body.
+	if !strings.Contains(out, `Overnight Report<a class="heading-anchor"`) {
 		t.Errorf("masthead title missing/wrong\ngot:\n%s", out)
 	}
 	if strings.Contains(out, "date: 2026-06-20") || strings.Contains(out, "branch: feat") {

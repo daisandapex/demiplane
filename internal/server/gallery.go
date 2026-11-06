@@ -71,7 +71,6 @@ func (s *Server) handleGallery(w http.ResponseWriter, r *http.Request) {
 	base := s.contentBase(r)
 
 	var b strings.Builder
-	b.WriteString(`<span class="kicker">Artifact index</span>`)
 	b.WriteString(`<h1>Gallery</h1>`)
 	b.WriteString(`<p>Every published artifact on this instance. Private (capability-URL) ` +
 		`artifacts are never listed; their unguessable URL is the secret.</p>`)
@@ -232,6 +231,7 @@ func humanSize(n int64) string {
 // not collide with the shared chrome classes in chrome.go. Every color is a theme
 // token so the gallery re-skins under --theme dark like the rest of the chrome.
 const galleryStyle = `<style>
+.doc>:is(.gtools,.ggrid){max-width:100%}
 .gtools{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;margin:1.2rem 0 .4rem}
 .gsearch{flex:1 1 16rem;min-width:12rem;font:inherit;font-size:.95rem;color:var(--ink);
   background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:.5rem .8rem}
@@ -242,7 +242,7 @@ const galleryStyle = `<style>
 .ggrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:.8rem;margin:1rem 0}
 .gcard{display:flex;flex-direction:column;gap:.55rem;background:var(--panel);
   border:1px solid var(--line);border-radius:12px;padding:.95rem 1.05rem}
-.gcard:hover{border-color:var(--accent)}
+.gcard:hover{border-color:var(--line-strong)}
 .ghead{display:flex;align-items:baseline;gap:.5rem}
 .gtitle{font-family:var(--serif);font-size:1.12rem;color:var(--ink);word-break:break-word}
 .gtitle:hover{color:var(--accent);text-decoration:none}
@@ -252,13 +252,13 @@ const galleryStyle = `<style>
 .gopen{font-size:.85rem;font-weight:600;color:var(--accent)}
 .gcopy{font:inherit;font-size:.82rem;background:transparent;color:var(--muted);
   border:1px solid var(--line);border-radius:6px;padding:.2rem .6rem;cursor:pointer}
-.gcopy:hover{border-color:var(--accent);color:var(--accent)}
+.gcopy:hover{border-color:var(--line-strong);color:var(--ink)}
 .ggrid.grouped{display:block}
 .ggroup{margin:1.2rem 0}
 .ggrouphead{display:flex;align-items:center;gap:.55rem;width:100%;text-align:left;font:inherit;
   background:transparent;border:none;border-bottom:1px solid var(--line);color:var(--ink);
   padding:.35rem 0;margin-bottom:.7rem;cursor:pointer}
-.ggrouphead:hover .ggname{color:var(--accent)}
+.ggrouphead:hover .ggname{text-decoration:underline;text-decoration-color:var(--line-strong)}
 .ggname{font-family:var(--serif);font-size:1.08rem;text-transform:capitalize}
 .ggcount{margin-left:auto;font-family:var(--mono);font-size:.68rem;font-weight:700;color:var(--muted);
   background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:.05rem .5rem}

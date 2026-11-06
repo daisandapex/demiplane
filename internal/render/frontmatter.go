@@ -120,6 +120,16 @@ func metaHeader(st *state, fields []metaField) (htmlOut string, needsScript bool
 	return b.String(), needsScript, nil
 }
 
+// fieldValue returns the value of the first field named key (any case), or "".
+func fieldValue(fields []metaField, key string) string {
+	for _, f := range fields {
+		if strings.EqualFold(f.key, key) {
+			return f.value
+		}
+	}
+	return ""
+}
+
 // isDateKey reports whether key marks the timestamp field (date or published).
 func isDateKey(key string) bool {
 	switch strings.ToLower(key) {

@@ -20,7 +20,7 @@ func TestChromeAccessibility(t *testing.T) {
 		if skip < 0 || skip < body0 || skip > strings.Index(page, "<header") {
 			t.Errorf("%s: no skip link before the header", p)
 		}
-		if !strings.Contains(page, `<main id="dp-main">`) {
+		if !strings.Contains(page, `<main id="dp-main" class="doc">`) {
 			t.Errorf("%s: main is not the skip target", p)
 		}
 		if !strings.Contains(page, `<nav aria-label="Site">`) {

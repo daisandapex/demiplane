@@ -266,7 +266,7 @@ func TestLandingStatesNoArtifactCount(t *testing.T) {
 		if regexp.MustCompile(`\d+ artifacts? · auth`).MatchString(page) {
 			t.Errorf("browse=%v: landing states an artifact count", browse)
 		}
-		if !strings.Contains(page, "auth: open (no token configured)") {
+		if !strings.Contains(page, "Auth: open (no token configured)") {
 			t.Errorf("browse=%v: landing lost the auth state", browse)
 		}
 	}

@@ -25,7 +25,7 @@ func TestOneBannerAndSkipLink(t *testing.T) {
 		if skip < 0 || skip < body {
 			t.Errorf("%s: no skip link at the top of the body:\n%s", name, out)
 		}
-		if !strings.Contains(out, `<main class="wrap" id="dp-main">`) {
+		if !strings.Contains(out, `<main class="wrap" id="dp-main">`) && !strings.Contains(out, `<main class="wrap doc" id="dp-main">`) {
 			t.Errorf("%s: main column is not the skip target:\n%s", name, out)
 		}
 		if !strings.Contains(out, `.skip{`) {

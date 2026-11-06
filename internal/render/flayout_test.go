@@ -4,148 +4,216 @@
 package render
 
 import (
-	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
-const fDoc = "# Plan\n\nLead text.\n\n## First part\n\nBody.\n\n### A detail\n\nMore.\n\n## Second part\n\nEnd.\n"
+const fDoc = "# Plan\n\nLead text.\n\n## First part\n\nBody.\n\n### A detail\n\nMore.\n\n## Second part\n\nEnd.\n\n## Third part\n\nDone.\n"
 
-// TestFRailCarriesOutline: a masthead page with sections gets the right rail,
-// after the main column, listing h2s and their h3s with the h3s keyed to their
-// section.
-func TestFRailCarriesOutline(t *testing.T) {
+// between returns the part of s from the first from to the next to after it.
+func between(t *testing.T, s, from, to string) string {
+	t.Helper()
+	i := strings.Index(s, from)
+	if i < 0 {
+		t.Fatalf("no %q in:\n%s", from, s)
+	}
+	j := strings.Index(s[i:], to)
+	if j < 0 {
+		t.Fatalf("no %q after %q", to, from)
+	}
+	return s[i : i+j+len(to)]
+}
+
+// TestFOpensWithTheDocument: the first thing in the body after the skip link
+// is the title, then the byline with the toggle at its end, then the text.
+// There is no top bar.
+func TestFOpensWithTheDocument(t *testing.T) {
 	out := string(Markdown([]byte(fDoc), Options{Header: true}))
-	if !strings.Contains(out, `<body class="f has-rail">`) {
-		t.Errorf("body should carry the F and rail classes:\n%s", out)
+	if strings.Contains(out, `class="docbar"`) || strings.Contains(out, `class="treebtn"`) {
+		t.Errorf("F page still carries a top bar:\n%s", out)
 	}
-	rail := strings.Index(out, `<aside class="frail" aria-label="About this page">`)
-	main := strings.Index(out, "</main>")
-	if rail < 0 || main < 0 || rail < main {
-		t.Fatalf("rail missing or not after the main column (rail %d, /main %d):\n%s", rail, main, out)
+	want := `<a class="skip" href="#dp-main">Skip to content</a>
+<div class="frame">
+<header class="dochead"><h1 class="doctitle">Plan</h1>
+<div class="byline"><p class="facts"></p><button class="themetoggle"`
+	if !strings.Contains(out, want) {
+		t.Errorf("masthead is not title, byline, toggle:\n%s", out)
 	}
+	head := between(t, out, `<header class="dochead">`, "</header>")
+	if strings.Index(out, "</header>") > strings.Index(out, `<main class="wrap doc" id="dp-main">`) {
+		t.Errorf("text starts before the masthead closes:\n%s", head)
+	}
+}
+
+// TestFBylineCarriesTheFacts: the frontmatter becomes one line under the
+// title, in a fixed order, the title field is not repeated, any other field
+// is labelled, and the date is the frontmatter's.
+func TestFBylineCarriesTheFacts(t *testing.T) {
+	src := "---\ntitle: Plan\ntags: seats, security\nauthor: Ben\ndate: 2026-11-05\nstatus: draft\naudience: ops\n---\n# Plan\n\nText.\n"
+	out := string(Markdown([]byte(src), Options{Header: true, MetaHeader: true,
+		Published: time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)}))
+	line := between(t, out, `<p class="facts">`, "</p>")
+	sep := `<span class="sep" aria-hidden="true"> · </span>`
+	want := `<p class="facts"><time class="tstamp" datetime="2026-11-05">2026-11-05</time>` + sep +
+		`<span class="who">by Ben</span>` + sep + `<span class="status">draft</span>` + sep +
+		`<span class="tags">seats, security</span>` + sep + `<span>Audience: ops</span></p>`
+	if line != want {
+		t.Errorf("byline\n got %s\nwant %s", line, want)
+	}
+	if strings.Contains(out, `class="metahead"`) || strings.Contains(out, "2026-11-06</time>") {
+		t.Errorf("F page should carry the facts once, in the byline:\n%s", out)
+	}
+}
+
+// TestFBylineFallsBackToPublishDate: with no frontmatter the byline still
+// dates the page, from the publish date, and a long page shows its read time.
+func TestFBylineFallsBackToPublishDate(t *testing.T) {
+	long := "# Long\n\n" + strings.Repeat("word ", 700) + "\n"
+	out := string(Markdown([]byte(long), Options{Header: true,
+		Published: time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)}))
+	if !strings.Contains(out, `<p class="facts"><time class="tstamp" datetime="2026-11-06">2026-11-06</time>`+
+		`<span class="sep" aria-hidden="true"> · </span><span class="rt">3 min read</span></p>`) {
+		t.Errorf("byline should carry the publish date and the read time:\n%s", between(t, out, `<div class="byline">`, "</div>"))
+	}
+	short := string(Markdown([]byte("# Short\n\nThree words here.\n"), Options{Header: true}))
+	if strings.Contains(short, "min read") {
+		t.Error("a short note should not show a read time")
+	}
+}
+
+// TestFFrontmatterTitleBeatsSlug: a page with no H1 takes its title from the
+// frontmatter before the slug fallback.
+func TestFFrontmatterTitleBeatsSlug(t *testing.T) {
+	out := string(Markdown([]byte("---\ntitle: A <b> plan\n---\nText.\n"), Options{Header: true, MetaHeader: true, Title: "slug-1"}))
+	if !strings.Contains(out, `<h1 class="doctitle">A &lt;b&gt; plan</h1>`) {
+		t.Errorf("frontmatter title should head the page, escaped:\n%s", out)
+	}
+}
+
+// TestFContentsFromThreeSections: the contents list appears from three h2
+// sections, lists h2s and their h3s keyed to their section, and sits after the
+// masthead, before the text.
+func TestFContentsFromThreeSections(t *testing.T) {
+	out := string(Markdown([]byte(fDoc), Options{Header: true}))
+	if !strings.Contains(out, `<body class="f has-toc">`) {
+		t.Errorf("body should carry has-toc:\n%s", out)
+	}
+	toc := between(t, out, `<details class="mnav toc">`, "</details>")
 	for _, want := range []string{
-		// Entries name their section by index; an h3 shares its h2's.
+		`<summary>Contents</summary><nav aria-label="Contents"><ol class="outline">`,
 		`<li class="l2" data-sec="s1"><a href="#first-part">First part</a></li>`,
 		`<li class="l3" data-sec="s1"><a href="#a-detail">A detail</a></li>`,
-		`<li class="l2" data-sec="s2"><a href="#second-part">Second part</a></li>`,
+		`<li class="l2" data-sec="s3"><a href="#third-part">Third part</a></li>`,
 	} {
-		if !strings.Contains(out[rail:], want) {
-			t.Errorf("outline missing %q:\n%s", want, out[rail:])
+		if !strings.Contains(toc, want) {
+			t.Errorf("contents missing %q:\n%s", want, toc)
 		}
 	}
-	if strings.Contains(out, `<section class="rail-facts"`) {
-		t.Errorf("no frontmatter, so no facts block:\n%s", out)
+	if strings.Index(out, `class="mnav toc"`) < strings.Index(out, "</header>") ||
+		strings.Index(out, `class="mnav toc"`) > strings.Index(out, `<main`) {
+		t.Error("contents should sit between the masthead and the text")
+	}
+	two := string(Markdown([]byte("# T\n\n## One\n\na\n\n## Two\n\nb\n"), Options{Header: true}))
+	if strings.Contains(two, `class="mnav toc"`) || !strings.Contains(two, `<body class="f">`) {
+		t.Errorf("a two-section page needs no contents:\n%s", two)
 	}
 }
 
-// TestFNoRailWithoutContent: a page with fewer than two headings and no facts
-// has nothing for a rail to carry, so it renders none.
-func TestFNoRailWithoutContent(t *testing.T) {
-	out := string(Markdown([]byte("# Note\n\nJust prose.\n\n## Only one\n\nMore.\n"), Options{Header: true}))
-	if strings.Contains(out, `<aside`) || !strings.Contains(out, `<body class="f">`) {
-		t.Errorf("a page with one heading should render no rail:\n%s", out)
+// TestFOutlineEscapes: heading text reaches the contents escaped, never as markup.
+func TestFOutlineEscapes(t *testing.T) {
+	out := string(Markdown([]byte("# T\n\n## <script>x</script> one\n\na\n\n## `code` two\n\nb\n\n## three\n\nc\n"), Options{Header: true}))
+	toc := between(t, out, `<details class="mnav toc">`, "</details>")
+	if strings.Contains(toc, "<script>") {
+		t.Errorf("raw markup reached the contents:\n%s", toc)
 	}
-	if !strings.Contains(out, `<body class="f">`) {
-		t.Errorf("body should still carry the F class:\n%s", out)
-	}
-}
-
-// TestFRailCarriesFacts: the frontmatter meta-header moves out of the column
-// into the rail.
-func TestFRailCarriesFacts(t *testing.T) {
-	src := "---\ndate: 2026-06-20\nowner: ops\n---\n# Report\n\nBody.\n"
-	out := string(Markdown([]byte(src), Options{Header: true, MetaHeader: true}))
-	rail := strings.Index(out, `<aside class="frail"`)
-	if rail < 0 {
-		t.Fatalf("facts alone should still make a rail:\n%s", out)
-	}
-	mainHTML := out[strings.Index(out, `<main class="wrap" id="dp-main">`):strings.Index(out, "</main>")]
-	if strings.Contains(mainHTML, `class="metahead"`) {
-		t.Errorf("meta-header should leave the column:\n%s", mainHTML)
-	}
-	if !strings.Contains(out[rail:], `<section class="rail-facts"><p class="rail-h">Details</p><div class="metahead">`) ||
-		!strings.Contains(out[rail:], "<dd>ops</dd>") {
-		t.Errorf("rail should carry the facts:\n%s", out[rail:])
-	}
-	if !strings.Contains(out, ".frail .metahead .metarow{") {
-		t.Errorf("rail facts styling missing:\n%s", out)
+	if !strings.Contains(toc, `&lt;script&gt;x&lt;/script&gt; one</a>`) || !strings.Contains(toc, `>code two</a>`) {
+		t.Errorf("contents text should be the escaped plain heading:\n%s", toc)
 	}
 }
 
-// TestFTreeOnlyWithSeries: the tree, its button and the has-tree class appear
-// only for a series family of two or more; the current page is marked and
-// unlinked, the others link through the content base.
-func TestFTreeOnlyWithSeries(t *testing.T) {
+// TestFSeriesList: a series page lists its family in order with the current
+// page marked and unlinked, under a summary that says where the reader is; a
+// page with no family has none.
+func TestFSeriesList(t *testing.T) {
 	for name, opts := range map[string]Options{
-		"no slug":   {Header: true},
-		"no series": {Header: true, Slug: "lesson-02"},
-		"singleton": {Header: true, Slug: "lesson-02", Siblings: []string{"lesson-02", ""}},
+		"no slug":   {Header: true, Siblings: []string{"b"}},
+		"no series": {Header: true, Slug: "a"},
+		"singleton": {Header: true, Slug: "a", Siblings: []string{"a", ""}},
 	} {
-		out := string(Markdown([]byte(fDoc), opts))
-		if !strings.Contains(out, `<body class="f has-rail">`) {
-			t.Errorf("%s: body should not carry has-tree", name)
-		}
-		for _, bad := range []string{`<nav class="ftree"`, `<button class="treebtn"`} {
-			if strings.Contains(out, bad) {
-				t.Errorf("%s: %q present without a series:\n%s", name, bad, out)
-			}
+		if out := string(Markdown([]byte(fDoc), opts)); strings.Contains(out, "has-tree") || strings.Contains(out, "mnav seq") {
+			t.Errorf("%s: no family, so no series list:\n%s", name, out)
 		}
 	}
-	out := string(Markdown([]byte(fDoc), Options{Header: true, Slug: "lesson-02",
-		Siblings: []string{"lesson-03", "lesson-01"}, ContentBase: "https://c.example"}))
-	if !strings.Contains(out, `<body class="f has-tree has-rail">`) {
+	out := string(Markdown([]byte(fDoc), Options{Header: true, Slug: "lesson-02", ContentBase: "https://c.example",
+		Siblings: []string{"lesson-03", "lesson-01"}}))
+	if !strings.Contains(out, `<body class="f has-tree has-toc">`) {
 		t.Errorf("series page should carry has-tree:\n%s", out)
 	}
-	want := `<nav class="ftree" id="ftree" aria-label="Series"><p class="rail-h">Series</p><ol>` +
-		`<li><a href="https://c.example/lesson-01">lesson-01</a></li>` +
-		`<li><span aria-current="page">lesson-02</span></li>` +
-		`<li><a href="https://c.example/lesson-03">lesson-03</a></li></ol></nav>`
+	want := `<details class="mnav seq" id="ftree"><summary>Series <span class="pos">2 of 3</span></summary>` +
+		`<nav aria-label="Series"><ol><li><a href="https://c.example/lesson-01">lesson-01</a></li>` +
+		`<li><span aria-current="page">lesson-02</span></li><li><a href="https://c.example/lesson-03">lesson-03</a></li></ol></nav></details>`
 	if !strings.Contains(out, want) {
-		t.Errorf("tree should list the family in order:\n%s", out)
+		t.Errorf("series list wrong:\n%s", out)
 	}
-	// the button is hidden until the script that makes it work runs
-	if !strings.Contains(out, `aria-controls="ftree" aria-expanded="false" hidden `) || !strings.Contains(out, "btn.hidden=false") {
-		t.Errorf("tree button should start hidden and be revealed by script:\n%s", out)
-	}
-	// .treebtn sets display, which beats the UA [hidden] rule; without its own
-	// [hidden] rule a page without script shows a button that does nothing.
-	if !strings.Contains(out, ".treebtn[hidden]{display:none}") {
-		t.Errorf("hidden tree button must stay hidden under the .treebtn display rule")
-	}
-	if !strings.Contains(out, `<button class="treebtn" type="button" aria-controls="ftree"`) {
-		t.Errorf("series page should carry the tree button:\n%s", out)
+	if strings.Contains(out, "localStorage.setItem('demiplane-nav'") || strings.Contains(out, "e.key!=='['") {
+		t.Error("the series list has no stored state and no shortcut to persist")
 	}
 }
 
-// TestFTreeClosedBelow1410Remembered pins the owner's rule: the tree opens by
-// default only at 1410 px and wider, a stored choice wins, `[` toggles and
-// stores it, and the stored choice is applied in <head> before paint.
-func TestFTreeClosedBelow1410Remembered(t *testing.T) {
-	out := string(Markdown([]byte(fDoc), Options{Header: true, Slug: "a", Siblings: []string{"b"}}))
-	head := out[:strings.Index(out, "</head>")]
+// TestFNavsFoldOnNarrowScreens: the margin navs open from 78.5rem, where the
+// frame has gutters for them, and fold to one-line disclosures below it.
+func TestFNavsFoldOnNarrowScreens(t *testing.T) {
+	out := string(Markdown([]byte(fDoc), Options{Header: true}))
 	for _, want := range []string{
-		"localStorage.getItem('demiplane-nav')",
-		"matchMedia('(min-width:1410px)')",
-		"if(p==='open'||(p!=='closed'&&w))r.classList.add('nav-on')",
-	} {
-		if !strings.Contains(head, want) {
-			t.Errorf("head init script missing %q:\n%s", want, head)
-		}
-	}
-	for _, want := range []string{
-		"if(e.key!=='['",
-		"localStorage.setItem(K,o?'open':'closed')",
-		"else m.addListener(f)", // MediaQueryList without addEventListener
-		"if(d)d.open=!narrow.matches",
-		// without script every h3 stays listed in the narrow flow
-		".fjs .frail .outline .l3,.fjs .frail .outline .l3.open{display:none}",
-		"html.nav-on .f.has-tree .ftree{display:block}",
-		".ftree{grid-area:tree;display:none}",
+		"wide=matchMedia('(min-width:78.5rem)')",
+		"navs[i].open=wide.matches",
+		"@media (min-width:78.5rem){\n.frame{grid-template-columns:minmax(0,1fr) minmax(0,var(--wide)) minmax(0,1fr)",
+		`grid-template-areas:". head ." "seq body toc"`,
+		".frame>.mnav{position:sticky",
+		`<details class="mnav toc"><summary>`,
 	} {
 		if !strings.Contains(out, want) {
-			t.Errorf("tree toggle missing %q", want)
+			t.Errorf("missing %q", want)
 		}
+	}
+	if strings.Contains(out, `<details class="mnav toc" open`) {
+		t.Error("contents should start folded so a phone opens on the text")
+	}
+}
+
+// TestFOneAxis: the text column, the wide blocks and the title share one
+// centre: text at the measure, code and tables to the frame, the title from
+// the text's left edge to the frame's right edge.
+func TestFOneAxis(t *testing.T) {
+	out := string(Markdown([]byte(fDoc), Options{Header: true}))
+	for _, want := range []string{
+		":root{--measure:30rem;--wide:46rem;",
+		".doc>*{max-width:var(--measure);margin-inline:auto}",
+		".f main.wrap>pre,.f main.wrap>.table-wrap{max-width:100%}",
+		".dochead>*,.doc>h1{margin-left:max(0px,calc((100% - var(--measure)) / 2));margin-right:0}",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+}
+
+// TestFCreditJoinsTheColophon: with a colophon, the credit is the last item
+// of its one line under its one rule; there is no second footer rule.
+func TestFCreditJoinsTheColophon(t *testing.T) {
+	opts := Options{Header: true, Footer: true, Colophon: true, Slug: "s",
+		Published: time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)}
+	out := string(Markdown([]byte(fDoc), opts))
+	if strings.Contains(out, `<footer class="docfoot"`) {
+		t.Errorf("credit should live in the colophon, not a second footer:\n%s", out)
+	}
+	if !strings.Contains(out, `<span>&middot;</span><span class="credit">Generated by <span class="mark">demiplane</span></span></div></div>`) {
+		t.Errorf("credit missing from the colophon line:\n%s", out)
+	}
+	opts.Footer = false
+	if out := string(Markdown([]byte(fDoc), opts)); strings.Contains(out, "Generated by") {
+		t.Error("--footer=false should drop the credit")
 	}
 }
 
@@ -153,40 +221,9 @@ func TestFTreeClosedBelow1410Remembered(t *testing.T) {
 // script, so the JS-free reply flow is unchanged.
 func TestFHeaderlessKeepsColumn(t *testing.T) {
 	out := string(Markdown([]byte(fDoc), Options{Footer: true, ReplySlug: "q-1"}))
-	for _, bad := range []string{`class="f`, "fgrid", "<aside", "<script"} {
+	for _, bad := range []string{`class="f`, `class="frame"`, `class="mnav`, `class="byline"`, "<script"} {
 		if strings.Contains(out, bad) {
 			t.Errorf("headerless page should carry no %q:\n%s", bad, out)
-		}
-	}
-}
-
-// TestFOutlineEscapes: heading text reaches the outline escaped, never as markup.
-func TestFOutlineEscapes(t *testing.T) {
-	out := string(Markdown([]byte("# T\n\n## <script>x</script> one\n\na\n\n## `code` two\n\nb\n"), Options{Header: true}))
-	rail := out[strings.Index(out, `<aside`):strings.Index(out, `</aside>`)]
-	if strings.Contains(rail, "<script>") {
-		t.Errorf("raw markup reached the outline:\n%s", rail)
-	}
-	if !strings.Contains(rail, `&lt;script&gt;x&lt;/script&gt; one</a>`) || !strings.Contains(rail, `>code two</a>`) {
-		t.Errorf("outline text should be the escaped plain heading:\n%s", rail)
-	}
-}
-
-// TestFColumnSharesOneEdge: in F every child of the column starts at the
-// column edge (no centring) and stops at the measure; the footer sits in the
-// same grid cell as the title.
-func TestFColumnSharesOneEdge(t *testing.T) {
-	out := string(Markdown([]byte(fDoc), Options{Header: true, Footer: true}))
-	for _, want := range []string{
-		".f main.wrap>*{max-width:var(--measure);margin-inline:0}",
-		".dochead .doctitle{max-width:var(--measure)",
-		`<footer class="docfoot"><div class="wrap"><div class="fcell">Generated by`,
-		".f .docfoot .fcell{grid-area:head}",
-		// one column below 51.25rem: the bar's tools rejoin the kicker's row
-		"body.f.has-rail .docbar .tools{grid-area:head}\nhtml.nav-drawer",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("missing %q", want)
 		}
 	}
 }
@@ -217,9 +254,8 @@ func TestFSkippedUnderCustomCSS(t *testing.T) {
 	out := string(Markdown([]byte(src), Options{Header: true, Footer: true, MetaHeader: true,
 		CSS: "body{color:red}", Slug: "lesson-02", Siblings: []string{"lesson-01", "lesson-03"}}))
 	for _, bad := range []string{
-		`<body class="f`, `class="fgrid"`, `class="frail"`, `class="ftree"`, `class="treebtn"`,
-		`class="dochead"`, `class="fcell"`, "code-first", "demiplane-nav", "classList.add('fjs')",
-		".f main.wrap", ".frail .metahead", "@media print",
+		`<body class="f`, `class="frame"`, `class="mnav`, `class="byline"`, `class="themetoggle"`,
+		`class="dochead"`, "code-first", "classList.add('fjs')", ".f main.wrap", ".mnav{",
 	} {
 		if strings.Contains(out, bad) {
 			t.Errorf("--css page must not carry F part %q", bad)
@@ -236,23 +272,6 @@ func TestFSkippedUnderCustomCSS(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("--css page missing %q:\n%s", want, out)
-		}
-	}
-}
-
-// TestFPrintHidesOpenTree: the open-state rules that show the tree outrank a
-// bare .ftree, so the print sheet must name the same selectors (it comes later
-// in the sheet) or an open tree prints beside the text.
-func TestFPrintHidesOpenTree(t *testing.T) {
-	out := string(Markdown([]byte("# T\n\nBody\n"), Options{Header: true, Slug: "a", Siblings: []string{"b"}}))
-	i := strings.LastIndex(out, "@media print{\n.f .fgrid")
-	if i < 0 {
-		t.Fatalf("F print sheet missing:\n%s", out)
-	}
-	sheet := out[i:]
-	for _, sel := range []string{"html.nav-on .f.has-tree .ftree", "html.nav-drawer .f.has-tree .ftree"} {
-		if !regexp.MustCompile(regexp.QuoteMeta(sel) + `[^{]*\{display:none\}`).MatchString(sheet) {
-			t.Errorf("print sheet must hide %q", sel)
 		}
 	}
 }

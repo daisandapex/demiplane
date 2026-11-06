@@ -160,18 +160,26 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 	// Frontmatter: a leading `---`-fenced key:value block. When the meta-header is
 	// on we render it below the title; when off (or always, if it's there) we
 	// strip it so the raw fence never leaks into the body. No frontmatter → no-op.
+	//
+	// Masthead pages take the F layout (flayout.go), where the frontmatter
+	// becomes the byline under the title instead of a meta-header block. A
+	// --css sheet owns the look, so its pages keep the plain masthead and single
+	// column; F would hand an operator's sheet a frame and navs it never styled.
+	fLayout := opts.Header && opts.CSS == ""
 	from := 0
 	var metaHTML string
 	var metaNeedsScript bool
+	var fields []metaField
 	if close := frontmatterEnd(l); close > 0 {
 		from = close + 1
 		if opts.MetaHeader {
-			fields, err := parseFrontmatter(st, l, close)
-			if err != nil {
+			if fields, err = parseFrontmatter(st, l, close); err != nil {
 				return nil, err
 			}
-			if metaHTML, metaNeedsScript, err = metaHeader(st, fields); err != nil {
-				return nil, err
+			if !fLayout {
+				if metaHTML, metaNeedsScript, err = metaHeader(st, fields); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
@@ -186,6 +194,9 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 		}
 		if line >= 0 {
 			title, l.hole = h1, line
+		} else if ft := fieldValue(fields, "title"); ft != "" {
+			// No H1: the frontmatter's title beats the slug fallback.
+			title = html.EscapeString(ft)
 		}
 	}
 	if title == "" {
@@ -238,11 +249,6 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 		css += printCSS
 	}
 
-	// Masthead pages take the F layout (flayout.go): the facts move from the
-	// column into the rail, and a series family gets the tree. A --css sheet
-	// owns the look, so its pages keep the plain masthead and single column;
-	// F would hand an operator's sheet a grid, rail and tree it never styled.
-	fLayout := opts.Header && opts.CSS == ""
 	// A series past the member cap renders as no series: no tree, no prev/next.
 	if len(opts.Siblings)+1 > st.lim.MaxSeriesMembers {
 		opts.Siblings = nil
@@ -260,28 +266,34 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 	if opts.Header && !fLayout {
 		css += mastheadCSS
 	}
-	var rail, tree, bodyClass string
+	var toc, tree, byline, bodyClass string
 	if fLayout {
-		css += fCSS + fPrintCSS
-		rail, err = railHTML(st, metaHTML, st.outline)
-		if err != nil {
+		css += frameCSS()
+		if toc, err = tocHTML(st, st.outline); err != nil {
 			return nil, err
 		}
-		if metaHTML != "" {
-			css += fMetaCSS
-		}
-		metaHTML = "" // it lives in the rail now
 		if fam := seriesFamily(opts.Slug, opts.Siblings); fam != nil {
 			if tree, err = treeHTML(st, opts.Slug, fam, opts.ContentBase); err != nil {
 				return nil, err
 			}
 		}
+		tools := ""
+		if toggle {
+			tools = ToggleButton(themeName)
+		}
+		words := countWords(text[l.off[min(from, len(l.off)-1)]:])
+		if from == 0 {
+			words = countWords(text)
+		}
+		if byline, metaNeedsScript, err = bylineHTML(st, fields, opts.Published, words, tools); err != nil {
+			return nil, err
+		}
 		bodyClass = "f"
 		if tree != "" {
 			bodyClass += " has-tree"
 		}
-		if rail != "" {
-			bodyClass += " has-rail"
+		if toc != "" {
+			bodyClass += " has-toc"
 		}
 	}
 
@@ -292,16 +304,21 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 	pg.add(docHead(css, titleText, themeName, contract, toggle, bodyClass))
 	switch {
 	case fLayout:
-		pg.add(topbar(themeName, toggle, tree != ""))
-		pg.add(`<div class="fgrid">` + "\n")
+		pg.add(skipLink + `<div class="frame">` + "\n")
+		pg.add(`<header class="dochead"><h1 class="doctitle">` + title + "</h1>\n")
+		pg.keep(byline)
+		pg.add("</header>\n")
 		pg.keep(tree)
-		pg.add(`<header class="dochead"><h1 class="doctitle">` + title + "</h1></header>\n")
+		pg.keep(toc)
 	case opts.Header:
 		pg.add(masthead(title, themeName, toggle))
 	}
-	if opts.Header {
+	switch {
+	case fLayout:
+		pg.add(`<main class="wrap doc" id="` + mainID + "\">\n")
+	case opts.Header:
 		pg.add(`<main class="wrap" id="` + mainID + "\">\n")
-	} else {
+	default:
 		pg.add("<main class=\"wrap\">\n")
 	}
 	pg.keep(metaHTML)
@@ -315,16 +332,12 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 	}
 	pg.add("</main>\n")
 	if fLayout {
-		pg.keep(rail)
 		pg.add("</div>\n")
 	}
-	if opts.Footer {
-		if fLayout {
-			pg.add(`<footer class="docfoot"><div class="wrap"><div class="fcell">` +
-				footerInner(opts.FooterLink) + "</div></div></footer>\n")
-		} else {
-			pg.add(footerHTML(opts.FooterLink))
-		}
+	// With a colophon the credit is the last item of its line (one rule, one
+	// line); a page without one keeps the thin footer.
+	if opts.Footer && !opts.Colophon {
+		pg.add(footerHTML(opts.FooterLink))
 	}
 	if opts.Header {
 		pg.add(docChromeScript)
@@ -669,6 +682,22 @@ func Body(src []byte) string {
 	return o.String()
 }
 
+// BodyContents is Body plus the page's contents list in the published pages'
+// .mnav grammar ("" below three h2 sections), for an operator page that sets
+// a long document in the shared frame.
+func BodyContents(src []byte) (body, toc string) {
+	st := newState(context.Background(), unlimited)
+	l, err := splitLines(st, strings.ReplaceAll(string(src), "\r\n", "\n"))
+	if err != nil {
+		return "", ""
+	}
+	st.collectOutline = true
+	o := st.newOut()
+	_ = renderBlocks(st, l, 0, o)
+	toc, _ = tocHTML(st, st.outline)
+	return o.String(), toc
+}
+
 // textRun accumulates the lines of one inline block (a paragraph, a quote, a
 // list item's paragraph) joined by spaces, holding the formatted size of the
 // whole run to the remaining output budget as each line arrives, so the run is
@@ -883,6 +912,16 @@ func renderBlocks(st *state, l *lines, from int, o *out) error {
 				return err
 			}
 			header := splitCells(trimmed, cols)
+			// Each body cell carries its column's header as plain text in
+			// data-label, so a narrow screen can set a wide table's rows as
+			// labelled stacks (theme contentCSS). The labels are charged with
+			// every row below.
+			labels := make([]string, len(header))
+			labelBytes := 0
+			for c, h := range header {
+				labels[c] = ` data-label="` + strings.ReplaceAll(stripTags(h), `"`, "&#34;") + `"`
+				labelBytes += len(labels[c])
+			}
 			o.WriteString(`<div class="table-wrap">` + "\n")
 			o.WriteString("<table>\n<thead><tr>")
 			for _, h := range header {
@@ -901,7 +940,7 @@ func renderBlocks(st *state, l *lines, from int, o *out) error {
 				if err := st.tableRow(cols); err != nil {
 					return err
 				}
-				if err := st.fits(inlineUpper(lt) + len("<td></td>")*len(header) + len("<tr></tr>\n")); err != nil {
+				if err := st.fits(inlineUpper(lt) + len("<td></td>")*len(header) + labelBytes + len("<tr></tr>\n")); err != nil {
 					return err
 				}
 				cells := splitCells(lt, cols)
@@ -911,7 +950,7 @@ func renderBlocks(st *state, l *lines, from int, o *out) error {
 					if c < len(cells) {
 						cell = cells[c]
 					}
-					o.WriteString("<td>" + cell + "</td>")
+					o.WriteString("<td" + labels[c] + ">" + cell + "</td>")
 				}
 				o.WriteString("</tr>\n")
 				i++
@@ -1397,8 +1436,7 @@ func hasControl(s string) bool {
 // the wrong theme; headerless renders ship no script at all (the reply flow
 // depends on a JS-free document), so they follow the OS/server theme only.
 //
-// bodyClass, when non-empty, is set on <body>; an F page ("f ...") also gets
-// the tree's pre-paint init script.
+// bodyClass, when non-empty, is set on <body>.
 func docHead(css, titleText, themeName string, contract, withInit bool, bodyClass string) string {
 	initial := themeName
 	if initial == "" {
@@ -1428,7 +1466,6 @@ func docHead(css, titleText, themeName string, contract, withInit bool, bodyClas
 	}
 	body := "<body>\n"
 	if bodyClass != "" {
-		head += fInitScript + "\n"
 		body = `<body class="` + bodyClass + `">` + "\n"
 	}
 	return head + "</head>\n" + body
@@ -1500,29 +1537,13 @@ main.wrap>*{max-width:var(--measure);margin-inline:auto}
 .docbar.scrolled{border-bottom-color:var(--line,oklch(0.910 0.013 87));
   box-shadow:0 8px 24px -14px var(--shadow,oklch(0.250 0.010 80 / 0.14))}
 .docbar>.wrap{display:flex;align-items:center;gap:1rem;padding-top:1.15rem;padding-bottom:1.05rem}
-.themetoggle{margin-left:auto;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
-  width:2.15rem;height:2.15rem;cursor:pointer;color:var(--muted,oklch(0.462 0.011 78));
-  background:var(--panel,oklch(0.995 0.002 95));border:1px solid var(--line,oklch(0.910 0.013 87));border-radius:999px;
-  transition:color .25s cubic-bezier(.22,1,.36,1),border-color .25s cubic-bezier(.22,1,.36,1)}
-.themetoggle:hover{color:var(--ink,oklch(0.237 0.009 75));border-color:var(--line-strong,oklch(0.714 0.018 85))}
-.themetoggle svg{width:1.05rem;height:1.05rem;display:block;
-  transition:transform .35s cubic-bezier(.22,1,.36,1)}
-.themetoggle:hover svg{transform:rotate(11deg) scale(1.06)}
-.themetoggle .i-moon{display:none}
-html[data-theme="dark"] .themetoggle .i-sun{display:none}
-html[data-theme="dark"] .themetoggle .i-moon{display:block}
-@media (prefers-color-scheme: dark){
-html:not([data-theme="light"]) .themetoggle .i-sun{display:none}
-html:not([data-theme="light"]) .themetoggle .i-moon{display:block}}
 .docfoot{border-top:1px solid var(--line,oklch(0.910 0.013 87));margin-top:3rem}
 .docfoot>.wrap{padding-top:.85rem;padding-bottom:.85rem;color:var(--muted,oklch(0.462 0.011 78));
   font-size:.76rem;letter-spacing:.01em}
 .docfoot .mark{font-family:var(--serif);color:var(--muted,oklch(0.462 0.011 78));text-decoration:none}
 .docfoot a.mark{color:var(--accent,oklch(0.445 0.122 23))}
 .docfoot a.mark:hover{text-decoration:underline;text-underline-offset:2px}
-@media (prefers-reduced-motion:reduce){
-.docbar,.themetoggle,.themetoggle svg{transition:none}
-.themetoggle:hover svg{transform:none}}
+@media (prefers-reduced-motion:reduce){.docbar{transition:none}}
 `
 
 // mastheadCSS lays out the plain masthead of a --css page: the title in one

@@ -150,7 +150,7 @@ func TestTableCellBudget(t *testing.T) {
 func TestExtraRowCellsAreDropped(t *testing.T) {
 	src := "| a | b |\n|---|---|\n| 1 | 2 | 3 | 4 |\n"
 	out := string(Markdown([]byte(src), Options{}))
-	if !strings.Contains(out, "<tr><td>1</td><td>2</td></tr>") || strings.Contains(out, "<td>3</td>") {
+	if !strings.Contains(out, `<tr><td data-label="a">1</td><td data-label="b">2</td></tr>`) || strings.Contains(out, ">3</td>") {
 		t.Fatalf("row not truncated to the header width:\n%s", out)
 	}
 }
@@ -414,7 +414,7 @@ func TestSeriesNavigationCapped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(out), `class="ftree"`) || !strings.Contains(string(out), `class="nav"`) {
+	if !strings.Contains(string(out), `id="ftree"`) || !strings.Contains(string(out), `class="nav"`) {
 		t.Error("a family at the cap lost its navigation")
 	}
 	out, err = Render(context.Background(), []byte("# T\n\nbody\n"), opts(10, lim))

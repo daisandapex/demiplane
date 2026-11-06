@@ -25,10 +25,16 @@ const Default = "light"
 var Names = []string{"light", "dark", "catppuccin", "dracula", "one-dark"}
 
 // sharedFonts is identical across themes: a theme swaps colors, not type.
-// Charter (shipped on macOS; Bitstream Charter on most Linux distros) leads the
-// serif stack, with Iowan Old Style and Palatino as close-voiced fallbacks.
+// Charter (shipped on macOS) leads the serif stack. Bitstream Charter and
+// Charis SIL are Charter itself under Linux names; Iowan Old Style and the
+// Palatinos (Palatino Linotype on Windows, P052 and URW Palladio L from the
+// URW base fonts most Linux desktops carry for printing) are close-voiced
+// book faces; Noto Serif is Android's serif. A machine with none of them falls
+// to its generic serif, usually DejaVu Serif, which body's font-size-adjust
+// sets at Charter's x-height so the page keeps its colour and measure.
 const sharedFonts = `
-  --serif:"Charter","Bitstream Charter","Iowan Old Style","Palatino Linotype",Georgia,Cambria,serif;
+  --serif:"Charter","Bitstream Charter","Charis SIL","Iowan Old Style","Palatino Linotype","Palatino","P052",
+    "URW Palladio L",Georgia,Cambria,"Noto Serif",serif;
   --sans:system-ui,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Menlo,Consolas,"DejaVu Sans Mono",monospace;`
 
@@ -188,10 +194,11 @@ func Pinned(name string) bool { return pinnedThemes[strings.TrimSpace(name)] }
 // with tabular numerals. Structure comes from size and hairlines; the accent
 // never spends on headings, markers, or code.
 const contentCSS = `*{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%;scroll-padding-top:6rem}
+html{-webkit-text-size-adjust:100%;scroll-padding-top:1.5rem}
 html,body{overflow-x:clip}
 body{margin:0;background:var(--bg);color:var(--ink);
-  font:1rem/1.6 var(--serif);text-rendering:optimizeLegibility}
+  font:1rem/1.6 var(--serif);font-size-adjust:.48;text-rendering:optimizeLegibility}
+code,pre,table,button,input,select,textarea{font-size-adjust:none}
 ::selection{background:var(--sel)}
 .wrap{max-width:54rem;margin:0 auto;padding:0 1.3rem}
 main{padding:2.2rem 0 3.5rem}
@@ -249,10 +256,93 @@ table{border-collapse:collapse;width:100%;margin:1.6em 0;font:.875rem/1.45 var(-
 thead th{font-size:.8125rem;font-weight:600;color:var(--muted);border-bottom:1px solid var(--line-strong)}
 th,td{text-align:left;vertical-align:top;padding:.45rem .875rem;font-variant-numeric:tabular-nums}
 tbody tr+tr td{border-top:1px solid var(--line)}
+@media (max-width:40rem){
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) thead{position:absolute;width:1px;height:1px;overflow:hidden;
+  clip-path:inset(50%)}
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) :is(table,tbody,tr,td){display:block}
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) tr{padding:.5rem 0}
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) tbody tr+tr{border-top:1px solid var(--line)}
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) td{position:relative;padding:.2rem .875rem .2rem 7.25rem;
+  border-top:0}
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) td::before{content:attr(data-label);position:absolute;
+  left:.875rem;width:5.75rem;color:var(--muted);font-weight:600;font-size:.8125rem;overflow-wrap:anywhere}}
 hr{border:0;width:5rem;height:1px;background:var(--line-strong);margin:2.375rem auto}
 img{max-width:100%;height:auto;display:block;margin:0 auto}
 @media (prefers-reduced-motion:reduce){a{transition:none}}
 `
+
+// frameCSS is the page frame every human surface shares, published pages and
+// operator pages alike: one centred axis with two widths on it. The text
+// column holds to --measure (near 70 characters); tables, code and other wide
+// blocks break out to --wide around the same centre. A page title starts at
+// the text's left edge and may run to the wide edge, so it is never squeezed
+// to the measure and never hangs left of the text. The margin navs (.mnav: a
+// sequence on the left, the contents on the right) sit outside the wide frame
+// from 78.5rem, where both gutters have room for them, and fold to one-line
+// disclosures above the text below that, so on a phone the text still starts
+// on the first screen. The theme toggle is styled here because both kinds of
+// page carry it.
+const frameCSS = `
+:root{--measure:30rem;--wide:46rem;--side:13rem}
+.frame{display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:"head" "seq" "toc" "body";
+  padding:0 1.25rem}
+.frame>*{min-width:0;width:100%;max-width:var(--wide);justify-self:center}
+.frame>.dochead{grid-area:head}.frame>.seq{grid-area:seq}.frame>.toc{grid-area:toc}.frame>main{grid-area:body}
+.frame>.mnav{max-width:var(--measure)}
+.dochead{padding-top:3rem}
+.dochead>*,.doc>h1{margin-left:max(0px,calc((100% - var(--measure)) / 2));margin-right:0}
+.doc>*{max-width:var(--measure);margin-inline:auto}
+.doc>:is(pre,.table-wrap,.codeblock,.wide){max-width:100%}
+@media (min-width:78.5rem){
+.frame{grid-template-columns:minmax(0,1fr) minmax(0,var(--wide)) minmax(0,1fr);column-gap:2rem;
+  grid-template-areas:". head ." "seq body toc";grid-template-rows:auto 1fr}
+.frame>.mnav{position:sticky;top:1.5rem;align-self:start;max-width:var(--side);
+  max-height:calc(100vh - 3rem);overflow-y:auto;overscroll-behavior:contain;margin:0}
+.frame>.seq{justify-self:end}.frame>.toc{justify-self:start}}
+.mnav{font:.8125rem/1.45 var(--sans);font-size-adjust:none;color:var(--muted);margin:0 auto}
+.mnav>summary{display:flex;align-items:baseline;gap:.45rem;padding:.3rem 0;cursor:pointer;list-style:none;
+  font-weight:600;color:var(--muted)}
+.mnav>summary::-webkit-details-marker{display:none}
+.mnav>summary::before{content:"";flex:0 0 auto;width:.38rem;height:.38rem;border:solid currentColor;
+  border-width:0 1.5px 1.5px 0;transform:translateY(-.12rem) rotate(-45deg);
+  transition:transform .25s cubic-bezier(.22,1,.36,1)}
+.mnav[open]>summary::before{transform:translateY(-.2rem) rotate(45deg)}
+.mnav>summary:hover{color:var(--ink)}
+.mnav>summary .pos{font-weight:400}
+.mnav ol{list-style:none;margin:0;padding:.2rem 0 .5rem}
+.mnav li{margin:0}
+.mnav a,.mnav [aria-current="page"]{display:block;padding:.22rem .5rem;margin-left:-.5rem;border-radius:6px;
+  color:var(--muted);text-decoration:none;overflow-wrap:anywhere}
+.mnav a:hover{color:var(--ink);background:var(--code-bg)}
+.mnav a[aria-current="true"],.mnav [aria-current="page"]{color:var(--ink);font-weight:600;background:var(--code-bg)}
+.outline .l3 a{padding-left:1.25rem}
+.fjs .outline .l3{display:none}
+.fjs .outline .l3.open{display:block}
+@media (max-width:78.49rem){.fjs .outline .l3,.fjs .outline .l3.open{display:none}}
+.themetoggle{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  width:2.15rem;height:2.15rem;padding:0;cursor:pointer;color:var(--muted);
+  background:var(--panel);border:1px solid var(--line);border-radius:999px;
+  transition:color .25s cubic-bezier(.22,1,.36,1),border-color .25s cubic-bezier(.22,1,.36,1)}
+.themetoggle:hover{color:var(--ink);border-color:var(--line-strong)}
+.themetoggle svg{width:1.05rem;height:1.05rem;display:block;transition:transform .35s cubic-bezier(.22,1,.36,1)}
+.themetoggle:hover svg{transform:rotate(11deg) scale(1.06)}
+.themetoggle .i-moon{display:none}
+html[data-theme="dark"] .themetoggle .i-sun{display:none}
+html[data-theme="dark"] .themetoggle .i-moon{display:block}
+@media (prefers-color-scheme: dark){
+html:not([data-theme="light"]) .themetoggle .i-sun{display:none}
+html:not([data-theme="light"]) .themetoggle .i-moon{display:block}}
+.colo{margin-top:3.5rem;padding-top:1rem;border-top:1px solid var(--line);
+  font:.8rem/1.7 var(--sans);font-size-adjust:none;color:var(--muted)}
+.colo a{color:var(--muted)}
+.colo a:hover{color:var(--accent)}
+@media (prefers-reduced-motion:reduce){.mnav>summary::before,.themetoggle,.themetoggle svg{transition:none}
+  .themetoggle:hover svg{transform:none}}
+@media print{.mnav,.themetoggle{display:none}}
+`
+
+// FrameCSS returns the shared page frame (see frameCSS).
+func FrameCSS() string { return frameCSS }
 
 // Tokens returns the :root design-token block for name, falling back to the
 // Default theme when name is empty or unknown.
