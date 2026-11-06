@@ -38,7 +38,7 @@ Color strategy: **Restrained** (warm tinted neutrals + one accent, links only).
 | `--bg` | `oklch(0.982 0.004 91)` | `oklch(0.228 0.006 78)` | page surface (warm paper `#faf9f6` / warm near-black `#1e1c19`) |
 | `--panel` | `oklch(0.995 0.002 95)` | `oklch(0.261 0.008 85)` | raised card surface (table cards, chrome cards) |
 | `--ink` | `oklch(0.237 0.009 75)` | `oklch(0.923 0.009 85)` | body text (also the blockquote's serif-italic ink) |
-| `--muted` | `oklch(0.462 0.011 78)` | `oklch(0.708 0.012 77)` | secondary text, byline, table headers, list markers |
+| `--muted` | `oklch(0.430 0.011 78)` | `oklch(0.745 0.012 77)` | secondary text, byline, table headers, list markers |
 | `--line` | `oklch(0.910 0.013 87)` | `oklch(0.330 0.010 81)` | hairline rules, borders, table row rules |
 | `--line-strong` | `oklch(0.714 0.018 85)` | `oklch(0.461 0.015 87)` | emphatic rules: table header underline, `hr`, toggle hover ring |
 | `--accent` | `oklch(0.445 0.122 23)` | `oklch(0.749 0.082 29)` | links and the focus ring, nothing else |
@@ -60,10 +60,10 @@ no-pure-white refusal. Retired with the port: `--accent-hover`,
 `--accent-soft`, `--code-inline`, `--code-line`, `--line-soft`, `--zebra`.
 
 Body and secondary text clear WCAG AA against their surface in both faces
-(measured, default palette): light `--ink` 15.8 : 1, `--muted` 6.7 : 1,
-`--accent` 7.7 : 1 on `--bg`; dark `--ink` 13.5 : 1, `--muted` 6.6 : 1,
+(measured, default palette): light `--ink` 15.8 : 1, `--muted` 7.7 : 1,
+`--accent` 7.7 : 1 on `--bg`; dark `--ink` 13.5 : 1, `--muted` 7.5 : 1,
 `--accent` 7.4 : 1 on `--bg`. All clear 4.5 : 1 on `--panel` too (worst pair:
-dark `--muted` on `--panel`, 5.97 : 1). Code ink and all four `--tok-*` syntax
+dark `--muted` on `--panel`, 6.8 : 1). Code ink and all four `--tok-*` syntax
 accents clear AA on `--code-bg` in both faces. These are pinned by
 `TestWarmPaletteContrastAA` and `TestCodeTokenContrastAA`.
 
@@ -248,8 +248,8 @@ the last column.
   next row above it, with no wordmark. `--footer=false` drops the credit. A
   page rendered without a colophon keeps the thin footer.
 - **Link states** (prose links in `main`): default is oxblood with a 55%
-  underline; hover thickens the underline and adds a 9% oxblood wash; visited
-  is a quieter oxblood (72% accent, 28% muted) with a muted underline; focus
+  underline; hover thickens the underline and adds a 14% oxblood wash; visited
+  is a quieter oxblood (55% accent, 45% muted) with a muted underline; focus
   is the ring below. Every state clears 4.5:1 on paper and in dark. Navs and
   the colophon keep their own muted links.
 - **Focus**: a global `:focus-visible` ring (`2px solid var(--accent)`, 2px

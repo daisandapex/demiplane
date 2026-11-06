@@ -662,7 +662,7 @@ const replyBoxCSS = `
 .dp-reply button{font:inherit;font-weight:600;cursor:pointer;padding:.6rem 1.25rem;border:1px solid transparent;
   border-radius:8px;background:var(--accent,oklch(0.445 0.122 23));color:oklch(0.985 0.004 95)}
 .dp-reply button:hover{filter:brightness(1.05)}
-.dp-reply-note{margin:.75rem 0 0;font-size:.8rem;color:var(--muted,oklch(0.462 0.011 78))}
+.dp-reply-note{margin:.75rem 0 0;font-size:.8rem;color:var(--muted,oklch(0.430 0.011 78))}
 `
 
 // Body renders src to inner HTML only (no <html>/<head> wrapper), so callers
@@ -1538,9 +1538,9 @@ main.wrap>*{max-width:var(--measure);margin-inline:auto}
   box-shadow:0 8px 24px -14px var(--shadow,oklch(0.250 0.010 80 / 0.14))}
 .docbar>.wrap{display:flex;align-items:center;gap:1rem;padding-top:1.15rem;padding-bottom:1.05rem}
 .docfoot{border-top:1px solid var(--line,oklch(0.910 0.013 87));margin-top:3rem}
-.docfoot>.wrap{padding-top:.85rem;padding-bottom:.85rem;color:var(--muted,oklch(0.462 0.011 78));
+.docfoot>.wrap{padding-top:.85rem;padding-bottom:.85rem;color:var(--muted,oklch(0.430 0.011 78));
   font-size:.76rem;letter-spacing:.01em}
-.docfoot .mark{font-family:var(--serif);color:var(--muted,oklch(0.462 0.011 78));text-decoration:none}
+.docfoot .mark{font-family:var(--serif);color:var(--muted,oklch(0.430 0.011 78));text-decoration:none}
 .docfoot a.mark{color:var(--accent,oklch(0.445 0.122 23))}
 .docfoot a.mark:hover{text-decoration:underline;text-underline-offset:2px}
 @media (prefers-reduced-motion:reduce){.docbar{transition:none}}

@@ -228,11 +228,11 @@ const metaHeadCSS = `
   padding-bottom:1.25rem}
 .metahead .metadate{margin-bottom:1rem}
 .metahead .tstamp{font:600 .8125rem/1.5 var(--sans);text-transform:uppercase;letter-spacing:.08em;
-  color:var(--muted,oklch(0.462 0.011 78));font-variant-numeric:tabular-nums}
+  color:var(--muted,oklch(0.430 0.011 78));font-variant-numeric:tabular-nums}
 .metahead .metafields{margin:0;display:grid;gap:.4rem}
 .metahead .metarow{display:flex;gap:.85rem;margin:0;align-items:baseline}
 .metahead .metarow dt{flex:0 0 auto;min-width:7.5rem;font-family:var(--sans);font-size:.7rem;
   font-weight:600;letter-spacing:.08em;text-transform:uppercase;line-height:1.5;
-  color:var(--muted,oklch(0.462 0.011 78))}
+  color:var(--muted,oklch(0.430 0.011 78))}
 .metahead .metarow dd{margin:0;color:var(--ink,oklch(0.237 0.009 75))}
 `

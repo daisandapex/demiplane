@@ -70,10 +70,10 @@ func TestShortCodeNoWrap(t *testing.T) {
 // TestLinkStatesDiffer: in prose, a visited link is a quieter oxblood and a
 // hovered one gains a soft wash, so all four states read apart.
 func TestLinkStatesDiffer(t *testing.T) {
-	if r := rule(contentCSS, "main :is(p,li,td,dd,blockquote) a:visited"); !strings.Contains(r, "color:color-mix(in oklab,var(--accent) 72%,var(--muted))") {
+	if r := rule(contentCSS, "main :is(p,li,td,dd,blockquote) a:visited"); !strings.Contains(r, "color:color-mix(in oklab,var(--accent) 55%,var(--muted))") {
 		t.Errorf("visited prose links should be a quieter oxblood: {%s}", r)
 	}
-	if r := rule(contentCSS, "main :is(p,li,td,dd,blockquote) a:is(:hover,:active)"); !strings.Contains(r, "background:color-mix(in srgb,var(--accent) 9%,transparent)") {
+	if r := rule(contentCSS, "main :is(p,li,td,dd,blockquote) a:is(:hover,:active)"); !strings.Contains(r, "background:color-mix(in srgb,var(--accent) 14%,transparent)") {
 		t.Errorf("hovered prose links should gain a wash: {%s}", r)
 	}
 }
@@ -82,7 +82,7 @@ func TestLinkStatesDiffer(t *testing.T) {
 // shadow at the hidden edge, covered again once that edge is reached.
 func TestCodeBlockScrollCue(t *testing.T) {
 	r := rule(contentCSS, "pre")
-	for _, want := range []string{"no-repeat local", "radial-gradient(farthest-side at 100% 50%,color-mix(in srgb,var(--ink) 22%,transparent),transparent) right/1rem 100% no-repeat scroll"} {
+	for _, want := range []string{"no-repeat local", "radial-gradient(farthest-side at 100% 50%,color-mix(in srgb,var(--ink) 35%,transparent),transparent) right/1.25rem 100% no-repeat scroll"} {
 		if !strings.Contains(r, want) {
 			t.Errorf("pre should carry a scroll cue (%q): {%s}", want, r)
 		}

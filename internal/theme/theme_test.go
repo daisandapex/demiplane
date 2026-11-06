@@ -481,3 +481,15 @@ func TestDarkSlabLiftsOffThePage(t *testing.T) {
 		t.Errorf("dark --code-bg L=%.3f should sit above --bg L=%.3f", slab[0], bg[0])
 	}
 }
+
+// TestMutedReadsClearly: secondary text (byline, captions, card text) clears
+// 7:1 on the page in both faces, so it recedes by size and weight, not by
+// fading.
+func TestMutedReadsClearly(t *testing.T) {
+	for _, name := range []string{"light", "dark"} {
+		css := CSS(name)
+		if r := contrastRatio(tokenColor(t, css, "--muted"), tokenColor(t, css, "--bg")); r < 7 {
+			t.Errorf("%s --muted on --bg %.2f:1 < 7:1", name, r)
+		}
+	}
+}

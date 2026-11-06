@@ -148,17 +148,17 @@ const coloCSS = `
 .colo{margin-top:3.5rem;padding-top:1rem;border-top:1px solid var(--line,oklch(0.910 0.013 87));
   font:.8rem/1.7 var(--sans)}
 .colo .nav{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;align-items:baseline}
-.colo .nav a.prev{color:var(--muted,oklch(0.462 0.011 78))}
-.colo .nav .pos{color:var(--muted,oklch(0.462 0.011 78))}
+.colo .nav a.prev{color:var(--muted,oklch(0.430 0.011 78))}
+.colo .nav .pos{color:var(--muted,oklch(0.430 0.011 78))}
 .colo .nav a.next{color:var(--accent,oklch(0.445 0.122 23));font-weight:600}
 .colo .nav a:hover{text-decoration:underline;text-underline-offset:2px}
-.colo .meta{display:flex;flex-wrap:wrap;gap:.1rem .45rem;color:var(--muted,oklch(0.462 0.011 78));
+.colo .meta{display:flex;flex-wrap:wrap;gap:.1rem .45rem;color:var(--muted,oklch(0.430 0.011 78));
   font-size:.8rem}
 .colo .nav+.meta{margin-top:.35rem}
 @media (max-width:40rem){.colo .meta{font-size:.75rem;gap:.1rem .35rem}.colo .meta .size,.colo .meta .size+span{display:none}}
 .colo .credit .mark{font-family:inherit;color:inherit}
 .colo .credit a.mark{text-decoration:underline;text-decoration-color:var(--line-strong,oklch(0.714 0.018 85))}
-.colo .meta a{color:var(--muted,oklch(0.462 0.011 78))}
+.colo .meta a{color:var(--muted,oklch(0.430 0.011 78))}
 .colo .meta a:hover{color:var(--accent,oklch(0.445 0.122 23));text-decoration:underline;text-underline-offset:2px}
 .colo .meta .r{margin-left:auto}
 `

@@ -55,7 +55,7 @@ const sharedFonts = `
 // ink, oxblood links, a light bordered code slab, white-card tables. Values are
 // exact OKLCH conversions of the approved hex sheet except --panel, which stops
 // at L 0.995 instead of pure #ffffff to honor the no-pure-white refusal.
-// Measured AA on --bg: ink 15.8:1, muted 6.7:1, accent 7.7:1; code-ink on
+// Measured AA on --bg: ink 15.8:1, muted 7.7:1, accent 7.7:1; code-ink on
 // --code-bg 13.5:1; muted on --panel 7.0:1.
 //
 // color-scheme:light tells the UA to render form controls, scrollbars, and the
@@ -65,7 +65,7 @@ const sharedFonts = `
 const lightVars = `
   color-scheme:light;
   --bg:oklch(0.982 0.004 91); --panel:oklch(0.995 0.002 95); --ink:oklch(0.237 0.009 75);
-  --muted:oklch(0.462 0.011 78); --line:oklch(0.910 0.013 87); --line-strong:oklch(0.714 0.018 85);
+  --muted:oklch(0.430 0.011 78); --line:oklch(0.910 0.013 87); --line-strong:oklch(0.714 0.018 85);
   --accent:oklch(0.445 0.122 23);
   --code-bg:oklch(0.953 0.010 87); --code-ink:oklch(0.261 0.010 89); --code-border:oklch(0.883 0.017 88);
   --navy:oklch(0.420 0.085 245); --danger:oklch(0.520 0.165 28); --on-badge:oklch(0.985 0.004 95);
@@ -76,14 +76,14 @@ const lightVars = `
 // darkVars is the dark counterpart from the same approved sheet: warm near-black
 // paper, unbleached-linen ink, the accent lifted to a dusty terracotta so the
 // oxblood reads on the dark ground. Measured AA on --bg: ink 13.5:1, muted
-// 6.6:1, accent 7.4:1; muted on --panel 5.97:1 (the sheet's worst pair, still
+// 7.5:1, accent 7.4:1; muted on --panel 6.8:1 (the sheet's worst pair, still
 // clear of 4.5:1); code-ink on --code-bg 10.5:1. The code slab sits a step above
 // --bg so it lifts off the page rather than sinking into it. The --tok-* accents
 // are light inks tuned for the dark slab (worst --tok-com 6.0:1).
 const darkVars = `
   color-scheme:dark;
   --bg:oklch(0.228 0.006 78); --panel:oklch(0.261 0.008 85); --ink:oklch(0.923 0.009 85);
-  --muted:oklch(0.708 0.012 77); --line:oklch(0.330 0.010 81); --line-strong:oklch(0.461 0.015 87);
+  --muted:oklch(0.745 0.012 77); --line:oklch(0.330 0.010 81); --line-strong:oklch(0.461 0.015 87);
   --accent:oklch(0.749 0.082 29);
   --code-bg:oklch(0.262 0.008 85); --code-ink:oklch(0.871 0.015 85); --code-border:oklch(0.362 0.015 85);
   --navy:oklch(0.620 0.095 240); --danger:oklch(0.700 0.150 28); --on-badge:oklch(0.985 0.004 95);
@@ -208,9 +208,9 @@ a{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;
   text-decoration-color:color-mix(in srgb,var(--accent) 55%,transparent);
   transition:text-decoration-color .2s cubic-bezier(.22,1,.36,1)}
 a:hover,a:active{text-decoration-thickness:2px;text-decoration-color:var(--accent)}
-main :is(p,li,td,dd,blockquote) a:visited{color:color-mix(in oklab,var(--accent) 72%,var(--muted));
+main :is(p,li,td,dd,blockquote) a:visited{color:color-mix(in oklab,var(--accent) 55%,var(--muted));
   text-decoration-color:color-mix(in srgb,var(--muted) 55%,transparent)}
-main :is(p,li,td,dd,blockquote) a:is(:hover,:active){background:color-mix(in srgb,var(--accent) 9%,transparent);
+main :is(p,li,td,dd,blockquote) a:is(:hover,:active){background:color-mix(in srgb,var(--accent) 14%,transparent);
   border-radius:2px}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .skip{position:absolute;left:1rem;top:-4rem;z-index:20;padding:.5rem .8rem;border-radius:6px;
@@ -252,8 +252,8 @@ code{font-family:var(--mono);font-size:.875em;line-height:1;
 pre{background:var(--code-bg);color:var(--code-ink);border:1px solid var(--code-border);
   background:linear-gradient(to right,var(--code-bg) 40%,transparent) left/2rem 100% no-repeat local,
   linear-gradient(to left,var(--code-bg) 40%,transparent) right/2rem 100% no-repeat local,
-  radial-gradient(farthest-side at 0 50%,color-mix(in srgb,var(--ink) 22%,transparent),transparent) left/1rem 100% no-repeat scroll,
-  radial-gradient(farthest-side at 100% 50%,color-mix(in srgb,var(--ink) 22%,transparent),transparent) right/1rem 100% no-repeat scroll,
+  radial-gradient(farthest-side at 0 50%,color-mix(in srgb,var(--ink) 35%,transparent),transparent) left/1.25rem 100% no-repeat scroll,
+  radial-gradient(farthest-side at 100% 50%,color-mix(in srgb,var(--ink) 35%,transparent),transparent) right/1.25rem 100% no-repeat scroll,
   var(--code-bg);
   border-radius:8px;padding:.875rem 1rem;margin:0 0 1.125em;overflow-x:auto;
   font-size:.8125rem;line-height:1.55;tab-size:2}
