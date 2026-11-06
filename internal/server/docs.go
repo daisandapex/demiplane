@@ -4,6 +4,7 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
 	"html"
 	"log"
@@ -95,7 +96,7 @@ func (s *Server) handleDocsPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	b.WriteString(`</p>`)
-	b.WriteString(render.Body(src))
+	b.WriteString(render.Body(stripLeadingHTML(src)))
 
 	// The API reference is the target of the top-nav "API" link (/docs/api), so
 	// mark that entry active there; every other curated doc keeps "Docs" active.
@@ -104,6 +105,21 @@ func (s *Server) handleDocsPage(w http.ResponseWriter, r *http.Request) {
 		active = "/docs/api"
 	}
 	writeHTML(w, s.pageHTML(page.Title+" · demiplane", topNav(active), b.String()))
+}
+
+// stripLeadingHTML drops one raw HTML block (up to the first blank line) from
+// the top of a doc. README.md opens with a GitHub-only <p><picture> logo; the
+// markdown engine escapes raw HTML, so served as-is it would print the markup
+// as text above the H1. A doc that opens with markdown comes back unchanged.
+func stripLeadingHTML(src []byte) []byte {
+	rest := bytes.TrimLeft(src, "\n")
+	if !bytes.HasPrefix(rest, []byte("<")) {
+		return src
+	}
+	if i := bytes.Index(rest, []byte("\n\n")); i >= 0 {
+		return bytes.TrimLeft(rest[i:], "\n")
+	}
+	return nil
 }
 
 // writeHTML writes an HTML response.

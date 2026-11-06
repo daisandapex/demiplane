@@ -26,6 +26,8 @@ All notable changes to demiplane are documented here. The format follows
 
 - Published pages (`?render=md`) and the themed 404 no longer open with a
   tracked `DEMIPLANE` wordmark. The page starts with the document.
+- `/docs/readme` no longer prints the README's leading `<p
+  align="center"><picture>` logo markup as escaped text above the title.
 
 ## [3.1.1] - 2026-10-29
 
