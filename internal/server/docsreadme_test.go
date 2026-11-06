@@ -32,6 +32,8 @@ func TestStripLeadingHTML(t *testing.T) {
 		{"\n<div>\n</div>\n\n# T\n", "# T\n"},
 		{"# T\n\n<p>x</p>\n", "# T\n\n<p>x</p>\n"},
 		{"<p>only</p>", ""},
+		{"<p align=\"center\">\r\n  <img src=x>\r\n</p>\r\n\r\n# T\r\n", "# T\n"},
+		{"<p>\n</p>\n  \t\n# T\n", "# T\n"},
 		{"", ""},
 	} {
 		if got := string(stripLeadingHTML([]byte(c.in))); got != c.want {

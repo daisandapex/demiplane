@@ -73,3 +73,64 @@ func TestThemedErrorEscapesReason(t *testing.T) {
 		t.Errorf("reason not escaped:\n%s", page)
 	}
 }
+
+// TestThemedErrorEdges: the swapped page drops headers that described the
+// handler's body, says Vary: Accept, honours q=0, and leaves a non-error
+// plaintext response alone.
+func TestThemedErrorEdges(t *testing.T) {
+	control, content := newSplitServers(t, Config{AuthToken: "tok"})
+
+	req, _ := http.NewRequest("POST", control.URL+"/publish?filename=a.bin", strings.NewReader("0123456789"))
+	req.Header.Set("Authorization", "Bearer tok")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	url := strings.TrimSpace(string(b))
+	if !strings.HasPrefix(url, content.URL) {
+		t.Fatalf("publish: %d %q", resp.StatusCode, b)
+	}
+	req, _ = http.NewRequest("GET", url, nil)
+	req.Header.Set("Accept", "text/html")
+	req.Header.Set("Range", "bytes=999-")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestedRangeNotSatisfiable || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
+		t.Fatalf("range error: %d %q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
+		t.Errorf("themed page kept the artifact's Content-Disposition %q", cd)
+	}
+
+	for _, accept := range []string{"text/html", ""} {
+		req, _ = http.NewRequest("GET", control.URL+"/docs/nope", nil)
+		req.Header.Set("Accept", accept)
+		resp, err = http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if !strings.Contains(resp.Header.Get("Vary"), "Accept") {
+			t.Errorf("Accept %q: error response has no Vary: Accept", accept)
+		}
+	}
+
+	resp, page := browse(t, "GET", control.URL+"/llms.txt")
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/plain") || strings.Contains(page, "nf-h") {
+		t.Errorf("a 200 plaintext page was altered: %q", resp.Header.Get("Content-Type"))
+	}
+
+	for accept, want := range map[string]bool{
+		"text/html": true, "text/html;q=0.5": true, "application/json, text/html;q=0": false,
+		"application/json": false, "": false, "*/*": false,
+	} {
+		if got := acceptsHTML(accept); got != want {
+			t.Errorf("acceptsHTML(%q) = %v, want %v", accept, got, want)
+		}
+	}
+}

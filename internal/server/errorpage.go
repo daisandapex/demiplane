@@ -5,6 +5,7 @@ package server
 
 import (
 	"html"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,35 +16,57 @@ import (
 // http.NotFound a handler writes. Only requests that ask for HTML get it, so
 // curl, agents and the MCP client keep the plaintext reason they parse today.
 
-// maxErrorReason caps how much of a plaintext error body is kept as the
-// page's reason line; http.Error bodies are one short line.
+// maxErrorReason caps how much of a plaintext error body is kept before its
+// first line becomes the page's reason; http.Error bodies are one short line.
 const maxErrorReason = 512
 
 // themedErrors serves the themed error page to browsers in place of a
 // plaintext error response.
 func (s *Server) themedErrors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.Header.Get("Accept"), "text/html") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		ew := &errorPageWriter{ResponseWriter: w}
+		ew := &errorPageWriter{ResponseWriter: w, html: acceptsHTML(r.Header.Get("Accept"))}
 		next.ServeHTTP(ew, r)
 		if ew.code != 0 {
 			h := w.Header()
 			h.Set("Content-Type", "text/html; charset=utf-8")
-			h.Del("Content-Length")
+			// Headers that describe the body the handler meant to send do
+			// not describe this page: an attachment's disposition would
+			// download the error page as the file.
+			for _, k := range []string{"Content-Length", "Content-Disposition", "Content-Encoding", "ETag", "Last-Modified"} {
+				h.Del(k)
+			}
 			w.WriteHeader(ew.code)
-			_, _ = w.Write([]byte(s.errorPageHTML(ew.code, strings.TrimSpace(ew.reason.String()))))
+			reason, _, _ := strings.Cut(ew.reason.String(), "\n")
+			_, _ = w.Write([]byte(s.errorPageHTML(ew.code, strings.ToValidUTF8(strings.TrimSpace(reason), ""))))
 		}
 	})
 }
 
+// acceptsHTML reports whether an Accept header lists text/html with a
+// non-zero quality.
+func acceptsHTML(accept string) bool {
+	for _, part := range strings.Split(accept, ",") {
+		mt, params, err := mime.ParseMediaType(strings.TrimSpace(part))
+		if err != nil || mt != "text/html" {
+			continue
+		}
+		if q, ok := params["q"]; ok {
+			if v, err := strconv.ParseFloat(q, 64); err != nil || v <= 0 {
+				continue
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // errorPageWriter holds back a plaintext error response (status 400 or above,
-// text/plain, as http.Error writes it) and keeps its first line as the reason.
-// Every other response passes through untouched.
+// text/plain, as http.Error writes it) when the client accepts HTML, and keeps
+// its body for the reason line. Every plaintext error says Vary: Accept, since
+// its body depends on it. Every other response passes through untouched.
 type errorPageWriter struct {
 	http.ResponseWriter
+	html   bool // the client accepts text/html
 	wrote  bool
 	code   int // set when the response is held back
 	reason strings.Builder
@@ -53,10 +76,17 @@ func (e *errorPageWriter) WriteHeader(code int) {
 	if e.wrote {
 		return
 	}
+	if code < http.StatusOK { // informational: the final status is still to come
+		e.ResponseWriter.WriteHeader(code)
+		return
+	}
 	e.wrote = true
 	if code >= http.StatusBadRequest && strings.HasPrefix(e.Header().Get("Content-Type"), "text/plain") {
-		e.code = code
-		return
+		e.Header().Add("Vary", "Accept")
+		if e.html {
+			e.code = code
+			return
+		}
 	}
 	e.ResponseWriter.WriteHeader(code)
 }

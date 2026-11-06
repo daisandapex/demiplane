@@ -9,6 +9,7 @@ import (
 	"html"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 
 	demiplane "github.com/daisandapex/demiplane/v3"
@@ -112,15 +113,18 @@ func (s *Server) handleDocsPage(w http.ResponseWriter, r *http.Request) {
 // markdown engine escapes raw HTML, so served as-is it would print the markup
 // as text above the H1. A doc that opens with markdown comes back unchanged.
 func stripLeadingHTML(src []byte) []byte {
-	rest := bytes.TrimLeft(src, "\n")
+	rest := bytes.TrimLeft(bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n")), " \t\n")
 	if !bytes.HasPrefix(rest, []byte("<")) {
 		return src
 	}
-	if i := bytes.Index(rest, []byte("\n\n")); i >= 0 {
-		return bytes.TrimLeft(rest[i:], "\n")
+	if loc := blankLine.FindIndex(rest); loc != nil {
+		return bytes.TrimLeft(rest[loc[1]:], " \t\n")
 	}
-	return nil
+	return nil // the doc is one HTML block: nothing to render
 }
+
+// blankLine ends a raw HTML block: a line holding only spaces or tabs.
+var blankLine = regexp.MustCompile(`\n[ \t]*\n`)
 
 // writeHTML writes an HTML response.
 func writeHTML(w http.ResponseWriter, body string) {
