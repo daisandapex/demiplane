@@ -36,6 +36,10 @@ All notable changes to demiplane are documented here. The format follows
   not ask for HTML (curl, agents, MCP) still get the plaintext reason.
 - The help, connect and gallery pages drop the em dashes from demiplane's own
   copy, per the design rules.
+- Long inline-code URLs break onto the next line on a phone instead of running
+  off the right edge.
+- On touch screens the permalink `#` shows beside section headings only, not
+  beside the page title.
 
 ## [3.1.1] - 2026-10-29
 

@@ -872,13 +872,13 @@ func TestMarkdownChromeNoBurntOrange(t *testing.T) {
 	}
 }
 
-// TestHeadingAnchorTouchAndPrintCSS is the m3/m4 fix: heading anchors are shown
-// (not invisible-but-tappable) on touch, are not text-selectable, and are hidden
+// TestHeadingAnchorTouchAndPrintCSS is the m3/m4 fix: section anchors are shown
+// (not invisible-but-tappable) on touch and the title's is removed, are not text-selectable, and are hidden
 // in print.
 func TestHeadingAnchorTouchAndPrintCSS(t *testing.T) {
 	out := render("## Section")
 	for _, rule := range []string{
-		"@media (hover:none){.heading-anchor{opacity:.45}}",
+		"@media (hover:none){:is(h2,h3,h4,h5,h6) .heading-anchor{opacity:.45}h1 .heading-anchor{display:none}}",
 		"@media print{.heading-anchor{display:none}}",
 		"user-select:none",
 	} {
