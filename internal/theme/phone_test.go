@@ -54,13 +54,15 @@ func TestTouchAnchorsSkipTheTitle(t *testing.T) {
 }
 
 // TestShortCodeNoWrap: a short inline-code token stays on one line in prose,
-// and may wrap again inside a phone table cell so the cell can shrink.
+// and may wrap again inside a phone table cell so the cell can shrink, and in
+// a phone blockquote, whose larger type and side padding leave too little
+// room for 40 monospace characters up to about 470px.
 func TestShortCodeNoWrap(t *testing.T) {
 	if r := rule(contentCSS, ":not(pre)>code.nw"); !strings.Contains(r, "white-space:nowrap") {
 		t.Errorf("short code should not wrap: {%s}", r)
 	}
-	if r := rule(contentCSS, ":is(td,th) code.nw"); !strings.Contains(r, "white-space:normal") {
-		t.Errorf("phone table cells should let short code wrap: {%s}", r)
+	if r := rule(contentCSS, ":is(td,th,blockquote) code.nw"); !strings.Contains(r, "white-space:normal") {
+		t.Errorf("phone table cells and quotes should let short code wrap: {%s}", r)
 	}
 	if strings.Contains(rule(contentCSS, "pre code"), "nowrap") {
 		t.Error("block code must keep its own white-space")
