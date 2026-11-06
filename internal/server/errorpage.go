@@ -118,7 +118,11 @@ func (e *errorPageWriter) Flush() { _ = e.FlushError() }
 
 // FlushError is Flush that reports the underlying writer's error, which
 // http.ResponseController prefers, so a streaming handler still sees a
-// failed flush.
+// failed flush. Once an error response is held back (WriteHeader(code>=400)
+// with a text/plain body and an HTML client), there is nothing to send yet, so
+// FlushError returns nil without flushing and the themed page goes out when
+// the handler returns. A handler that streams after writing an error status
+// gets no early bytes; none does today.
 func (e *errorPageWriter) FlushError() error {
 	if !e.wrote {
 		e.WriteHeader(http.StatusOK)
