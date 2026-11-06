@@ -26,7 +26,7 @@ func TestInlineCodeWrapsOnPhones(t *testing.T) {
 	if code == "" {
 		t.Fatal("no code rule in the content sheet")
 	}
-	if !strings.Contains(code, "overflow-wrap:break-word") {
+	if !strings.Contains(code, "overflow-wrap:anywhere") {
 		t.Errorf("inline code does not wrap: code{%s}", code)
 	}
 }
