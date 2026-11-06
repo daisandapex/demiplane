@@ -174,7 +174,9 @@ func htmlBlockEnd(line []byte) (end *regexp.Regexp, ok bool) {
 	if m == nil {
 		return nil, false
 	}
-	switch strings.ToLower(string(m[1]) + string(m[2])) {
+	// The spec bars these four names from kind 7 as open tags only; a
+	// complete closing tag qualifies whatever its name.
+	switch strings.ToLower(string(m[1])) {
 	case "pre", "script", "style", "textarea":
 		return nil, false
 	}

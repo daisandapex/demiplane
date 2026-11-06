@@ -62,6 +62,13 @@ func TestStripLeadingHTML(t *testing.T) {
 		// Tag names match by ASCII case only: U+017F folds to "s" in Unicode.
 		{"<\u017fcript>\n\n# T\n", "<\u017fcript>\n\n# T\n"},
 		{"<\u017fection>\n\n# T\n", "<\u017fection>\n\n# T\n"},
+		// A closing tag of a kind 1 name is a kind 7 block (CommonMark 0.31.2
+		// bars those names from kind 7 as open tags only).
+		{"</script>\n\n# T\n", "# T\n"},
+		{"</PRE>\n\n# T\n", "# T\n"},
+		// Kind 1 ends only at an ASCII closing name; a long-s close leaves the
+		// block open to the end of the doc.
+		{"<script>\n</\u017fcript>\n\n# T\n", ""},
 		{"<hello = world>\n\n# T\n", "<hello = world>\n\n# T\n"},
 		{"<hello world\n\n# T\n", "<hello world\n\n# T\n"},
 		{"<https://example.com> is the home page.\n\n# T\n", "<https://example.com> is the home page.\n\n# T\n"},
