@@ -196,7 +196,8 @@ func (s *Server) framePage(title string, nav []navLink, seq, toc, inner string) 
 	title, inner = splitTitle(inner)
 	b.WriteString("<div class=\"frame\">\n")
 	if title != "" {
-		b.WriteString("<header class=\"dochead\">" + render.KeepShortCode(title) + "</header>\n")
+		// A div, not a header: the site header is this page's one banner.
+		b.WriteString("<div class=\"dochead\">" + render.KeepShortCode(title) + "</div>\n")
 	}
 	b.WriteString(seq + toc)
 	b.WriteString("<main id=\"dp-main\" class=\"doc\">")

@@ -1406,7 +1406,7 @@ func TestOperatorTitleHeadsTheFrame(t *testing.T) {
 	ts := newTestServer(t, "")
 	_, body := get(t, ts.URL+"/help")
 	page := string(body)
-	head, nav, main := strings.Index(page, `<header class="dochead"><h1`), strings.Index(page, `<details class="mnav`), strings.Index(page, `<main id="dp-main"`)
+	head, nav, main := strings.Index(page, `<div class="dochead"><h1`), strings.Index(page, `<details class="mnav`), strings.Index(page, `<main id="dp-main"`)
 	if head < 0 || nav < 0 || main < 0 || !(head < nav && nav < main) {
 		t.Errorf("help should run title, navs, main; got head=%d nav=%d main=%d", head, nav, main)
 	}
