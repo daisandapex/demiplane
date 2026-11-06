@@ -80,9 +80,16 @@ override ships one stylesheet in three blocks, in this order:
 
 An explicit `data-theme` on `<html>` always beats the OS preference; with no
 attribute, the media query decides, so OS dark works with JavaScript disabled.
-The server `--theme` stamps the attribute; the reader's toggle rewrites it and
-persists to localStorage; a tiny head script re-applies the stored choice
-before paint. `theme.ToggleCSS()` emits the contract and
+The server `--theme` stamps the attribute; the reader's toggle rewrites it.
+The operator pages (home, `/docs`, `/help`, `/connect`, `/gallery`, the status
+pages) ship the same contract and the same toggle as published pages, so a
+reader going from a dark artifact to "All artifacts" stays dark. On the control
+plane, which is a real origin, the choice persists to localStorage and a head
+script re-applies it before paint. A published page runs in an opaque origin
+(Content isolation below), where localStorage throws `SecurityError`
+(checked in headless Chromium against a sandboxed artifact), so there the
+toggle flips the open page only and the OS or server theme decides the next
+one. `theme.ToggleCSS()` emits the contract and
 `TestToggleCSSThreeBlockContract` pins it.
 
 ### Named themes
@@ -138,8 +145,16 @@ unpinned pair keeps it.
 
 System stacks only, no web fonts, no CDN.
 
-- `--serif`: Charter, Bitstream Charter, Iowan Old Style, Palatino, Georgia
-  (body AND headings; one family carries the whole document)
+- `--serif`: Charter, Bitstream Charter, Charis SIL, Iowan Old Style,
+  Palatino Linotype, Palatino, P052, URW Palladio L, Georgia, Cambria, Noto
+  Serif (body AND headings; one family carries the whole document). Charis SIL
+  is Charter under its Linux name; P052 and URW Palladio L are the URW
+  Palatinos most Debian and Ubuntu desktops carry for printing; Noto Serif is
+  Android's serif.
+- `font-size-adjust: .48` on body sets whichever serif lands at Charter's
+  x-height, so a machine with none of the named faces (DejaVu Serif) keeps the
+  page's measure and colour instead of setting it wide. Code, tables, form
+  controls and the sans UI text reset it to `none`.
 - `--sans`: system UI sans (byline/meta, table text, colophon)
 - `--mono`: system mono (code)
 
@@ -152,29 +167,50 @@ h1 `2.125rem` (tracked `-0.02em`), h2 `1.5rem` over a hairline top rule (the
 section scan aid), h3 `1.1875rem`, then `1.0625rem`/`1rem`/`.875rem` down to
 h6. The lead paragraph bumps to `1.0625rem`. Blockquotes are unboxed italic at
 `1.1875rem`. Tables drop to a `.875rem` sans with tabular numerals; table
-headers are muted weight-600, never uppercase (the byline keeps its
-letterspaced uppercase as a one-off). `text-wrap: pretty` on paragraphs,
+headers are muted weight-600, never uppercase. Uppercase tracking is not used
+anywhere: the byline is normal case, so author names keep their case. `text-wrap: pretty` on paragraphs,
 `balance` on headings.
 
 The measure is one root-relative token, `--measure: 30rem`, applied to every
 block child of the document column, so headings, paragraphs, lists, the lead and
-blockquotes share one left edge. It holds the body near 70 characters per line
+blockquotes share one left edge. The frame (`theme.FrameCSS()`) puts that column
+and a `--wide: 46rem` frame on one centred axis, on published and operator pages
+alike: tables and code break out to the frame, the page title and byline start
+at the text's left edge and may run to the frame's right edge, so a title is
+never squeezed to the measure and never hangs left of the text. It holds the body near 70 characters per line
 (SC 1.4.8 caps it at 80). A `ch` measure is avoided on purpose: `ch` resolves
 against each element's own font-size, so a larger heading got a wider centred
 box and hung left of the text. Tables and code blocks break out
-to a centred `min(62rem, 100%)` cap on viewports over `60rem`; below that they
-fall back to the measure and scroll horizontally inside their own container
-(`.table-wrap` / `pre`), so the body never scrolls sideways
-(`overflow-x: clip` on `html, body` backstops it).
+to the frame at every width (on a page under `--css`, to a centred
+`min(62rem, 100%)` over `60rem`) and scroll horizontally inside their own
+container (`.table-wrap` / `pre`), so the body never scrolls sideways
+(`overflow-x: clip` on `html, body` backstops it). Below `40rem` a table of four
+or more columns sets each row as a labelled stack: every body cell carries its
+header in `data-label`, the header row is visually hidden, and each cell shows
+its label beside its value, so a phone reader never scrolls sideways to reach
+the last column.
 
 ## Rendered-document chrome (`?render=md`)
 
-- **Masthead** (`.docbar`): sticky, page-colored, borderless until scroll, then a
-  hairline plus a soft shadow fade in (ease-out-expo). Holds no wordmark: the
-  page opens with the document. Under a `--css` sheet it holds the document title
-  set as the single display-serif H1 (lifted from the body so it is not
-  duplicated), and the theme toggle. The masthead and footer columns align to
-  the `--measure` text column.
+- **Masthead**: the page opens with the document. Title, then one byline line,
+  then one hairline, then the text. There is no top bar and no wordmark: once
+  the bar held only the toggle it only pushed the title down, so it is gone and
+  the toggle sits at the end of the byline. The byline is a small muted sans in
+  normal case (author names keep their case, so there is no uppercase tracking
+  anywhere on a published page) carrying the frontmatter facts in a fixed
+  order: the date (the frontmatter `date`/`published`, else the publish date,
+  in ink weight 600), `by` the author, the status, the tags, any other field as
+  `Key: value`, and the read time from two minutes. The frontmatter `title` is
+  never repeated; with no H1 it becomes the title. Under a `--css` sheet the
+  page keeps the plain sticky masthead (`.docbar`, the title in one row) and
+  the meta-header block.
+- **Margin navs** (`.mnav`): a series list (left) on a series of two or more,
+  and a contents list (right) from three h2 sections; a two-section lesson
+  reads top to bottom. From `78.5rem` (both gutters can hold a `13rem` list)
+  they sit sticky in the gutters beside the frame, top-aligned with the text,
+  the contents marking the section in view and showing only its h3s. Below
+  that they fold to one-line disclosures under the byline ("Series 2 of 3",
+  "Contents"), closed, so a phone opens on the text. Neither has stored state.
 - **Title**: every rendered document emits a `<head><title>` (the lifted H1, or
   the slug fallback, reduced to plain text), so a shared link, tab, or bookmark is
   never blank.
@@ -183,7 +219,7 @@ fall back to the measure and scroll horizontally inside their own container
   survives a frontmatter meta-header injected ahead of the
   body, where a positional `:first-child` selector would silently stop matching.
 - **Theme toggle**: an inline sun / moon SVG (currentColor, no icon dep). Click
-  flips `data-theme` on `<html>` and persists to `localStorage`; the matching
+  flips `data-theme` on `<html>` and tries to persist to `localStorage`; the matching
   icon shows via CSS (keyed off `data-theme` plus the same guarded media query,
   so it is right even before any choice is stored). Initial state: a stored
   localStorage choice is re-applied before paint (no FOUC); otherwise the
@@ -195,12 +231,17 @@ fall back to the measure and scroll horizontally inside their own container
   isolation below), where localStorage is unavailable: the toggle still flips
   the open page, the storage calls fail quietly, and the choice is not carried
   to the next page. With `--unsafe-no-sandbox` it persists as described.
-- **Footer**: a thin single-line credit, hairline top rule, muted, aligned to
-  the text column.
+- **Foot**: one rule, one line, at the measure. The colophon line carries the
+  publish date, the size, "All artifacts" and, with `--footer` on (the
+  default), the "Generated by demiplane" credit as its last item: the only
+  place a published page names the tool. Series pages add the prev, position,
+  next row above it, with no wordmark. `--footer=false` drops the credit. A
+  page rendered without a colophon keeps the thin footer.
 - **Focus**: a global `:focus-visible` ring (`2px solid var(--accent)`, 2px
   offset) on every keyboard-focused surface (WCAG 2.4.7).
-- **Not-found**: the content plane serves a themed 404 (chrome + "this document
-  doesn't exist or has expired" + a link to the index) instead of a plaintext
+- **Not-found**: the content plane serves a themed 404 (the operator frame with
+  a site bar holding only the name and the toggle, "this document doesn't exist
+  or has expired", and a link to the index) instead of a plaintext
   dead-end, since a stale or expired link is a reader's first impression.
 - **Errors**: any other error a browser meets on either plane (a 404 off the
   content plane's artifact path, 400, 401, 403, 405, 413, 429, 5xx) gets the
@@ -220,6 +261,29 @@ fall back to the measure and scroll horizontally inside their own container
   lets code wrap instead of clipping to its scroll box, and sets `@page` margins.
   Ink is near-black, not pure `#000`; the operator's `--css` override opts out
   (their sheet owns print).
+
+## Operator pages
+
+Home, `/docs`, `/docs/{page}`, `/help`, `/connect`, `/gallery` and the status
+pages wear the published pages' frame: the same measure, the same wide blocks,
+the same margin navs, the same light/dark contract and toggle.
+
+- **Site bar**: the name "demiplane" in the serif at body weight 700, ink, then
+  the nav (sans, muted, the current page in ink weight 600 with
+  `aria-current`), then the toggle, over one hairline at the frame width. It is
+  not sticky. On a phone the nav wraps to its own line under the name and toggle.
+  The name appears once; the home H1 says what the tool is for instead.
+- **No kickers**: no label sits above any heading. "For agents" and "This
+  instance" are h2s.
+- **Docs wayfinding**: a `/docs/{page}` carries the docs list as the left margin
+  nav ("Docs 2 of 5"), the page's contents on the right, as a published series
+  page does. Long pages (`/help`, `/connect`) get the contents list too.
+- **Code**: the published pages' slab, under a small sans caption with a Copy
+  button at its end.
+- **Endpoints and the docs index**: hairline-ruled rows, not cards. Method
+  labels are mono ink on the code surface, one style for every method.
+- **Foot**: one rule, one line, at the measure ("Sealed by default, shared by
+  choice.").
 
 ## Series grouping
 
@@ -315,6 +379,6 @@ Everything is disabled under `prefers-reduced-motion`.
 
 No side-stripe accent borders, no gradient text, no glassmorphism, no
 hero-metric template, no pure `#000`/`#fff` (the table card's `--panel` stops
-at L 0.995 for exactly this reason), no accent spent on non-link text, no em
-dashes in demiplane's own UI copy. (User markdown content is rendered
+at L 0.995 for exactly this reason), no accent spent on non-link text, no kicker or
+eyebrow above a heading, no em dashes in demiplane's own UI copy. (User markdown content is rendered
 verbatim, including any em dashes it contains.)
