@@ -37,6 +37,16 @@ func (s *Server) serveContentNotFound(w http.ResponseWriter, r *http.Request) {
 // landing lives on a different origin than this content plane), else the origin
 // root as a best-effort fallback.
 func (s *Server) notFoundHTML() string {
+	return s.statusPage("Not found", `<h1 class="nf-h">This document doesn't exist or has expired</h1>
+<p class="nf-p">The link may be mistyped, or the artifact reached its expiry and was
+removed. Nothing here is stored forever by design.</p>
+`)
+}
+
+// statusPage wraps inner (trusted HTML: a heading and a line or two) in the
+// self-contained themed status document shared by the 404 and the error pages
+// (errorpage.go), with title in <head> and the link back to the index.
+func (s *Server) statusPage(title, inner string) string {
 	css := theme.CSS(s.renderTheme)
 	initial := s.renderTheme
 	if initial == "" {
@@ -51,10 +61,11 @@ func (s *Server) notFoundHTML() string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Not found · demiplane</title>
+<title>` + html.EscapeString(title) + ` · demiplane</title>
 <link rel="icon" type="image/svg+xml" href="` + demiplane.FaviconDataURI + `">
 <style>` + css + `
 main.wrap{max-width:40rem;padding-top:4rem}
+.nf-code{font-family:var(--sans);font-size:.85rem;color:var(--muted);margin:0}
 .nf-h{font-family:var(--serif);font-size:2rem;font-weight:600;color:var(--ink);
   line-height:1.2;letter-spacing:-.012em;margin:.4rem 0 .6rem}
 .nf-p{color:var(--muted);margin:0 0 1.4em}
@@ -63,10 +74,7 @@ main.wrap{max-width:40rem;padding-top:4rem}
 </head>
 <body>
 <main class="wrap">
-<h1 class="nf-h">This document doesn't exist or has expired</h1>
-<p class="nf-p">The link may be mistyped, or the artifact reached its expiry and was
-removed. Nothing here is stored forever by design.</p>
-<p><a class="nf-back" href="` + html.EscapeString(index) + `">Back to the index &rarr;</a></p>
+` + inner + `<p><a class="nf-back" href="` + html.EscapeString(index) + `">Back to the index &rarr;</a></p>
 </main>
 </body>
 </html>

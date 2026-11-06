@@ -30,6 +30,10 @@ All notable changes to demiplane are documented here. The format follows
   align="center"><picture>` logo markup as escaped text above the title.
 - On a phone the top nav of the home, docs, gallery, help and connect pages
   wraps onto its own rows instead of cutting off Gallery, Help and llms.txt.
+- Browsers get the themed error page, with the status, a plain explanation and
+  a link back, for every error a listener returns: the control plane's 404,
+  405 and 401, a missing site, a refused answer and the rest. Clients that do
+  not ask for HTML (curl, agents, MCP) still get the plaintext reason.
 
 ## [3.1.1] - 2026-10-29
 

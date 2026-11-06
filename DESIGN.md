@@ -201,6 +201,11 @@ fall back to the measure and scroll horizontally inside their own container
 - **Not-found**: the content plane serves a themed 404 (chrome + "this document
   doesn't exist or has expired" + a link to the index) instead of a plaintext
   dead-end, since a stale or expired link is a reader's first impression.
+- **Errors**: any other error a browser meets on either plane (a 404 off the
+  content plane's artifact path, 400, 401, 403, 405, 413, 429, 5xx) gets the
+  same themed page: the status, a one-line explanation, the server's reason
+  when it adds something, and the link back. A request that does not accept
+  `text/html` (curl, agents, MCP) keeps the plaintext reason.
 - **Render limits**: tables over 128 columns, documents past 1,000,000 table
   body cells, and pages that would render past `--render-max-output`
   (default 32 MiB) are refused at publish with `413`, not truncated, so a
