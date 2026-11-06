@@ -155,7 +155,7 @@ const coloCSS = `
 .colo .meta{display:flex;flex-wrap:wrap;gap:.1rem .45rem;color:var(--muted,oklch(0.462 0.011 78));
   font-size:.8rem}
 .colo .nav+.meta{margin-top:.35rem}
-@media (max-width:40rem){.colo .meta .size,.colo .meta .size+span{display:none}}
+@media (max-width:40rem){.colo .meta{font-size:.75rem;gap:.1rem .35rem}.colo .meta .size,.colo .meta .size+span{display:none}}
 .colo .credit .mark{font-family:inherit;color:inherit}
 .colo .credit a.mark{text-decoration:underline;text-decoration-color:var(--line-strong,oklch(0.714 0.018 85))}
 .colo .meta a{color:var(--muted,oklch(0.462 0.011 78))}

@@ -52,3 +52,28 @@ func TestTouchAnchorsSkipTheTitle(t *testing.T) {
 		t.Errorf("touch anchor rule should still reach section headings: %q", sel)
 	}
 }
+
+// TestShortCodeNoWrap: a short inline-code token stays on one line in prose,
+// and may wrap again inside a phone table cell so the cell can shrink.
+func TestShortCodeNoWrap(t *testing.T) {
+	if r := rule(contentCSS, ":not(pre)>code.nw"); !strings.Contains(r, "white-space:nowrap") {
+		t.Errorf("short code should not wrap: {%s}", r)
+	}
+	if r := rule(contentCSS, ":is(td,th) code.nw"); !strings.Contains(r, "white-space:normal") {
+		t.Errorf("phone table cells should let short code wrap: {%s}", r)
+	}
+	if strings.Contains(rule(contentCSS, "pre code"), "nowrap") {
+		t.Error("block code must keep its own white-space")
+	}
+}
+
+// TestLinkStatesDiffer: in prose, a visited link is a quieter oxblood and a
+// hovered one gains a soft wash, so all four states read apart.
+func TestLinkStatesDiffer(t *testing.T) {
+	if r := rule(contentCSS, "main :is(p,li,td,dd,blockquote) a:visited"); !strings.Contains(r, "color:color-mix(in oklab,var(--accent) 72%,var(--muted))") {
+		t.Errorf("visited prose links should be a quieter oxblood: {%s}", r)
+	}
+	if r := rule(contentCSS, "main :is(p,li,td,dd,blockquote) a:is(:hover,:active)"); !strings.Contains(r, "background:color-mix(in srgb,var(--accent) 9%,transparent)") {
+		t.Errorf("hovered prose links should gain a wash: {%s}", r)
+	}
+}

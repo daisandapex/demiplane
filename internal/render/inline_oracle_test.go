@@ -20,7 +20,8 @@ func regexInline(s string) string {
 	s = html.EscapeString(s)
 	var spans []string
 	s = reCode.ReplaceAllStringFunc(s, func(m string) string {
-		spans = append(spans, "<code>"+reCode.FindStringSubmatch(m)[1]+"</code>")
+		c := reCode.FindStringSubmatch(m)[1]
+		spans = append(spans, CodeOpen(c)+c+"</code>")
 		return codeSentinel + strconv.Itoa(len(spans)-1) + codeSentinel
 	})
 	s = reLink.ReplaceAllStringFunc(s, func(match string) string {

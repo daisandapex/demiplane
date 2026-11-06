@@ -116,7 +116,7 @@ func TestMarkdownInline(t *testing.T) {
 		"**bold**":             "<strong>bold</strong>",
 		"*italic*":             "<em>italic</em>",
 		"_italic_":             "<em>italic</em>",
-		"`code`":               "<code>code</code>",
+		"`code`":               "<code class=\"nw\">code</code>",
 		"[link](https://x.io)": `<a href="https://x.io" rel="noopener noreferrer">link</a>`,
 	}
 	for src, want := range cases {
@@ -262,7 +262,7 @@ func TestMarkdownTable(t *testing.T) {
 		t.Errorf("want 3 rows, got:\n%s", out)
 	}
 	// Inline formatting inside cells still works (code spans).
-	if !strings.Contains(out, "<code>?slug=x</code>") {
+	if !strings.Contains(out, "<code class=\"nw\">?slug=x</code>") {
 		t.Errorf("cell inline not rendered:\n%s", out)
 	}
 	// No raw pipe characters leak into the output.
@@ -501,7 +501,7 @@ func TestDoctitleWraps(t *testing.T) {
 		t.Errorf("an F page has no top bar:\n%s", out)
 	}
 	for _, bad := range []string{"text-overflow:ellipsis", "line-clamp", "white-space:nowrap"} {
-		if strings.Contains(out, bad) {
+		if regexp.MustCompile(`(?:\.doctitle|h1)\{[^}]*` + regexp.QuoteMeta(bad)).MatchString(out) {
 			t.Errorf("title must wrap, found %q:\n%s", bad, out)
 		}
 	}
@@ -907,8 +907,8 @@ func TestScrollPaddingPresent(t *testing.T) {
 // (`project_lms_pillars.md` used to render <code>project<em>lms</em>pillars.md</code>).
 func TestMarkdownCodeSpanProtectedFromEmphasis(t *testing.T) {
 	cases := map[string]string{
-		"`a_b_c`":                  "<code>a_b_c</code>",
-		"`project_lms_pillars.md`": "<code>project_lms_pillars.md</code>",
+		"`a_b_c`":                  "<code class=\"nw\">a_b_c</code>",
+		"`project_lms_pillars.md`": "<code class=\"nw\">project_lms_pillars.md</code>",
 		"`*not em*`":               "<code>*not em*</code>",
 		"`**not bold**`":           "<code>**not bold**</code>",
 	}
@@ -923,7 +923,7 @@ func TestMarkdownCodeSpanProtectedFromEmphasis(t *testing.T) {
 	}
 	// Emphasis outside the code span still works alongside a protected span.
 	both := render("use `a_b` and _em_ words")
-	if !strings.Contains(both, "<code>a_b</code>") || !strings.Contains(both, "<em>em</em>") {
+	if !strings.Contains(both, "<code class=\"nw\">a_b</code>") || !strings.Contains(both, "<em>em</em>") {
 		t.Errorf("code span and emphasis should coexist:\n%s", both)
 	}
 }
@@ -1053,5 +1053,36 @@ func TestMarkdownBlockquoteLazyContinuation(t *testing.T) {
 	list := render("> q\n- item")
 	if !strings.Contains(list, "<blockquote>q</blockquote>") || !strings.Contains(list, "<li>item</li>") {
 		t.Errorf("list after a quote should not be swallowed:\n%s", list)
+	}
+}
+
+// TestShortCodeKeepsTogether: a short inline-code token (a port, a flag, a
+// query key) is tagged to stay on one line; a long or spaced one may break,
+// and hand-written pages get the same tagging.
+func TestShortCodeKeepsTogether(t *testing.T) {
+	for in, want := range map[string]string{
+		"127.0.0.1:8080":                 `<code class="nw">`,
+		"?slug=reports":                  `<code class="nw">`,
+		strings.Repeat("x", shortCode):   `<code class="nw">`,
+		strings.Repeat("x", shortCode+1): "<code>",
+		"go test ./...":                  "<code>",
+	} {
+		if got := CodeOpen(in); got != want {
+			t.Errorf("CodeOpen(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for in, want := range map[string]string{
+		`Add <code>?slug=reports</code> now`:      `Add <code class="nw">?slug=reports</code> now`,
+		`<code>a long command with spaces</code>`: `<code>a long command with spaces</code>`,
+		`<code>x<b>y</b></code>`:                  `<code>x<b>y</b></code>`,
+		`<code class="nw">k</code>`:               `<code class="nw">k</code>`,
+	} {
+		if got := KeepShortCode(in); got != want {
+			t.Errorf("KeepShortCode(%q) = %q, want %q", in, got, want)
+		}
+	}
+	out := string(Markdown([]byte("Bind `127.0.0.1:8080` or run `go test ./...`.\n"), Options{}))
+	if !strings.Contains(out, `<code class="nw">127.0.0.1:8080</code>`) || !strings.Contains(out, "<code>go test ./...</code>") {
+		t.Errorf("short token should keep together, spaced one not:\n%s", out)
 	}
 }

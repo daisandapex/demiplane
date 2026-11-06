@@ -1378,3 +1378,13 @@ func TestPublishRejectsMalformedQuery(t *testing.T) {
 		})
 	}
 }
+
+// TestOperatorPagesKeepShortCodeTogether: hand-written operator pages tag
+// short code tokens the way rendered pages do, so "?slug=reports" never splits.
+func TestOperatorPagesKeepShortCodeTogether(t *testing.T) {
+	ts := newTestServer(t, "")
+	_, body := get(t, ts.URL+"/")
+	if !strings.Contains(string(body), `<code class="nw">?slug=reports</code>`) {
+		t.Error("landing should keep ?slug=reports on one line")
+	}
+}

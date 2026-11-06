@@ -751,7 +751,7 @@ func renderBlocks(st *state, l *lines, from int, o *out) error {
 		if st.lead && st.blocks == 0 {
 			cls = "lead"
 		}
-		if st.codeFirst && strings.HasPrefix(h, "<code>") {
+		if st.codeFirst && strings.HasPrefix(h, "<code") {
 			cls = strings.TrimSpace(cls + " code-first")
 		}
 		if cls == "" {
@@ -1302,7 +1302,7 @@ func restoreSpans(s, esc string, spans []span) string {
 		if idx, err := strconv.Atoi(rest[:k]); err == nil && idx >= 0 && idx < len(spans) && !restored[idx] {
 			restored[idx] = true
 			sp := spans[idx]
-			b.WriteString("<code>")
+			b.WriteString(CodeOpen(esc[sp.start:sp.end]))
 			b.WriteString(esc[sp.start:sp.end])
 			b.WriteString("</code>")
 			s = rest[k+1:]
@@ -1604,3 +1604,30 @@ const printCSS = `
 const docTail = `</body>
 </html>
 `
+
+// shortCode is the longest inline-code token, in escaped bytes, that is kept
+// on one line. A port, a flag or a query key ("?slug=reports") reads as one
+// word; a URL or a path longer than this may still break where it must.
+const shortCode = 30
+
+// CodeOpen returns the opening tag for an inline code span holding the escaped
+// text esc: class "nw" (no wrap) for a short token without spaces, a bare
+// <code> otherwise.
+func CodeOpen(esc string) string {
+	if len(esc) <= shortCode && !strings.ContainsAny(esc, " \t\n") {
+		return `<code class="nw">`
+	}
+	return "<code>"
+}
+
+// bareCode matches an untagged inline code span whose content has no markup.
+var bareCode = regexp.MustCompile(`<code>([^<]*)</code>`)
+
+// KeepShortCode tags each short bare inline code span in trusted HTML the way
+// the renderer does (see CodeOpen), for pages written by hand.
+func KeepShortCode(h string) string {
+	return bareCode.ReplaceAllStringFunc(h, func(m string) string {
+		inner := m[len("<code>") : len(m)-len("</code>")]
+		return CodeOpen(inner) + inner + "</code>"
+	})
+}

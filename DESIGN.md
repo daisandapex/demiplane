@@ -162,8 +162,10 @@ Essay scale: 16px (`1rem`) serif body on 1.6 leading. Paragraphs and lists owe
 `1.5em` below, so the baseline step across a paragraph break is about 1.9x the
 line step (WCAG 2.2 SC 1.4.8 asks for at least 1.5x). Headings sit at least
 twice as far from the block above as from their own text. Inline code is a
-background-only chip (no border) at `line-height:1`, so it never widens a line. In prose it breaks only a token too long for the line, so a port or a
-query key stays whole; inside a table cell it may break anywhere, so the cell can shrink. Headings are size-led at weight 700:
+background-only chip (no border) at `line-height:1`, so it never widens a line. A short token (30 escaped bytes or fewer, no spaces: a port, a flag, `?slug=reports`) is
+tagged `class="nw"` and never splits; the renderer tags it, and the operator pages get the
+same tagging (`render.KeepShortCode`). A longer one breaks only where it must. On a phone a
+table cell lets any code break, so the cell can shrink. Headings are size-led at weight 700:
 h1 `2.125rem` (tracked `-0.02em`), h2 `1.5rem` over a hairline top rule (the
 section scan aid), h3 `1.1875rem`, then `1.0625rem`/`1rem`/`.875rem` down to
 h6. The lead paragraph bumps to `1.0625rem`. Blockquotes are unboxed italic at
@@ -196,7 +198,8 @@ the last column.
 - **Masthead**: the page opens with the document. Title, then one byline line,
   then one hairline, then the text. There is no top bar and no wordmark: once
   the bar held only the toggle it only pushed the title down, so it is gone and
-  the toggle sits at the end of the byline. The byline is a small muted sans in
+  the toggle sits at the end of the byline, level with its first line when the
+  byline wraps. The byline is a small muted sans in
   normal case (author names keep their case, so there is no uppercase tracking
   anywhere on a published page) carrying the frontmatter facts in a fixed
   order: the date (the frontmatter `date`/`published`, else the publish date,
@@ -241,6 +244,11 @@ the last column.
   place a published page names the tool. Series pages add the prev, position,
   next row above it, with no wordmark. `--footer=false` drops the credit. A
   page rendered without a colophon keeps the thin footer.
+- **Link states** (prose links in `main`): default is oxblood with a 55%
+  underline; hover thickens the underline and adds a 9% oxblood wash; visited
+  is a quieter oxblood (72% accent, 28% muted) with a muted underline; focus
+  is the ring below. Every state clears 4.5:1 on paper and in dark. Navs and
+  the colophon keep their own muted links.
 - **Focus**: a global `:focus-visible` ring (`2px solid var(--accent)`, 2px
   offset) on every keyboard-focused surface (WCAG 2.4.7).
 - **Not-found**: the content plane serves a themed 404 (the operator frame with

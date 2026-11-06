@@ -336,12 +336,12 @@ const fCSS = `
 .f main.wrap>p.code-first>code:first-child{margin-left:-.3em}
 .dochead .doctitle{margin-top:0;margin-bottom:.9rem;overflow-wrap:break-word}
 .dochead>.doctitle,.dochead>.byline{max-width:var(--measure)}
-.byline{display:flex;align-items:center;gap:1rem;padding-bottom:1rem;margin-bottom:2rem;
+.byline{display:flex;align-items:flex-start;gap:1rem;padding-bottom:1rem;margin-bottom:2rem;
   border-bottom:1px solid var(--line)}
 .byline .facts{flex:1 1 auto;min-width:0;margin:0;font:.875rem/1.5 var(--sans);color:var(--muted);
   font-size-adjust:none;font-variant-numeric:tabular-nums;text-wrap:pretty}
 .byline .tstamp{color:var(--ink);font-weight:600}
-.byline .themetoggle{margin-block:-.4rem}
+.byline .themetoggle{margin-block:-.42rem}
 .frame>.mnav:last-of-type{margin-bottom:1.5rem}
 @media (min-width:78.5rem){.frame>.mnav:last-of-type{margin-bottom:0}}
 @media (max-width:40rem){.dochead{padding-top:1.75rem}.dochead .doctitle{font-size:1.625rem}

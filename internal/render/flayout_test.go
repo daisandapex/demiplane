@@ -233,10 +233,10 @@ func TestFHeaderlessKeepsColumn(t *testing.T) {
 func TestFCodeFirstHangs(t *testing.T) {
 	out := string(Markdown([]byte("# T\n\n`lead.py` opens.\n\n## S\n\n`check.py` runs.\n\nRun `x` now.\n\n- `item`\n"), Options{Header: true}))
 	for _, want := range []string{
-		`<p class="lead code-first"><code>lead.py</code>`,
-		`<p class="code-first"><code>check.py</code>`,
-		`<p>Run <code>x</code> now.</p>`,
-		`<li><code>item</code>`,
+		`<p class="lead code-first"><code class="nw">lead.py</code>`,
+		`<p class="code-first"><code class="nw">check.py</code>`,
+		`<p>Run <code class="nw">x</code> now.</p>`,
+		`<li><code class="nw">item</code>`,
 		".f main.wrap>p.code-first>code:first-child{margin-left:-.3em}",
 	} {
 		if !strings.Contains(out, want) {
@@ -316,5 +316,14 @@ func TestFHeadHoldsToTheMeasure(t *testing.T) {
 	out := string(Markdown([]byte(fDoc), Options{Header: true}))
 	if !strings.Contains(out, ".dochead>.doctitle,.dochead>.byline{max-width:var(--measure)}") {
 		t.Error("title and byline should hold to the measure")
+	}
+}
+
+// TestFToggleAnchorsToFirstLine: a byline that wraps keeps the toggle level
+// with its first line.
+func TestFToggleAnchorsToFirstLine(t *testing.T) {
+	out := string(Markdown([]byte(fDoc), Options{Header: true}))
+	if !strings.Contains(out, ".byline{display:flex;align-items:flex-start;") {
+		t.Error("byline should align the toggle to its first line")
 	}
 }

@@ -138,7 +138,7 @@ func TestColophonOneLineOnPhones(t *testing.T) {
 	if !strings.Contains(out, `<span class="size">`+sizeSentinel+`</span><span>&middot;</span>`) {
 		t.Errorf("size should carry its class, followed by its separator:\n%s", out)
 	}
-	if !strings.Contains(coloCSS, "@media (max-width:40rem){.colo .meta .size,.colo .meta .size+span{display:none}}") {
+	if !strings.Contains(coloCSS, "@media (max-width:40rem){.colo .meta{font-size:.75rem;gap:.1rem .35rem}.colo .meta .size,.colo .meta .size+span{display:none}}") {
 		t.Error("phone rule hiding the size is missing")
 	}
 }

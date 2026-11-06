@@ -208,6 +208,10 @@ a{color:var(--accent);text-decoration:underline;text-decoration-thickness:1px;
   text-decoration-color:color-mix(in srgb,var(--accent) 55%,transparent);
   transition:text-decoration-color .2s cubic-bezier(.22,1,.36,1)}
 a:hover,a:active{text-decoration-thickness:2px;text-decoration-color:var(--accent)}
+main :is(p,li,td,dd,blockquote) a:visited{color:color-mix(in oklab,var(--accent) 72%,var(--muted));
+  text-decoration-color:color-mix(in srgb,var(--muted) 55%,transparent)}
+main :is(p,li,td,dd,blockquote) a:is(:hover,:active){background:color-mix(in srgb,var(--accent) 9%,transparent);
+  border-radius:2px}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .skip{position:absolute;left:1rem;top:-4rem;z-index:20;padding:.5rem .8rem;border-radius:6px;
   background:var(--panel);color:var(--accent);border:1px solid var(--line-strong);font:600 .875rem/1.4 var(--sans)}
@@ -240,7 +244,10 @@ code{font-family:var(--mono);font-size:.875em;line-height:1;
   background:color-mix(in oklab,var(--code-border) 45%,var(--code-bg));
   color:var(--code-ink);border:0;padding:.1em .3em;border-radius:3px;
   -webkit-box-decoration-break:clone;box-decoration-break:clone;overflow-wrap:break-word}
+:not(pre)>code.nw{white-space:nowrap}
+@media (max-width:40rem){
 :is(td,th) code{overflow-wrap:anywhere}
+:is(td,th) code.nw{white-space:normal}}
 pre{background:var(--code-bg);color:var(--code-ink);border:1px solid var(--code-border);
   border-radius:8px;padding:.875rem 1rem;margin:0 0 1.125em;overflow-x:auto;
   font-size:.8125rem;line-height:1.55;tab-size:2}
