@@ -132,12 +132,13 @@ func treeHTML(st *state, slug string, fam []string, base string) (string, error)
 	return b.String(), nil
 }
 
-// topbar is the one-row sticky bar of an F page: the wordmark kicker on the
-// column edge, the tree button (series pages only) and the theme toggle at the
-// right. The title is not here; it heads the reading column so it can wrap.
+// topbar is the one-row sticky bar of an F page: the tree button (series pages
+// only) and the theme toggle at the right. The page opens with the document, so
+// the bar carries no wordmark. The title is not here; it heads the reading
+// column so it can wrap.
 func topbar(serverTheme string, toggle, tree bool) string {
 	var b strings.Builder
-	b.WriteString(`<header class="docbar"><div class="wrap"><span class="kicker">demiplane</span><div class="tools">`)
+	b.WriteString(`<header class="docbar"><div class="wrap"><div class="tools">`)
 	if tree {
 		b.WriteString(`<button class="treebtn" type="button" aria-controls="ftree" aria-expanded="false" hidden ` +
 			`aria-label="Show or hide the series list" title="Series list ([)">` + treeSVG + `</button>`)
@@ -209,7 +210,7 @@ mark();
 
 // fCSS lays out an F page. The column template is one set of custom properties
 // on body, chosen by the has-tree/has-rail classes and the nav-on state, and the
-// top bar, the page grid and the footer all use it, so the kicker, the title,
+// top bar, the page grid and the footer all use it, so the tools, the title,
 // the text and the footer share one left edge whatever is open. Token
 // references carry literal fallbacks for a --css override that ships none.
 const fCSS = `
@@ -231,7 +232,6 @@ html.nav-drawer .f.has-tree .ftree{display:block}}
 .f .fgrid{grid-template-areas:var(--fareas);grid-template-rows:var(--frows)}
 .f .docbar>.wrap,.f .docfoot>.wrap{grid-template-areas:var(--fbar)}
 .f .docbar>.wrap{height:var(--top-h);padding-top:0;padding-bottom:0;align-items:center}
-.f .docbar .kicker{grid-area:head}
 .f .docbar .tools{grid-area:head;justify-self:end;display:flex;gap:.5rem;align-items:center}
 .f.has-rail .docbar .tools{grid-area:rail}
 .f .docfoot .fcell{grid-area:head}

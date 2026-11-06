@@ -55,8 +55,6 @@ func (s *Server) notFoundHTML() string {
 <link rel="icon" type="image/svg+xml" href="` + demiplane.FaviconDataURI + `">
 <style>` + css + `
 main.wrap{max-width:40rem;padding-top:4rem}
-.nf-kicker{font-family:var(--sans);font-size:.72rem;font-weight:700;letter-spacing:.2em;
-  text-transform:uppercase;color:var(--accent)}
 .nf-h{font-family:var(--serif);font-size:2rem;font-weight:600;color:var(--ink);
   line-height:1.2;letter-spacing:-.012em;margin:.4rem 0 .6rem}
 .nf-p{color:var(--muted);margin:0 0 1.4em}
@@ -65,7 +63,6 @@ main.wrap{max-width:40rem;padding-top:4rem}
 </head>
 <body>
 <main class="wrap">
-<span class="nf-kicker">demiplane</span>
 <h1 class="nf-h">This document doesn't exist or has expired</h1>
 <p class="nf-p">The link may be mistyped, or the artifact reached its expiry and was
 removed. Nothing here is stored forever by design.</p>

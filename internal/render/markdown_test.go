@@ -497,8 +497,8 @@ func TestDoctitleWraps(t *testing.T) {
 	if !strings.Contains(out, `<header class="dochead"><h1 class="doctitle">Overnight pages: a deep g/y/p/j</h1></header>`) {
 		t.Errorf("title should head the reading column:\n%s", out)
 	}
-	if strings.Contains(out, `<header class="docbar"><div class="wrap"><span class="kicker">demiplane</span><div class="tools"><button class="themetoggle"`) == false {
-		t.Errorf("top bar should hold only the kicker and the tools:\n%s", out)
+	if strings.Contains(out, `<header class="docbar"><div class="wrap"><div class="tools"><button class="themetoggle"`) == false {
+		t.Errorf("top bar should hold only the tools:\n%s", out)
 	}
 	for _, bad := range []string{"text-overflow:ellipsis", "line-clamp", "white-space:nowrap"} {
 		if strings.Contains(out, bad) {

@@ -169,9 +169,9 @@ fall back to the measure and scroll horizontally inside their own container
 ## Rendered-document chrome (`?render=md`)
 
 - **Masthead** (`.docbar`): sticky, page-colored, borderless until scroll, then a
-  hairline plus a soft shadow fade in (ease-out-expo). Holds a letterspaced
-  muted kicker (the wordmark; the accent is links-only), the document title set
-  as the single display-serif H1 (lifted from the body so it is not
+  hairline plus a soft shadow fade in (ease-out-expo). Holds no wordmark: the
+  page opens with the document. Under a `--css` sheet it holds the document title
+  set as the single display-serif H1 (lifted from the body so it is not
   duplicated), and the theme toggle. The masthead and footer columns align to
   the `--measure` text column.
 - **Title**: every rendered document emits a `<head><title>` (the lifted H1, or

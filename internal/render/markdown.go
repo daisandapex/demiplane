@@ -422,15 +422,14 @@ func firstH1(st *state, l *lines, from int) (titleHTML string, line int, err err
 }
 
 // masthead renders the plain sticky title bar a --css page keeps in place of
-// the F top bar: a kicker (the wordmark, small-caps and accented), the document
-// title set as the page's single display-serif H1, and, when toggle is set, the
+// the F top bar: the document title set as the page's single display-serif H1
+// (no wordmark above it), and, when toggle is set, the
 // light/dark toggle. The toggle carries both a sun and a moon SVG; CSS shows the
 // one matching data-theme. Under --css toggle is always false today; the
 // parameter keeps the two bars' signatures alike.
 func masthead(titleHTML, serverTheme string, toggle bool) string {
 	var b strings.Builder
 	b.WriteString(`<header class="docbar"><div class="wrap"><div class="masthead">`)
-	b.WriteString(`<span class="kicker">demiplane</span>`)
 	b.WriteString(`<h1 class="doctitle">` + titleHTML + `</h1>`)
 	b.WriteString(`</div>`)
 	if toggle {
@@ -1489,8 +1488,6 @@ main.wrap>*{max-width:var(--measure);margin-inline:auto}
 .docbar.scrolled{border-bottom-color:var(--line,oklch(0.910 0.013 87));
   box-shadow:0 8px 24px -14px var(--shadow,oklch(0.250 0.010 80 / 0.14))}
 .docbar>.wrap{display:flex;align-items:center;gap:1rem;padding-top:1.15rem;padding-bottom:1.05rem}
-.docbar .kicker{font-family:var(--sans);font-size:.7rem;font-weight:600;letter-spacing:.2em;
-  text-transform:uppercase;color:var(--muted,oklch(0.462 0.011 78))}
 .themetoggle{margin-left:auto;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
   width:2.15rem;height:2.15rem;cursor:pointer;color:var(--muted,oklch(0.462 0.011 78));
   background:var(--panel,oklch(0.995 0.002 95));border:1px solid var(--line,oklch(0.910 0.013 87));border-radius:999px;
@@ -1516,8 +1513,8 @@ html:not([data-theme="light"]) .themetoggle .i-moon{display:block}}
 .themetoggle:hover svg{transform:none}}
 `
 
-// mastheadCSS lays out the plain masthead of a --css page: kicker over title in
-// one fixed row. The single-line ellipsis is deliberate there, so a long title
+// mastheadCSS lays out the plain masthead of a --css page: the title in one
+// fixed row. The single-line ellipsis is deliberate there, so a long title
 // clips rather than shoving the bar's contents out of the row; at <=34rem it
 // relaxes to a two-line clamp (demiplane-ycd). The full title is always in
 // <head><title>.

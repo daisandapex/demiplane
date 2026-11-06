@@ -227,7 +227,7 @@ func TestFSkippedUnderCustomCSS(t *testing.T) {
 	}
 	for _, want := range []string{
 		"<style>body{color:red}",
-		`<header class="docbar"><div class="wrap"><div class="masthead"><span class="kicker">demiplane</span><h1 class="doctitle">T</h1></div></div></header>`,
+		`<header class="docbar"><div class="wrap"><div class="masthead"><h1 class="doctitle">T</h1></div></div></header>`,
 		".docbar .masthead{display:flex",
 		"<body>\n",
 		"<main class=\"wrap\">\n<div class=\"metahead\">",

@@ -22,6 +22,11 @@ All notable changes to demiplane are documented here. The format follows
 - A new govulncheck CI job fails the build on any reachable advisory in the
   standard library or a dependency.
 
+### Fixed
+
+- Published pages (`?render=md`) and the themed 404 no longer open with a
+  tracked `DEMIPLANE` wordmark. The page starts with the document.
+
 ## [3.1.1] - 2026-10-29
 
 Security fixes for the companion capture hook, described in
