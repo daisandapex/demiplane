@@ -130,3 +130,15 @@ func TestColophonSizeIsReal(t *testing.T) {
 			len(out), humanSize(int64(len(out))))
 	}
 }
+
+// TestColophonOneLineOnPhones: below 40rem the size and its separator drop
+// out, so date, the index link and the credit fit one line.
+func TestColophonOneLineOnPhones(t *testing.T) {
+	out := colophon(Options{Colophon: true, Footer: true, IndexURL: "/gallery", Published: time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)})
+	if !strings.Contains(out, `<span class="size">`+sizeSentinel+`</span><span>&middot;</span>`) {
+		t.Errorf("size should carry its class, followed by its separator:\n%s", out)
+	}
+	if !strings.Contains(coloCSS, "@media (max-width:40rem){.colo .meta .size,.colo .meta .size+span{display:none}}") {
+		t.Error("phone rule hiding the size is missing")
+	}
+}

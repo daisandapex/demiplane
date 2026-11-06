@@ -103,7 +103,7 @@ func colophon(opts Options) string {
 	d := html.EscapeString(opts.Published.Format("2006-01-02"))
 	b.WriteString(`<span><time datetime="` + d + `" title="Published">` + d + `</time></span>`)
 	b.WriteString(`<span>&middot;</span>`)
-	b.WriteString(`<span>` + sizeSentinel + `</span>`)
+	b.WriteString(`<span class="size">` + sizeSentinel + `</span>`)
 	if opts.IndexURL != "" {
 		b.WriteString(`<span>&middot;</span>`)
 		b.WriteString(`<span><a href="` + html.EscapeString(opts.IndexURL) + `">All artifacts&nbsp;&rarr;</a></span>`)
@@ -155,6 +155,7 @@ const coloCSS = `
 .colo .meta{display:flex;flex-wrap:wrap;gap:.1rem .45rem;color:var(--muted,oklch(0.462 0.011 78));
   font-size:.8rem}
 .colo .nav+.meta{margin-top:.35rem}
+@media (max-width:40rem){.colo .meta .size,.colo .meta .size+span{display:none}}
 .colo .credit .mark{font-family:inherit;color:inherit}
 .colo .credit a.mark{text-decoration:underline;text-decoration-color:var(--line-strong,oklch(0.714 0.018 85))}
 .colo .meta a{color:var(--muted,oklch(0.462 0.011 78))}

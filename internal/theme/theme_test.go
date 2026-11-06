@@ -472,3 +472,12 @@ func contains(ss []string, want string) bool {
 	}
 	return false
 }
+
+// TestDarkSlabLiftsOffThePage: in dark the code slab is lighter than the page,
+// so it reads as a raised surface, not a hole.
+func TestDarkSlabLiftsOffThePage(t *testing.T) {
+	css := CSS("dark")
+	if slab, bg := tokenColor(t, css, "--code-bg"), tokenColor(t, css, "--bg"); slab[0] <= bg[0] {
+		t.Errorf("dark --code-bg L=%.3f should sit above --bg L=%.3f", slab[0], bg[0])
+	}
+}

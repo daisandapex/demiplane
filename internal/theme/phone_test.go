@@ -26,8 +26,14 @@ func TestInlineCodeWrapsOnPhones(t *testing.T) {
 	if code == "" {
 		t.Fatal("no code rule in the content sheet")
 	}
-	if !strings.Contains(code, "overflow-wrap:anywhere") {
+	if !strings.Contains(code, "overflow-wrap:break-word") {
 		t.Errorf("inline code does not wrap: code{%s}", code)
+	}
+	if strings.Contains(code, "overflow-wrap:anywhere") {
+		t.Errorf("inline code in prose should break only a token that cannot fit, keeping ports whole: code{%s}", code)
+	}
+	if cell := rule(contentCSS, ":is(td,th) code"); !strings.Contains(cell, "overflow-wrap:anywhere") {
+		t.Errorf("inline code in a table cell must break anywhere so the cell can shrink: {%s}", cell)
 	}
 }
 

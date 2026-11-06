@@ -77,14 +77,15 @@ const lightVars = `
 // paper, unbleached-linen ink, the accent lifted to a dusty terracotta so the
 // oxblood reads on the dark ground. Measured AA on --bg: ink 13.5:1, muted
 // 6.6:1, accent 7.4:1; muted on --panel 5.97:1 (the sheet's worst pair, still
-// clear of 4.5:1); code-ink on --code-bg 12.1:1. The --tok-* accents are light
-// inks tuned for the dark slab (worst --tok-com 6.9:1).
+// clear of 4.5:1); code-ink on --code-bg 10.5:1. The code slab sits a step above
+// --bg so it lifts off the page rather than sinking into it. The --tok-* accents
+// are light inks tuned for the dark slab (worst --tok-com 6.0:1).
 const darkVars = `
   color-scheme:dark;
   --bg:oklch(0.228 0.006 78); --panel:oklch(0.261 0.008 85); --ink:oklch(0.923 0.009 85);
   --muted:oklch(0.708 0.012 77); --line:oklch(0.330 0.010 81); --line-strong:oklch(0.461 0.015 87);
   --accent:oklch(0.749 0.082 29);
-  --code-bg:oklch(0.205 0.008 85); --code-ink:oklch(0.871 0.015 85); --code-border:oklch(0.342 0.015 85);
+  --code-bg:oklch(0.262 0.008 85); --code-ink:oklch(0.871 0.015 85); --code-border:oklch(0.362 0.015 85);
   --navy:oklch(0.620 0.095 240); --danger:oklch(0.700 0.150 28); --on-badge:oklch(0.985 0.004 95);
   --info-bg:oklch(0.300 0.030 235); --info-line:oklch(0.400 0.040 235); --info-ink:oklch(0.780 0.060 235);
   --shadow:oklch(0.100 0.008 80 / 0.45); --sel:oklch(0.369 0.023 48);
@@ -238,7 +239,8 @@ em{font-style:italic}
 code{font-family:var(--mono);font-size:.875em;line-height:1;
   background:color-mix(in oklab,var(--code-border) 45%,var(--code-bg));
   color:var(--code-ink);border:0;padding:.1em .3em;border-radius:3px;
-  -webkit-box-decoration-break:clone;box-decoration-break:clone;overflow-wrap:anywhere}
+  -webkit-box-decoration-break:clone;box-decoration-break:clone;overflow-wrap:break-word}
+:is(td,th) code{overflow-wrap:anywhere}
 pre{background:var(--code-bg);color:var(--code-ink);border:1px solid var(--code-border);
   border-radius:8px;padding:.875rem 1rem;margin:0 0 1.125em;overflow-x:auto;
   font-size:.8125rem;line-height:1.55;tab-size:2}

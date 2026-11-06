@@ -106,12 +106,48 @@ func seriesFamily(slug string, siblings []string) []string {
 	return fam
 }
 
+// seriesPrefix returns the slug prefix every member of fam shares, cut back to
+// its last hyphen, so "audit-series-01" and "audit-series-02" share
+// "audit-series-" and never a lone "0".
+func seriesPrefix(fam []string) string {
+	p := fam[0]
+	for _, s := range fam[1:] {
+		for !strings.HasPrefix(s, p) {
+			p = p[:len(p)-1]
+		}
+	}
+	if i := strings.LastIndexByte(p, '-'); i >= 0 {
+		return p[:i+1]
+	}
+	return ""
+}
+
+// seriesLabel names a member by what sets it apart from its siblings: the slug
+// without the family's shared prefix, hyphens read as spaces, first letter
+// capitalised. A bare number reads "Part N". The store keeps no titles for
+// siblings, so the slug is all there is to name them by.
+func seriesLabel(s, prefix string) string {
+	r := strings.TrimPrefix(s, prefix)
+	if r == "" {
+		r = s
+	}
+	if n, err := strconv.Atoi(r); err == nil && n >= 0 {
+		return "Part " + strconv.Itoa(n)
+	}
+	r = strings.ReplaceAll(r, "-", " ")
+	if c := r[0]; c >= 'a' && c <= 'z' {
+		r = string(c-'a'+'A') + r[1:]
+	}
+	return r
+}
+
 // treeHTML renders the series list: every member of the family, the current
-// page marked and unlinked, under a summary that says where the reader is
+// page marked, unlinked and named by its own title (current, already escaped;
+// its label when empty), under a summary that says where the reader is
 // ("Series 2 of 3"). It writes through the render's budgeted out, each entry
 // held to the remaining budget before it is built; the family is at most
 // MaxSeriesMembers long.
-func treeHTML(st *state, slug string, fam []string, base string) (string, error) {
+func treeHTML(st *state, slug string, fam []string, base, current string) (string, error) {
 	pos := 0
 	for i, s := range fam {
 		if s == slug {
@@ -121,18 +157,23 @@ func treeHTML(st *state, slug string, fam []string, base string) (string, error)
 	b := st.newOut()
 	b.WriteString(`<details class="mnav seq" id="ftree"><summary>Series <span class="pos">` +
 		strconv.Itoa(pos) + ` of ` + strconv.Itoa(len(fam)) + `</span></summary><nav aria-label="Series"><ol>`)
+	prefix := seriesPrefix(fam)
 	for _, s := range fam {
 		if err := st.tick(); err != nil {
 			return "", err
 		}
-		if err := st.fits(escapedLen(base) + 2*escapedLen(s) + 64); err != nil {
+		if err := st.fits(escapedLen(base) + 2*escapedLen(s) + len(current) + 72); err != nil {
 			return "", err
 		}
+		label := html.EscapeString(seriesLabel(s, prefix))
 		if s == slug {
-			b.WriteString(`<li><span aria-current="page">` + html.EscapeString(s) + `</span></li>`)
+			if current != "" {
+				label = current
+			}
+			b.WriteString(`<li><span aria-current="page">` + label + `</span></li>`)
 			continue
 		}
-		b.WriteString(`<li><a href="` + navHref(base, s) + `">` + html.EscapeString(s) + `</a></li>`)
+		b.WriteString(`<li><a href="` + navHref(base, s) + `">` + label + `</a></li>`)
 	}
 	b.WriteString("</ol></nav></details>\n")
 	if st.err != nil {
@@ -294,6 +335,7 @@ const fCSS = `
 .f main.wrap>pre,.f main.wrap>.table-wrap{max-width:100%}
 .f main.wrap>p.code-first>code:first-child{margin-left:-.3em}
 .dochead .doctitle{margin-top:0;margin-bottom:.9rem;overflow-wrap:break-word}
+.dochead>.doctitle,.dochead>.byline{max-width:var(--measure)}
 .byline{display:flex;align-items:center;gap:1rem;padding-bottom:1rem;margin-bottom:2rem;
   border-bottom:1px solid var(--line)}
 .byline .facts{flex:1 1 auto;min-width:0;margin:0;font:.875rem/1.5 var(--sans);color:var(--muted);
@@ -302,7 +344,7 @@ const fCSS = `
 .byline .themetoggle{margin-block:-.4rem}
 .frame>.mnav:last-of-type{margin-bottom:1.5rem}
 @media (min-width:78.5rem){.frame>.mnav:last-of-type{margin-bottom:0}}
-@media (max-width:40rem){.dochead{padding-top:1.75rem}.dochead .doctitle{font-size:1.875rem}
+@media (max-width:40rem){.dochead{padding-top:1.75rem}.dochead .doctitle{font-size:1.625rem}
   .byline{margin-bottom:1.25rem}}
 `
 

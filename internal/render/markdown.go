@@ -273,7 +273,7 @@ func Render(ctx context.Context, src []byte, opts Options) ([]byte, error) {
 			return nil, err
 		}
 		if fam := seriesFamily(opts.Slug, opts.Siblings); fam != nil {
-			if tree, err = treeHTML(st, opts.Slug, fam, opts.ContentBase); err != nil {
+			if tree, err = treeHTML(st, opts.Slug, fam, opts.ContentBase, titleText); err != nil {
 				return nil, err
 			}
 		}

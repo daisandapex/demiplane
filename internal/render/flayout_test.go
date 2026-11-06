@@ -151,8 +151,8 @@ func TestFSeriesList(t *testing.T) {
 		t.Errorf("series page should carry has-tree:\n%s", out)
 	}
 	want := `<details class="mnav seq" id="ftree"><summary>Series <span class="pos">2 of 3</span></summary>` +
-		`<nav aria-label="Series"><ol><li><a href="https://c.example/lesson-01">lesson-01</a></li>` +
-		`<li><span aria-current="page">lesson-02</span></li><li><a href="https://c.example/lesson-03">lesson-03</a></li></ol></nav></details>`
+		`<nav aria-label="Series"><ol><li><a href="https://c.example/lesson-01">Part 1</a></li>` +
+		`<li><span aria-current="page">Plan</span></li><li><a href="https://c.example/lesson-03">Part 3</a></li></ol></nav></details>`
 	if !strings.Contains(out, want) {
 		t.Errorf("series list wrong:\n%s", out)
 	}
@@ -273,5 +273,48 @@ func TestFSkippedUnderCustomCSS(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("--css page missing %q:\n%s", want, out)
 		}
+	}
+}
+
+// TestFSeriesLabels: series members are named by what sets them apart, never
+// by the raw slug, and the shared prefix is cut at a hyphen.
+func TestFSeriesLabels(t *testing.T) {
+	for _, c := range []struct {
+		fam  []string
+		want string
+	}{
+		{[]string{"audit-series-01", "audit-series-02"}, "audit-series-"},
+		{[]string{"lesson-10", "lesson-11"}, "lesson-"},
+		{[]string{"alpha", "beta"}, ""},
+		{[]string{"notes-setup", "notes-teardown"}, "notes-"},
+	} {
+		if got := seriesPrefix(c.fam); got != c.want {
+			t.Errorf("seriesPrefix(%v) = %q, want %q", c.fam, got, c.want)
+		}
+	}
+	for _, c := range []struct{ slug, prefix, want string }{
+		{"audit-series-02", "audit-series-", "Part 2"},
+		{"lesson-10", "lesson-", "Part 10"},
+		{"notes-setup-guide", "notes-", "Setup guide"},
+		{"alpha", "", "Alpha"},
+		{"notes-", "notes-", "Notes "},
+		{"2fa-intro", "", "2fa intro"},
+	} {
+		if got := seriesLabel(c.slug, c.prefix); got != c.want {
+			t.Errorf("seriesLabel(%q, %q) = %q, want %q", c.slug, c.prefix, got, c.want)
+		}
+	}
+	out := string(Markdown([]byte("# A *&* title\n\nText.\n"), Options{Header: true, Slug: "x-1", Siblings: []string{"x-2"}}))
+	if !strings.Contains(out, `<span aria-current="page">A &amp; title</span>`) {
+		t.Errorf("current member should be named by its escaped plain title:\n%s", between(t, out, `<details class="mnav seq"`, `</details>`))
+	}
+}
+
+// TestFHeadHoldsToTheMeasure: the title and the byline (its rule and toggle)
+// end at the text's right edge, so a page has one set of edges.
+func TestFHeadHoldsToTheMeasure(t *testing.T) {
+	out := string(Markdown([]byte(fDoc), Options{Header: true}))
+	if !strings.Contains(out, ".dochead>.doctitle,.dochead>.byline{max-width:var(--measure)}") {
+		t.Error("title and byline should hold to the measure")
 	}
 }
