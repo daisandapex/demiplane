@@ -258,6 +258,7 @@ pre{background:var(--code-bg);color:var(--code-ink);border:1px solid var(--code-
   border-radius:8px;padding:.875rem 1rem;margin:0 0 1.125em;overflow-x:auto;
   font-size:.8125rem;line-height:1.55;tab-size:2}
 pre code{background:none;border:0;color:inherit;padding:0;border-radius:0;font-size:1em;line-height:inherit}
+@media (max-width:40rem){pre{white-space:pre-wrap;overflow-wrap:anywhere}}
 pre .k{color:var(--tok-key)}pre .fn{color:var(--tok-fn)}pre .s{color:var(--tok-str)}
 pre .c{color:var(--tok-com);font-style:italic}
 blockquote{margin:1.625em 0;padding:0 1.75rem;border:none;background:none;
@@ -275,12 +276,12 @@ tbody tr+tr td{border-top:1px solid var(--line)}
 .table-wrap:has(th:nth-child(4)):has(td[data-label]) thead{position:absolute;width:1px;height:1px;overflow:hidden;
   clip-path:inset(50%)}
 .table-wrap:has(th:nth-child(4)):has(td[data-label]) :is(table,tbody,tr,td){display:block}
-.table-wrap:has(th:nth-child(4)):has(td[data-label]) tr{padding:.5rem 0}
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) tr{padding:.4rem 0}
 .table-wrap:has(th:nth-child(4)):has(td[data-label]) tbody tr+tr{border-top:1px solid var(--line)}
-.table-wrap:has(th:nth-child(4)):has(td[data-label]) td{position:relative;padding:.2rem .875rem .2rem 7.25rem;
+.table-wrap:has(th:nth-child(4)):has(td[data-label]) td{position:relative;padding:.15rem .875rem .15rem 6rem;
   border-top:0}
 .table-wrap:has(th:nth-child(4)):has(td[data-label]) td::before{content:attr(data-label);position:absolute;
-  left:.875rem;width:5.75rem;color:var(--muted);font-weight:600;font-size:.8125rem;overflow-wrap:anywhere}}
+  left:.875rem;width:4.75rem;color:var(--muted);font-weight:600;font-size:.75rem;overflow-wrap:anywhere}}
 hr{border:0;width:5rem;height:1px;background:var(--line-strong);margin:2.375rem auto}
 img{max-width:100%;height:auto;display:block;margin:0 auto}
 @media (prefers-reduced-motion:reduce){a{transition:none}}
@@ -309,7 +310,7 @@ const frameCSS = `
 .doc>*{max-width:var(--measure);margin-inline:auto}
 .doc>:is(pre,.table-wrap,.codeblock,.wide){max-width:100%}
 @media (min-width:78.5rem){
-.frame{grid-template-columns:minmax(0,1fr) minmax(0,var(--wide)) minmax(0,1fr);column-gap:2rem;
+.frame{grid-template-columns:minmax(0,1fr) minmax(0,var(--wide)) minmax(0,1fr);column-gap:1.25rem;
   grid-template-areas:". head ." "seq body toc";grid-template-rows:auto 1fr}
 .frame>.mnav{position:sticky;top:1.5rem;align-self:start;max-width:var(--side);
   max-height:calc(100vh - 3rem);overflow-y:auto;overscroll-behavior:contain;margin:0}

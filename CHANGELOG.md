@@ -34,8 +34,9 @@ All notable changes to demiplane are documented here. The format follows
 - Short inline code (40 bytes or fewer on one line: ports, flags, query keys,
   short commands) never splits across lines.
 - Prose links show four distinct states: a hover wash, a quieter visited
-  oxblood, and the focus ring. The dark code slab sits above the page, and a
-  code block that scrolls sideways shows a shadow at its hidden edge.
+  oxblood, and the focus ring. Muted text clears 7:1. The dark code slab sits
+  above the page; a code block that scrolls sideways shows a shadow at its
+  hidden edge, and on a phone code wraps instead.
 - Operator pages head the frame with their title, so on a phone the folded
   navs follow it. The phone colophon fits one line.
 

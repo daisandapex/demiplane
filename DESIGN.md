@@ -187,14 +187,15 @@ against each element's own font-size, so a larger heading got a wider centred
 box and hung left of the text. Tables and code blocks break out
 to the frame at every width (on a page under `--css`, to a centred
 `min(62rem, 100%)` over `60rem`) and scroll horizontally inside their own
-container (`.table-wrap` / `pre`), so the body never scrolls sideways. A code block that
+container (`.table-wrap` / `pre`), so the body never scrolls sideways. On a phone (below `40rem`) a code block
+wraps its long lines instead, so nothing hides past the edge. A code block that
 scrolls shows a soft shadow at its hidden edge, which a covering gradient hides
 again once that edge is reached (`background-attachment: local` over `scroll`)
 (`overflow-x: clip` on `html, body` backstops it). Below `40rem` a table of four
 or more columns sets each row as a labelled stack: every body cell carries its
 header in `data-label`, the header row is visually hidden, and each cell shows
-its label beside its value, so a phone reader never scrolls sideways to reach
-the last column.
+its label (a `4.75rem` column at `.75rem`) beside its value, so a phone reader
+never scrolls sideways to reach the last column.
 
 ## Rendered-document chrome (`?render=md`)
 

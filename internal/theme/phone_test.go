@@ -104,3 +104,24 @@ func TestTableCodeChipsTighter(t *testing.T) {
 		t.Errorf("table code chips should be tighter: {%s}", r)
 	}
 }
+
+// TestPhoneCodeWraps: on a phone a code block wraps its long lines instead
+// of hiding them past the right edge; wider screens keep the scrolling slab.
+func TestPhoneCodeWraps(t *testing.T) {
+	if !strings.Contains(contentCSS, "@media (max-width:40rem){pre{white-space:pre-wrap;overflow-wrap:anywhere}}") {
+		t.Error("phone code blocks should wrap")
+	}
+	if strings.Contains(rule(contentCSS, "pre"), "pre-wrap") {
+		t.Error("only phones wrap code; wide screens keep the slab")
+	}
+}
+
+// TestPhoneStackedTableLabelsTight: a stacked table row's label column is
+// narrow and small, so a phone shows more records per screen.
+func TestPhoneStackedTableLabelsTight(t *testing.T) {
+	for _, want := range []string{"tr{padding:.4rem 0}", "padding:.15rem .875rem .15rem 6rem", "width:4.75rem;color:var(--muted);font-weight:600;font-size:.75rem"} {
+		if !strings.Contains(contentCSS, want) {
+			t.Errorf("stacked table rows should be tighter: missing %q", want)
+		}
+	}
+}
