@@ -34,11 +34,13 @@ import (
 // everything allocated while it marks, and on a busy runner a slow mark lets
 // that reach the heap goal, inflating the reading towards twice the live heap
 // (as MemStats.Sys, which adds idle spans on top, did in CI). Stop-the-world,
-// a reading can only fall short of the render's true peak, by how the cycles
-// land against its transients; GOGC=25 keeps them close together, and any
-// transient over a quarter of the live heap starts a cycle while it is held,
-// so building output or input copies past the budget is seen. Sys is still
-// logged, not asserted.
+// a reading can only fall short of the render's true peak, never exceed it,
+// so a slow or busy runner cannot fail a render that fits. It falls short by
+// at most what the render allocated since the last cycle: GOGC=25 starts a
+// cycle before the heap grows by a quarter of the last live heap, so memory
+// held past that is seen (the bound enforced is memBound plus that quarter).
+// Sys is still logged, not asserted; it adds the collector's headroom, which
+// the output budget does not bound.
 
 const (
 	memChildEnv   = "DEMIPLANE_RENDER_MEM_CHILD"  // payload name
@@ -120,16 +122,18 @@ var memPayloads = map[string]func() []byte{
 	"hrules-9":      func() []byte { return fill("", "--------\n", "", maxRenderSize) },
 	// Documents sized to fit a 4 MiB budget, so inline formatting runs on as
 	// much text as the budget admits: the worst case for its per-match work.
-	"code-spans-fit":   func() []byte { return fill("", "`a` ", "\n", 900<<10) },
+	"code-spans-fit":   func() []byte { return fill("", "`a` ", "\n", 600<<10) },
 	"links-fit":        func() []byte { return fill("", "[a](b) ", "\n", 560<<10) },
 	"emphasis-fit":     func() []byte { return fill("", "**a** *b* _c_ ", "\n", 400<<10) },
-	"code-spans-lines": func() []byte { return fill("", "`a` `b` `c`\n", "", 1000<<10) },
+	"code-spans-lines": func() []byte { return fill("", "`a` `b` `c`\n", "", 600<<10) },
+	"escapes-fit":      func() []byte { return fill("", "&", "\n", 780<<10) },
 	"table-cells-fit":  func() []byte { return fill(tableHead(2), "|`a` `a` `a` `a`|[a](b)|\n", "", 600<<10) },
 	// The same, sized to fit the 32 MiB default budget (TestRenderMemoryAtDefaultBudget).
-	"code-spans-fit32":   func() []byte { return fill("", "`a` ", "\n", 7200<<10) },
+	"code-spans-fit32":   func() []byte { return fill("", "`a` ", "\n", 4900<<10) },
 	"links-fit32":        func() []byte { return fill("", "[a](b) ", "\n", 4400<<10) },
 	"emphasis-fit32":     func() []byte { return fill("", "**a** *b* _c_ ", "\n", 3200<<10) },
-	"code-spans-lines32": func() []byte { return fill("", "`a` `b` `c`\n", "", maxRenderSize) },
+	"code-spans-lines32": func() []byte { return fill("", "`a` `b` `c`\n", "", 4900<<10) },
+	"escapes-fit32":      func() []byte { return fill("", "&", "\n", 6400<<10) },
 	"table-cells-fit32":  func() []byte { return fill(tableHead(2), "|`a` `a` `a` `a`|[a](b)|\n", "", 4800<<10) },
 	"deep-list-under":    func() []byte { return fill("", "- a\n  - b\n    - c\n      - d\n", "", maxRenderSize) },
 }
@@ -273,6 +277,15 @@ func renderInChild(t *testing.T, name string, budget int) memResult {
 		t.Fatalf("%s: child render did not finish in 3m", name)
 	}
 	peak, gcs := peakLive(trace.String())
+	tail := trace.String()
+	if len(tail) > 4096 {
+		tail = tail[len(tail)-4096:]
+	}
+	// A child that failed (a data race, a panic after its result) fails the
+	// render, even if it printed a result first.
+	if err != nil {
+		t.Fatalf("%s: child failed: %v: %s\n%s", name, err, out, tail)
+	}
 	line := ""
 	for _, l := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(l, "{") {
@@ -280,18 +293,14 @@ func renderInChild(t *testing.T, name string, budget int) memResult {
 		}
 	}
 	if line == "" {
-		tail := trace.String()
-		if len(tail) > 4096 {
-			tail = tail[len(tail)-4096:]
-		}
-		t.Fatalf("%s: child gave no result (err %v): %s\n%s", name, err, out, tail)
+		t.Fatalf("%s: child gave no result: %s\n%s", name, out, tail)
 	}
 	var res memResult
 	if jerr := json.Unmarshal([]byte(line), &res); jerr != nil {
 		t.Fatal(jerr)
 	}
 	if gcs == 0 {
-		t.Fatalf("%s: child printed no gctrace lines: %s", name, trace.String())
+		t.Fatalf("%s: child printed no gctrace lines: %s", name, tail)
 	}
 	res.PeakLive, res.GCs = peak, gcs
 	t.Logf("%-17s in=%7d budget=%-5v out=%8d live=%3d MiB bound=%d MiB gcs=%-5d sys=%4d MiB %s %s",
@@ -378,7 +387,7 @@ func TestRenderMemoryAtDefaultBudget(t *testing.T) {
 		t.Skip("renders documents of up to 8 MiB at the default budget")
 	}
 	budget := DefaultLimits.MaxOutputBytes
-	for _, name := range []string{"code-spans-fit32", "links-fit32", "emphasis-fit32", "code-spans-lines32", "table-cells-fit32"} {
+	for _, name := range []string{"code-spans-fit32", "links-fit32", "emphasis-fit32", "code-spans-lines32", "escapes-fit32", "table-cells-fit32"} {
 		checkMem(t, renderInChild(t, name, budget), budget)
 	}
 }
@@ -387,20 +396,23 @@ func TestRenderMemoryAtDefaultBudget(t *testing.T) {
 // each at the input cap with every page option on, and holds each render to
 // memBound: k times the output budget plus a constant, on the peak live heap.
 //
-// k = 4 is the render's own accounting with a little room. Every byte of the
-// page is charged to the budget before it is held, and at most three copies
-// of the output are alive at once: the body (built first, because the page
-// head names the rail it produces), the page it is moved into, and the
-// finished document with the colophon size filled in. Buffer growth adds a
-// quarter to the first two, so 3.5 copies at most. The constant, five times
-// the 8 MiB input cap, holds what the output budget does not cover: the
-// generated input, the render's string copy of it (two while CRLF is
-// folded), its line index (4 bytes a line), the per-element state the input
-// caps bound (heading ids, outline entries, list frames), and runtime
-// overhead. Measured worst over 40 runs under -race, 10 of them on a busy
-// host: 33 MiB of the 56 MiB bound at 4 MiB (outline-headings), 79 MiB of
-// 168 MiB at the 32 MiB default (table-cells-fit32). Letting the render hold
-// four times its output budget before refusing a page fails the bound.
+// k = 4 is the render's own accounting with some room. Every byte of the
+// page is charged to the budget before it is held. The body is built in one
+// budgeted buffer (growth adds up to a quarter), the page keeps that string
+// without copying it, and the finished document is one more copy: 2.25
+// copies at the end. The peak is earlier, while a block is formatted: inline
+// holds the escaped text, each pass's result and the regexp's buffer at once,
+// each held to the remaining budget, so a single block near the budget
+// (escapes-fit32, code-spans-fit32) reaches about three copies. The constant,
+// five times the 8 MiB input cap, holds what the output budget does not
+// cover: the generated input, the render's string copy of it (and a third
+// while CRLF is folded), its line index (4 bytes a line, at most 8 MiB), the
+// per-element state the input caps bound (heading ids, outline entries, list
+// frames), and runtime overhead. Measured worst under -race: 33 MiB of the
+// 56 MiB bound at 4 MiB (outline-headings, over 40 runs, 10 of them on a busy
+// host), 106 MiB of 168 MiB at the 32 MiB default (escapes-fit32). Letting
+// the render hold four times its output budget before refusing a page fails
+// the bound.
 func TestRenderMemoryProperty(t *testing.T) {
 	if os.Getenv(memChildEnv) != "" {
 		t.Skip("parent only")
