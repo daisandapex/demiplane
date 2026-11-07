@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -22,23 +23,33 @@ import (
 
 // The tests here render hostile documents in a child process (the test binary
 // re-run with memChildEnv set) so each render's memory can be read in
-// isolation. The child reports MemStats.Sys: address space obtained by the Go
-// runtime, including idle/released heap spans, stacks and runtime metadata.
-// This conservatively includes transient heap growth, but is not process RSS
-// and does not include the race detector's native allocations. Fix the child's
-// GC policy and scheduler size below so host settings do not change the
-// collector's headroom or the number of per-P caches and GC workers.
+// isolation. The bound is on the render's peak live heap: the most heap any
+// garbage collection in the child marked reachable, read from the child's
+// GODEBUG=gctrace=1 lines. That is what the output budget and input caps
+// bound (the memory a render holds), and every cycle reports it, so a render
+// that churns gigabytes is still measured at each collection.
+//
+// The child collects stop-the-world (gcstoptheworld=1), so a cycle marks only
+// what is reachable at that instant. A concurrent cycle also counts as live
+// everything allocated while it marks, and on a busy runner a slow mark lets
+// that reach the heap goal, inflating the reading towards twice the live heap
+// (as MemStats.Sys, which adds idle spans on top, did in CI). Stop-the-world,
+// a reading can only fall short of the render's true peak, by how the cycles
+// land against its transients; GOGC=25 keeps them close together, and any
+// transient over a quarter of the live heap starts a cycle while it is held,
+// so building output or input copies past the budget is seen. Sys is still
+// logged, not asserted.
 
 const (
 	memChildEnv   = "DEMIPLANE_RENDER_MEM_CHILD"  // payload name
 	memBudgetEnv  = "DEMIPLANE_RENDER_MEM_BUDGET" // output budget, bytes
 	maxRenderSize = 8 << 20                       // the server's input cap
-	memConstant   = 64 << 20                      // runtime, input generation and its render copy
-	memPerBudget  = 8                             // k: see TestRenderMemoryProperty
+	memConstant   = 40 << 20                      // the input and what the input caps bound
+	memPerBudget  = 4                             // k: see TestRenderMemoryProperty
 )
 
-// memBound is the most memory a render under budget may take: k times the
-// output budget plus a constant.
+// memBound is the most live heap a render under budget may reach: k times
+// the output budget plus a constant.
 func memBound(budget int) uint64 { return uint64(memConstant + memPerBudget*budget) }
 
 // memPayloads are the documents a child can render, by name. Each builds its
@@ -201,6 +212,8 @@ type memResult struct {
 	Err      string `json:"err"`
 	OutLen   int    `json:"out_len"`
 	Sys      uint64 `json:"sys"`
+	PeakLive uint64 `json:"-"` // MiB, the parent's reading of the child's gctrace
+	GCs      int    `json:"-"`
 	Elapsed  string `json:"elapsed"`
 }
 
@@ -219,6 +232,11 @@ func TestRenderMemChild(t *testing.T) {
 	src := gen()
 	start := time.Now()
 	out, err := Render(context.Background(), src, allOptions(budget))
+	// One collection with the page and its input still held, so even a render
+	// that allocated too little to start a cycle reports a live heap.
+	runtime.GC()
+	runtime.KeepAlive(src)
+	runtime.KeepAlive(out)
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	res := memResult{
@@ -237,18 +255,24 @@ func renderInChild(t *testing.T, name string, budget int) memResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRenderMemChild$", "-test.count=1")
-	// The bound assumes the default GC growth target. Render is synchronous;
-	// one P also removes concurrent GC/allocator scheduling as a function of
-	// the host CPU count or cgroup quota. Keep the same Sys bound, including
-	// retained address space from transient heap growth.
-	// GOMEMLIMIT is only a soft backstop, well above every asserted bound;
-	// it must not be lowered to make an unbounded render pass.
+	// Render is synchronous; one P keeps the host's CPU count or cgroup quota
+	// out of the allocator. gctrace=1 prints one line per collection to
+	// stderr; gcstoptheworld=1 and GOGC=25 are explained at the top of the
+	// file. GOMEMLIMIT is only a soft backstop, well above every asserted
+	// bound; it must not be lowered to make an unbounded render pass.
+	godebug := "gctrace=1,gcstoptheworld=1"
+	if v := os.Getenv("GODEBUG"); v != "" {
+		godebug = v + "," + godebug
+	}
 	cmd.Env = append(os.Environ(), memChildEnv+"="+name, memBudgetEnv+"="+strconv.Itoa(budget),
-		"GOMEMLIMIT=1GiB", "GOGC=100", "GOMAXPROCS=1")
+		"GOMEMLIMIT=1GiB", "GOGC=25", "GOMAXPROCS=1", "GODEBUG="+godebug)
+	var trace bytes.Buffer
+	cmd.Stderr = &trace
 	out, err := cmd.Output()
 	if ctx.Err() != nil {
 		t.Fatalf("%s: child render did not finish in 3m", name)
 	}
+	peak, gcs := peakLive(trace.String())
 	line := ""
 	for _, l := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(l, "{") {
@@ -256,24 +280,56 @@ func renderInChild(t *testing.T, name string, budget int) memResult {
 		}
 	}
 	if line == "" {
-		t.Fatalf("%s: child gave no result (err %v): %s", name, err, out)
+		tail := trace.String()
+		if len(tail) > 4096 {
+			tail = tail[len(tail)-4096:]
+		}
+		t.Fatalf("%s: child gave no result (err %v): %s\n%s", name, err, out, tail)
 	}
 	var res memResult
 	if jerr := json.Unmarshal([]byte(line), &res); jerr != nil {
 		t.Fatal(jerr)
 	}
-	t.Logf("%-17s in=%7d budget=%-5v out=%8d sys=%4d MiB bound=%d MiB %s %s",
-		name, res.InputLen, res.Budget, res.OutLen, res.Sys>>20, memBound(budget)>>20, res.Elapsed, res.Err)
+	if gcs == 0 {
+		t.Fatalf("%s: child printed no gctrace lines: %s", name, trace.String())
+	}
+	res.PeakLive, res.GCs = peak, gcs
+	t.Logf("%-17s in=%7d budget=%-5v out=%8d live=%3d MiB bound=%d MiB gcs=%-5d sys=%4d MiB %s %s",
+		name, res.InputLen, res.Budget, res.OutLen, res.PeakLive, memBound(budget)>>20, res.GCs,
+		res.Sys>>20, res.Elapsed, res.Err)
 	return res
+}
+
+// gcLine matches the heap sizes of a gctrace line (format in the runtime
+// package documentation): at the start of the cycle, at its end, and marked
+// live, in MiB. If the format changes, no line matches and renderInChild
+// fails rather than passing unmeasured.
+var gcLine = regexp.MustCompile(`^gc \d+ @.* (\d+)->(\d+)->(\d+) MB, `)
+
+// peakLive is the largest heap any collection in trace marked live, in MiB,
+// and the number of collections.
+func peakLive(trace string) (peak uint64, gcs int) {
+	for _, l := range strings.Split(trace, "\n") {
+		m := gcLine.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		gcs++
+		if v, _ := strconv.ParseUint(m[3], 10, 64); v > peak {
+			peak = v
+		}
+	}
+	return peak, gcs
 }
 
 // checkMem fails unless the render fit its budget or was refused for it, and
 // stayed within memBound.
 func checkMem(t *testing.T, res memResult, budget int) {
 	t.Helper()
-	if res.Sys > memBound(budget) {
-		t.Errorf("%s: render took %d MiB from the OS, want at most %d MiB (budget %d MiB)",
-			res.Name, res.Sys>>20, memBound(budget)>>20, budget>>20)
+	// gctrace truncates to whole MiB; count the reading as the next MiB up.
+	if (res.PeakLive+1)<<20 > memBound(budget) {
+		t.Errorf("%s: render kept up to %d MiB live, want under %d MiB (budget %d MiB)",
+			res.Name, res.PeakLive, memBound(budget)>>20, budget>>20)
 	}
 	if !res.Budget && (res.Err != "" || res.OutLen > budget) {
 		t.Errorf("%s: render neither fit the budget nor was refused for it: out %d, err %q", res.Name, res.OutLen, res.Err)
@@ -311,21 +367,6 @@ func TestMetaHeaderHonoursRenderBudget(t *testing.T) {
 	}
 }
 
-// TestRenderMemoryProperty renders every hostile shape and seeded mixture,
-// each at the input cap with every page option on, and holds each render to
-// memBound: k times the output budget plus a constant.
-//
-// k = 8 is the render's own accounting with room to spare. Every byte of the
-// page is charged to the budget before it is held, and at most three copies
-// of the output are alive at once: the body (built first, because the page
-// head names the rail it produces), the page it is moved into, and the
-// finished document with the colophon size filled in. Buffer growth adds a
-// quarter to the first two. With the child's fixed GOGC=100, the collector
-// targets roughly twice the live heap; k leaves room beyond those copies and
-// that target. Sys also counts retained idle spans and runtime metadata, so
-// this checks transient growth as well as memory still live after Render.
-// The constant holds what the budget does not cover: runtime overhead, input
-// generation (at most 8 MiB of input), its line index and string copy.
 // TestRenderMemoryAtDefaultBudget renders the documents sized to fill the
 // 32 MiB default budget with inline formatting, one at a time, and holds
 // each to the same bound at that budget.
@@ -342,6 +383,24 @@ func TestRenderMemoryAtDefaultBudget(t *testing.T) {
 	}
 }
 
+// TestRenderMemoryProperty renders every hostile shape and seeded mixture,
+// each at the input cap with every page option on, and holds each render to
+// memBound: k times the output budget plus a constant, on the peak live heap.
+//
+// k = 4 is the render's own accounting with a little room. Every byte of the
+// page is charged to the budget before it is held, and at most three copies
+// of the output are alive at once: the body (built first, because the page
+// head names the rail it produces), the page it is moved into, and the
+// finished document with the colophon size filled in. Buffer growth adds a
+// quarter to the first two, so 3.5 copies at most. The constant, five times
+// the 8 MiB input cap, holds what the output budget does not cover: the
+// generated input, the render's string copy of it (two while CRLF is
+// folded), its line index (4 bytes a line), the per-element state the input
+// caps bound (heading ids, outline entries, list frames), and runtime
+// overhead. Measured worst over 40 runs under -race, 10 of them on a busy
+// host: 33 MiB of the 56 MiB bound at 4 MiB (outline-headings), 79 MiB of
+// 168 MiB at the 32 MiB default (table-cells-fit32). Letting the render hold
+// four times its output budget before refusing a page fails the bound.
 func TestRenderMemoryProperty(t *testing.T) {
 	if os.Getenv(memChildEnv) != "" {
 		t.Skip("parent only")
