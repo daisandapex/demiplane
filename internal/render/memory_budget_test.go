@@ -35,12 +35,14 @@ import (
 // that reach the heap goal, inflating the reading towards twice the live heap
 // (as MemStats.Sys, which adds idle spans on top, did in CI). Stop-the-world,
 // a reading can only fall short of the render's true peak, never exceed it,
-// so a slow or busy runner cannot fail a render that fits. It falls short by
-// at most what the render allocated since the last cycle: GOGC=25 starts a
-// cycle before the heap grows by a quarter of the last live heap, so memory
-// held past that is seen (the bound enforced is memBound plus that quarter).
-// Sys is still logged, not asserted; it adds the collector's headroom, which
-// the output budget does not bound.
+// so a slow or busy runner cannot fail a render that fits. The reading is a
+// sample, not the peak: memory a render allocates and drops between two
+// cycles is not seen. GOGC=25 keeps that interval to about a quarter of the
+// last live heap plus stacks and globals (the pacer starts a cycle before
+// the heap reaches that goal), so memory held for longer than an interval is
+// seen and a briefer transient smaller than one can be missed. Sys is still
+// logged, not asserted; it adds the collector's headroom, which the output
+// budget does not bound.
 
 const (
 	memChildEnv   = "DEMIPLANE_RENDER_MEM_CHILD"  // payload name
@@ -331,8 +333,16 @@ func peakLive(trace string) (peak uint64, gcs int) {
 	return peak, gcs
 }
 
-// checkMem fails unless the render fit its budget or was refused for it, and
-// stayed within memBound.
+// memFits are the payloads sized to fit their budget, so the formatting they
+// target runs on as much text as the budget admits. One refused instead would
+// still be within memBound, measuring nothing, so it fails.
+var memFits = map[string]bool{
+	"code-spans-fit": true, "links-fit": true, "emphasis-fit": true, "code-spans-lines": true, "escapes-fit": true,
+	"code-spans-fit32": true, "links-fit32": true, "emphasis-fit32": true, "code-spans-lines32": true, "escapes-fit32": true,
+}
+
+// checkMem fails unless the render fit its budget or was refused for it (or,
+// for memFits, fit it), and stayed within memBound.
 func checkMem(t *testing.T, res memResult, budget int) {
 	t.Helper()
 	// gctrace truncates to whole MiB; count the reading as the next MiB up.
@@ -342,6 +352,9 @@ func checkMem(t *testing.T, res memResult, budget int) {
 	}
 	if !res.Budget && (res.Err != "" || res.OutLen > budget) {
 		t.Errorf("%s: render neither fit the budget nor was refused for it: out %d, err %q", res.Name, res.OutLen, res.Err)
+	}
+	if memFits[res.Name] && res.Err != "" {
+		t.Errorf("%s: sized to fit the budget, but was refused: %q", res.Name, res.Err)
 	}
 }
 
