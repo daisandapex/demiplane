@@ -1065,7 +1065,7 @@ func TestShortCodeKeepsTogether(t *testing.T) {
 		"?slug=reports":                  `<code class="nw">`,
 		strings.Repeat("x", shortCode):   `<code class="nw">`,
 		strings.Repeat("x", shortCode+1): "<code>",
-		"seat-land --check-authors":      `<code class="nw">`,
+		"demiplane list --json":          `<code class="nw">`,
 		"a\tb":                           "<code>",
 	} {
 		if got := CodeOpen(in); got != want {

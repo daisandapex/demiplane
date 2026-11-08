@@ -1609,7 +1609,7 @@ const docTail = `</body>
 
 // shortCode is the longest inline-code span, in escaped bytes, that is kept
 // on one line. A port, a flag, a query key ("?slug=reports") or a short
-// command ("seat-land --check-authors") reads as one unit, and 40 monospace
+// command ("demiplane list --json") reads as one unit, and 40 monospace
 // characters still fit a 390px phone's line (narrower screens let it wrap); a URL or a longer command may break
 // where it must.
 const shortCode = 40

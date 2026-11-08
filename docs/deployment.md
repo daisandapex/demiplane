@@ -104,9 +104,9 @@ token), `--max-upload <bytes>` (optional; cap publish size, default
 `?render=md` pages — one of `light` (default house style), `dark`, or the pinned dark
 developer palettes `catppuccin` / `dracula` / `one-dark`), `--css <file>` (optional; a custom
 stylesheet for `?render=md` pages that replaces the built-in theme), `--header` /
-`--footer` (optional; default on — the rendered-page title bar and vanity footer),
+`--footer` (optional; default on — the rendered-page masthead and vanity footer),
 `--footer-link <url>` (optional; the footer link target, default the demiplane repo),
-`--meta-header` (optional; default on — render a frontmatter-driven meta-header on
+`--meta-header` (optional; default on — render frontmatter as the byline under the title on
 `?render=md` pages, with `--meta-header=false` stripping frontmatter instead),
 `--idle-timeout` (idle keep-alive timeout, default `120s`), `--write-timeout` (legacy
 whole-response timeout, default off; it also ends live-reload streams). Resource limits
