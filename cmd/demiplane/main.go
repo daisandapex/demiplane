@@ -71,7 +71,7 @@ const defaultMaxUpload = 100 << 20 // 100 MiB
 // -ldflags "-X main.version=..." (see the Dockerfile and the release workflow).
 // A `go install ...@vX.Y.Z` build reports the module version Go recorded
 // instead; a bare `go build` in a checkout reports this baseline.
-const baselineVersion = "3.1.0"
+const baselineVersion = "3.2.0"
 
 var version = baselineVersion
 
