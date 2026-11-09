@@ -18,9 +18,10 @@ Upgrade notes:
 - Building from source needs Go 1.26.10 or newer. `go install` on Go 1.21 or
   later fetches it under the default `GOTOOLCHAIN=auto`; under
   `GOTOOLCHAIN=local` an older Go stops with an error.
-- `--header` and `--meta-header` keep their names and defaults. They now turn
-  off the masthead (title, byline, theme toggle) and the frontmatter byline,
-  which replace the sticky title header and the meta-header.
+- `--header` and `--meta-header` keep their names and defaults (both on). They
+  now control the masthead (title, byline, theme toggle) and the frontmatter
+  byline, which replace the sticky title header and the meta-header;
+  `--header=false` and `--meta-header=false` turn them off.
 - Plaintext error responses now carry `Vary: Accept`, because a browser gets
   the themed page for the same error. A cache in front of demiplane keys the
   two apart.
@@ -118,7 +119,8 @@ Upgrade notes:
 - The Docker image and CI now build with Go 1.26.10. The image was on Go
   1.26.4.
 - A new govulncheck CI job fails the build on any reachable advisory in the
-  standard library or a dependency.
+  standard library or a dependency, in the default build. It does not yet
+  scan the optional `reply` and `tls` build tags.
 
 ## [3.1.1] - 2026-10-29
 
