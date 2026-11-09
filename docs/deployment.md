@@ -107,7 +107,8 @@ stylesheet for `?render=md` pages that replaces the built-in theme), `--header` 
 `--footer` (optional; default on — the rendered-page masthead and vanity footer),
 `--footer-link <url>` (optional; the footer link target, default the demiplane repo),
 `--meta-header` (optional; default on — render frontmatter as the byline under the title on
-`?render=md` pages, with `--meta-header=false` stripping frontmatter instead),
+`?render=md` pages, or as a separate meta-header block when `--header=false` or `--css`
+replaces the masthead; `--meta-header=false` strips frontmatter in every case),
 `--idle-timeout` (idle keep-alive timeout, default `120s`), `--write-timeout` (legacy
 whole-response timeout, default off; it also ends live-reload streams). Resource limits
 (defaults in brackets; `0` disables each of these): `--body-timeout` [`30s`] and
