@@ -250,6 +250,11 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "reply text too large", http.StatusRequestEntityTooLarge)
 		return
 	}
+	if strings.IndexByte(body, 0) >= 0 {
+		// The body reaches the exec hook's environment, which cannot hold a NUL.
+		http.Error(w, "reply text must not contain a NUL byte", http.StatusBadRequest)
+		return
+	}
 
 	rep, ref, err := m.record(art, kind, body)
 	if err != nil {
@@ -339,6 +344,12 @@ func (m *Module) handleContentSubmit(w http.ResponseWriter, r *http.Request) {
 	if len(body) > maxReplyBody {
 		m.writeAnswer(w, slug, http.StatusRequestEntityTooLarge, false,
 			"Your answer was too long to record. Please shorten it and try again.", "")
+		return
+	}
+	if strings.IndexByte(body, 0) >= 0 {
+		// The body reaches the exec hook's environment, which cannot hold a NUL.
+		m.writeAnswer(w, slug, http.StatusBadRequest, false,
+			"Your answer contained a character that cannot be recorded (a NUL byte), so nothing was recorded.", "")
 		return
 	}
 

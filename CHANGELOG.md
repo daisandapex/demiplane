@@ -6,6 +6,12 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A reply or answer whose text holds a NUL byte is refused with 400 on every
+  submit path. It used to be stored, and the exec hook then never ran for it,
+  because an environment variable cannot hold a NUL.
+
 ## [3.2.0] - 2026-11-08
 
 A new reading layout for published pages and the operator pages: the document
