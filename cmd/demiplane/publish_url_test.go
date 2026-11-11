@@ -67,6 +67,8 @@ func TestPublishRefusesUnsafeResultURL(t *testing.T) {
 		"https://:443/empty-host",
 		"https:opaque",
 		"ftp://content.example/x",
+		"https://h/\u009bx",                     // C1 CSI
+		"https://content.example/\u0085x",       // C1 next line
 		"https://content.example/\u2028x",       // line separator
 		"https://content.example/\u2029x",       // paragraph separator
 		"https://content.example/\u202ex",       // right-to-left override
@@ -151,6 +153,31 @@ func TestCheckResultURLInvalidUTF8(t *testing.T) {
 	for _, u := range []string{"https://content.example/\xffx", "https://content.example/\ufffdx"} {
 		if checkResultURL(u) == nil {
 			t.Errorf("checkResultURL(%q) = nil, want an error", u)
+		}
+	}
+}
+
+// TestCheckResultURLRefusesByCharacter pins the reason, not only the
+// refusal: url.Parse already rejects ASCII controls, so a table that checks
+// only for an error stays green with the character check removed. Every
+// value here must be refused by that check.
+func TestCheckResultURLRefusesByCharacter(t *testing.T) {
+	for _, u := range []string{
+		"https://content.example/\x1bx",
+		"https://content.example/\x7f",
+		"https://content.example/x\nother",
+		"https://h/\u009bx",
+		"https://content.example/\u0085x",
+		"https://content.example/\u2028x",
+		"https://content.example/\u2029x",
+		"https://content.example/\u202ex",
+		"https://content\u200b.example/x",
+		"https://content.example/x ",
+		"https://content.example/\xffx",
+	} {
+		err := checkResultURL(u)
+		if err == nil || !strings.Contains(err.Error(), "invisible character") {
+			t.Errorf("checkResultURL(%q) = %v, want a refusal for the character", u, err)
 		}
 	}
 }
