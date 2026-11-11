@@ -6,6 +6,19 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- The minimum Go version is now 1.26.11, up from 1.26.10. Go 1.26.11 fixes
+  GO-2026-6859 (CVE-2026-97054): an HTTP/1 server can crash when a body read
+  through `http.MaxBytesReader` passes its limit while the handler writes a
+  response header from another goroutine, because the `Connection: close`
+  header is set without synchronization. govulncheck finds the affected
+  `net/http` code reachable from demiplane. A binary built with Go 1.26.10
+  carries the bug and should be rebuilt with 1.26.11. `go install` on Go 1.21
+  or later fetches 1.26.11 under the default `GOTOOLCHAIN=auto` and stops with
+  an error under `GOTOOLCHAIN=local`.
+- The Docker image and CI now build with Go 1.26.11.
+
 ## [3.2.0] - 2026-11-08
 
 A new reading layout for published pages and the operator pages: the document

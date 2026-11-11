@@ -13,7 +13,7 @@ go build ./...
 go test ./...
 ```
 
-Go 1.26.10 or newer is required, matching the `go` line in `go.mod`.
+Go 1.26.11 or newer is required, matching the `go` line in `go.mod`.
 
 ## Where issues live
 
