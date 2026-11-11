@@ -451,8 +451,21 @@ func checkResultURL(raw string) error {
 	default:
 		return nil
 	}
-	return fmt.Errorf("publish: refusing the server's URL %q: %s; not copying or opening it", raw, reason)
+	// The value is quoted once per save under --watch, so a huge one is cut
+	// at a rune boundary near maxQuotedURL bytes rather than echoed whole.
+	quoted, more := raw, ""
+	if len(raw) > maxQuotedURL {
+		cut := maxQuotedURL
+		for cut > 0 && !utf8.RuneStart(raw[cut]) {
+			cut--
+		}
+		quoted, more = raw[:cut], fmt.Sprintf(" (and %d more bytes)", len(raw)-cut)
+	}
+	return fmt.Errorf("publish: refusing the server's URL %q%s: %s; not copying or opening it", quoted, more, reason)
 }
+
+// maxQuotedURL bounds how much of a refused URL the refusal quotes.
+const maxQuotedURL = 200
 
 // unsafeURLRune reports a rune a returned URL may not hold. unicode.IsControl
 // covers only category Cc, so line and paragraph separators, bidi overrides,

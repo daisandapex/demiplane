@@ -181,3 +181,34 @@ func TestCheckResultURLRefusesByCharacter(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckResultURLTruncatesLongValue: the refusal quotes the server's
+// value once per save under --watch, so a 65 KB URL must not become a
+// 260 KB message. The quote stops at 200 bytes, on a rune boundary, and
+// says how many bytes it left out.
+func TestCheckResultURLTruncatesLongValue(t *testing.T) {
+	long := "javascript://x/" + strings.Repeat("\x1b", 65<<10)
+	err := checkResultURL(long)
+	if err == nil {
+		t.Fatal("checkResultURL accepted a javascript: URL")
+	}
+	if n := len(err.Error()); n > 1200 {
+		t.Errorf("refusal is %d bytes long", n)
+	}
+	if want := fmt.Sprintf("and %d more bytes", len(long)-200); !strings.Contains(err.Error(), want) {
+		t.Errorf("refusal does not say %q: %.300q", want, err)
+	}
+	// A cut inside a multi-byte rune backs off to its start.
+	wide := "https://hh/" + strings.Repeat("é", 200) + " " // byte 200 is mid-rune
+	err = checkResultURL(wide)
+	if err == nil || strings.Contains(err.Error(), `\x`) {
+		t.Errorf("refusal split a rune: %v", err)
+	}
+	if want := fmt.Sprintf("and %d more bytes", len(wide)-199); !strings.Contains(err.Error(), want) {
+		t.Errorf("refusal does not say %q: %v", want, err)
+	}
+	short := "https://h/x "
+	if err := checkResultURL(short); err == nil || strings.Contains(err.Error(), "more bytes") {
+		t.Errorf("short value marked as truncated: %v", err)
+	}
+}
