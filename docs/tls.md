@@ -66,8 +66,15 @@ SSL_CERT_FILE=<store>/modules/tls/self-signed-cert.pem \
 ```
 
 Set it in the environment the MCP harness starts `demiplane mcp` with, too.
-The variable replaces the system CA bundle for that process, so set it only
-for commands that talk to this instance.
+On Debian, Ubuntu and similar systems the variable adds the certificate to
+the system roots rather than replacing them: Go still loads the certificates
+in `/etc/ssl/certs`. To trust only this instance's certificate, set
+`SSL_CERT_DIR` to an empty or missing directory as well:
+
+```sh
+SSL_CERT_FILE=<store>/modules/tls/self-signed-cert.pem SSL_CERT_DIR=/nonexistent \
+  demiplane publish --url https://127.0.0.1:8080 page.html
+```
 
 The certificate must also name the address the client dials. The derived SANs
 are `localhost`, `127.0.0.1`, `::1` and the bind hosts; a wildcard bind
