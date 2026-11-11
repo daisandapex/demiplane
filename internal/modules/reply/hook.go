@@ -268,6 +268,18 @@ func hookBaseEnv() []string {
 	return env
 }
 
+// hookEnv is the reply's DEMIPLANE_REPLY_* variables. exec refuses an
+// environment holding a NUL byte, so every value here must come from a field
+// the submit handlers refuse a NUL in (TestHookEnvValuesCannotCarryNUL).
+func hookEnv(rep Reply) []string {
+	return []string{
+		"DEMIPLANE_REPLY_ID=" + strconv.FormatInt(rep.ID, 10),
+		"DEMIPLANE_REPLY_SLUG=" + rep.Slug,
+		"DEMIPLANE_REPLY_KIND=" + rep.Kind,
+		"DEMIPLANE_REPLY_BODY=" + rep.Body,
+	}
+}
+
 // runHookExec runs the exec action: `/bin/sh -c <cmdline>` with the reply JSON
 // on stdin and DEMIPLANE_REPLY_{ID,SLUG,KIND,BODY} in the environment, in its
 // own process group. Errors (spawn failure, non-zero exit, timeout) are logged.
@@ -278,12 +290,7 @@ func runHookExec(cmdline string, timeout time.Duration, rep Reply, payload []byt
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", cmdline)
 	cmd.Stdin = bytes.NewReader(payload)
-	cmd.Env = append(hookBaseEnv(),
-		"DEMIPLANE_REPLY_ID="+strconv.FormatInt(rep.ID, 10),
-		"DEMIPLANE_REPLY_SLUG="+rep.Slug,
-		"DEMIPLANE_REPLY_KIND="+rep.Kind,
-		"DEMIPLANE_REPLY_BODY="+rep.Body,
-	)
+	cmd.Env = append(hookBaseEnv(), hookEnv(rep)...)
 	// The child writes to a pipe this process reads while it streams, keeping
 	// only the first hookLogOutputCap bytes, so a verbose hook costs no memory.
 	// An *os.File (not an io.Writer) means Wait returns when the shell exits,
