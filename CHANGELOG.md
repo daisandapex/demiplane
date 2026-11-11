@@ -30,6 +30,12 @@ All notable changes to demiplane are documented here. The format follows
   no userinfo. Any other value is quoted in the error, nothing is copied or opened,
   and the command exits non-zero. Under `--watch` every republish is checked
   the same way; a refused URL is reported quoted and watching goes on.
+- The client commands escape every string the server sends before printing
+  it: the `publish` error text, the `list` table, the `delete` manifest and
+  report, and the JSON that `list --json`, `ttl`, `pin` and `unpin` print
+  (still valid JSON with the same values). Control, format, bidi and line
+  separator characters no longer reach the terminal. Log lines now escape
+  U+2028 and U+2029 as well.
 - A browser reply or answer refused for a missing or wrong form token no
   longer spends the per-client, per-artifact or global reply rate budget, so
   junk posts cannot lock real repliers out with 429. The budget is charged
