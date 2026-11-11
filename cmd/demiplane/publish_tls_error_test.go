@@ -140,6 +140,7 @@ func TestWatchEscapesTLSErrorText(t *testing.T) {
 	writeFile(t, src, "<h1>one</h1>")
 	stubOpeners(t)
 	p := &publisher{client: client, base: base, filename: "page.html"}
+	waitIdle := watchIdleSignal(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -147,12 +148,15 @@ func TestWatchEscapesTLSErrorText(t *testing.T) {
 		_ = captureStdout(t, func() {
 			done := make(chan error, 1)
 			go func() { done <- runWatch(ctx, p, src, false) }()
-			time.Sleep(300 * time.Millisecond) // first publish answered
+			if !waitIdle() {
+				t.Error("watchLoop never recorded its baseline")
+			}
 			writeFile(t, src, "<h1>two</h1>")
 			later := time.Now().Add(time.Hour)
 			_ = os.Chtimes(src, later, later)
-			time.Sleep(3 * watchInterval)
-			time.Sleep(500 * time.Millisecond) // let the callback print
+			if !waitIdle() {
+				t.Error("the republish callback never returned")
+			}
 			cancel()
 			if err := <-done; err != context.Canceled {
 				t.Errorf("runWatch = %v, want context.Canceled", err)

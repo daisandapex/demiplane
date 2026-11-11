@@ -408,6 +408,9 @@ func watchLoop(ctx context.Context, path string, interval time.Duration, onChang
 	last := info.ModTime()
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	if watchIdle != nil {
+		watchIdle()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -422,10 +425,19 @@ func watchLoop(ctx context.Context, path string, interval time.Duration, onChang
 			if m := info.ModTime(); !m.Equal(last) {
 				last = m
 				onChange()
+				if watchIdle != nil {
+					watchIdle()
+				}
 			}
 		}
 	}
 }
+
+// watchIdle, when non-nil, is called each time watchLoop starts waiting for
+// a change: once the baseline mtime is recorded and again after each onChange
+// returns. Only tests set it, to edit the file after the baseline exists and
+// to read the callback's output once it is written.
+var watchIdle func()
 
 // checkResultURL vets the url a publish response returns before it is
 // printed, copied to the clipboard or handed to the browser opener. The

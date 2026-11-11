@@ -38,6 +38,24 @@ func captureStderr(t *testing.T, fn func()) string {
 	return <-outCh
 }
 
+// watchIdleSignal sets the watchIdle hook for the test and returns a wait
+// function: it reports whether watchLoop became idle (baseline recorded, or a
+// change handled) within five seconds.
+func watchIdleSignal(t *testing.T) func() bool {
+	t.Helper()
+	idle := make(chan struct{}, 16)
+	watchIdle = func() { idle <- struct{}{} }
+	t.Cleanup(func() { watchIdle = nil })
+	return func() bool {
+		select {
+		case <-idle:
+			return true
+		case <-time.After(5 * time.Second):
+			return false
+		}
+	}
+}
+
 // sequenceControlPlane answers the n-th publish with urls[n] (the last one
 // repeats) and reports each request on the returned channel.
 func sequenceControlPlane(t *testing.T, urls ...string) (string, <-chan int) {
@@ -78,6 +96,7 @@ func TestWatchRefusesHostileRepublishURL(t *testing.T) {
 	calls := stubOpeners(t)
 	base, seen := sequenceControlPlane(t, good, hostile)
 	p := &publisher{client: noRedirectClient(), base: base, filename: "page.html"}
+	waitIdle := watchIdleSignal(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -87,7 +106,9 @@ func TestWatchRefusesHostileRepublishURL(t *testing.T) {
 			done := make(chan error, 1)
 			go func() { done <- runWatch(ctx, p, src, true) }()
 			<-seen // first publish answered
-			time.Sleep(100 * time.Millisecond)
+			if !waitIdle() {
+				t.Error("watchLoop never recorded its baseline")
+			}
 			if err := os.WriteFile(src, []byte("<h1>two</h1>"), 0o644); err != nil {
 				t.Error(err)
 			}
@@ -98,7 +119,9 @@ func TestWatchRefusesHostileRepublishURL(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Error("no republish reached the control plane")
 			}
-			time.Sleep(200 * time.Millisecond) // let the callback print
+			if !waitIdle() {
+				t.Error("the republish callback never returned")
+			}
 			cancel()
 			if err := <-done; err != context.Canceled {
 				t.Errorf("runWatch = %v, want context.Canceled", err)
