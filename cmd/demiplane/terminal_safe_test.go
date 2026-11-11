@@ -186,3 +186,25 @@ func TestPatchCompactsServerJSON(t *testing.T) {
 		}
 	}
 }
+
+// TestDeleteConfirmPromptEscapesHost: the interactive confirm prompt prints
+// the host from the server's instance URL. url.Parse refuses ASCII controls
+// there but keeps C1 controls, bidi overrides and line separators, so the
+// prompt must escape them itself.
+func TestDeleteConfirmPromptEscapesHost(t *testing.T) {
+	t.Setenv("DEMIPLANE_TOKEN", "tok")
+	host := "h\u009b2J‮ .example"
+	inv := `{"server_time":"2026-01-01T00:00:00Z","owner":true,"instance":"https://` + host +
+		`","artifacts":[{"kind":"artifact","slug":"a","revision":"r","size":1}],"count":1}`
+	base := hostileServer(t, map[string]func(http.ResponseWriter, *http.Request){
+		"GET /list":           jsonReply(200, inv),
+		"POST /manage/delete": jsonReply(200, `{"deleted":[],"skipped":[],"missing":[],"failed":[]}`),
+	})
+	var out bytes.Buffer
+	_ = runDelete([]string{"--url", base, "--match", "*", "--yes"}, &out, strings.NewReader("wrong\n"), true)
+	_, prompt, ok := strings.Cut(out.String(), "Type ")
+	if !ok {
+		t.Fatalf("no confirm prompt printed: %q", out.String())
+	}
+	assertTerminalSafe(t, "confirm prompt", prompt, false)
+}
