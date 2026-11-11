@@ -15,6 +15,10 @@ All notable changes to demiplane are documented here. The format follows
   copying or opening it: one line, no control characters, http or https, and
   a host. Any other value is quoted in the error, nothing is copied or opened,
   and the command exits non-zero.
+- A browser reply or answer refused for a missing or wrong form token no
+  longer spends the per-client, per-artifact or global reply rate budget, so
+  junk posts cannot lock real repliers out with 429. The budget is charged
+  after the token check.
 
 ## [3.2.0] - 2026-11-08
 

@@ -211,9 +211,6 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if ref == nil {
-		ref = m.rate(r, slug)
-	}
 	if ref != nil {
 		ref.write(w)
 		http.Error(w, ref.msg, ref.status)
@@ -236,6 +233,13 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	if bad := m.checkFormToken(r, art, token); bad != formTokenOK {
 		http.Error(w, bad.message(), http.StatusForbidden)
+		return
+	}
+	// Charge the rate budgets only once the form token has passed, so
+	// tokenless browser posts cannot spend them and lock real repliers out.
+	if ref := m.rate(r, slug); ref != nil {
+		ref.write(w)
+		http.Error(w, ref.msg, ref.status)
 		return
 	}
 	if !validKinds[kind] {
@@ -307,9 +311,6 @@ func (m *Module) handleContentSubmit(w http.ResponseWriter, r *http.Request) {
 			"The server hit an error and your answer was not recorded. Please try again.", "")
 		return
 	}
-	if ref == nil {
-		ref = m.rate(r, slug)
-	}
 	if ref != nil {
 		ref.write(w)
 		m.writeAnswer(w, slug, ref.status, false, answerRefusal(ref), "")
@@ -332,6 +333,12 @@ func (m *Module) handleContentSubmit(w http.ResponseWriter, r *http.Request) {
 
 	if bad := m.checkFormToken(r, art, r.PostFormValue("token")); bad != formTokenOK {
 		m.writeAnswer(w, slug, http.StatusForbidden, false, bad.answerText(), "")
+		return
+	}
+	// Rate budgets are charged only after the token check (see handleSubmit).
+	if ref := m.rate(r, slug); ref != nil {
+		ref.write(w)
+		m.writeAnswer(w, slug, ref.status, false, answerRefusal(ref), "")
 		return
 	}
 
