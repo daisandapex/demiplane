@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -114,7 +115,8 @@ func URL(raw string) string {
 }
 
 // Text escapes every control character (C0, DEL, C1), every Unicode format
-// character (bidi overrides and the like) and every invalid UTF-8 byte in s,
+// character (bidi overrides and the like), the line and paragraph separators
+// U+2028 and U+2029, and every invalid UTF-8 byte in s,
 // so a value an outside party influenced cannot move the cursor, recolor a
 // terminal, forge a new log line or reorder the text a reader sees.
 func Text(s string) string {
@@ -146,7 +148,51 @@ func Text(s string) string {
 }
 
 func unsafeRune(r rune) bool {
-	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r)
+	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
+}
+
+// JSON escapes the runes Text escapes inside a JSON document, as \uXXXX
+// escapes, so the result is still valid JSON that decodes to the same value.
+// It is for JSON a client prints that came from a remote party: a JSON string
+// may carry DEL, C1 controls and bidi overrides raw. In valid JSON such a
+// rune can only sit inside a string, so escaping it there is lossless; the
+// ASCII whitespace JSON allows between tokens (tab, newline, carriage return)
+// is left alone. Invalid UTF-8 becomes \ufffd.
+func JSON(b []byte) []byte {
+	var out []byte
+	for i := 0; i < len(b); {
+		r, size := utf8.DecodeRune(b[i:])
+		invalid := r == utf8.RuneError && size == 1
+		if !invalid && (!unsafeRune(r) || r == '\t' || r == '\n' || r == '\r') {
+			if out != nil {
+				out = append(out, b[i:i+size]...)
+			}
+			i += size
+			continue
+		}
+		if out == nil {
+			out = append(make([]byte, 0, len(b)+16), b[:i]...)
+		}
+		if invalid {
+			r = utf8.RuneError
+		}
+		if r > 0xffff {
+			hi, lo := utf16.EncodeRune(r)
+			out = appendJSONEscape(appendJSONEscape(out, hi), lo)
+		} else {
+			out = appendJSONEscape(out, r)
+		}
+		i += size
+	}
+	if out == nil {
+		return b
+	}
+	return out
+}
+
+func appendJSONEscape(out []byte, r rune) []byte {
+	const digits = "0123456789abcdef"
+	return append(out, '\\', 'u', digits[r>>12&0xf], digits[r>>8&0xf], digits[r>>4&0xf], digits[r&0xf])
 }
 
 func escapeRune(r rune) string {

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
 	"github.com/daisandapex/demiplane/v3/internal/manage"
 	"github.com/daisandapex/demiplane/v3/internal/store"
 	"github.com/daisandapex/demiplane/v3/internal/ttl"
@@ -87,9 +88,10 @@ func runDelete(args []string, out io.Writer, in io.Reader, interactive bool) err
 		total += i.Size
 	}
 	fmt.Fprintf(out, "%d items, %d bytes\n", len(m.Items), total)
-	fmt.Fprintf(out, "instance %s, selected %s\n", m.Instance, m.SelectedAt.Format("2006-01-02T15:04:05.999999999Z07:00"))
+	// The manifest and report come from the server: escape every string.
+	fmt.Fprintf(out, "instance %s, selected %s\n", logsafe.Text(m.Instance), m.SelectedAt.Format("2006-01-02T15:04:05.999999999Z07:00"))
 	for _, i := range m.Items {
-		fmt.Fprintf(out, "%s %s %d bytes revision=%s\n", i.Kind, i.ID, i.Size, i.Revision)
+		fmt.Fprintf(out, "%s %s %d bytes revision=%s\n", logsafe.Text(i.Kind), logsafe.Text(i.ID), i.Size, logsafe.Text(i.Revision))
 	}
 	if !*yes {
 		return nil
@@ -97,7 +99,7 @@ func runDelete(args []string, out io.Writer, in io.Reader, interactive bool) err
 	host := manage.Host(m.Instance)
 	if sel.Broad() {
 		if *confirm == "" && interactive {
-			fmt.Fprintf(out, "Type %s to confirm: ", host)
+			fmt.Fprintf(out, "Type %s to confirm: ", logsafe.Text(host))
 			line, _ := bufio.NewReader(in).ReadString('\n')
 			*confirm = strings.TrimSpace(line)
 		}
@@ -111,7 +113,7 @@ func runDelete(args []string, out io.Writer, in io.Reader, interactive bool) err
 		rows []manage.Result
 	}{{"deleted", report.Deleted}, {"skipped", report.Skipped}, {"missing", report.Missing}, {"failed", report.Failed}} {
 		for _, i := range group.rows {
-			fmt.Fprintf(out, "%s %s %s %s\n", group.name, i.Kind, i.ID, i.Reason)
+			fmt.Fprintf(out, "%s %s %s %s\n", group.name, logsafe.Text(i.Kind), logsafe.Text(i.ID), logsafe.Text(i.Reason))
 		}
 	}
 	if err != nil {
@@ -160,6 +162,6 @@ func runPatch(command string, args []string, out io.Writer) error {
 	if err = manage.Request(context.Background(), client, base, token, "PATCH", "/"+url.PathEscape(fs.Arg(0)), body, &item); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(out, string(item))
+	_, err = fmt.Fprintln(out, string(logsafe.JSON(item)))
 	return err
 }

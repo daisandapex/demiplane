@@ -4,6 +4,7 @@
 package logsafe
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -79,6 +80,7 @@ func TestTextEscapesControls(t *testing.T) {
 		"cr\rover":             `cr\rover`,
 		"c1\u009bcsi":          `c1\x9bcsi`,
 		"bidi\u202eevil":       `bidi\u202eevil`,
+		"ls\u2028ps\u2029":     `ls\u2028ps\u2029`,
 		"bad\xffbyte":          `bad\xffbyte`,
 		"unicode ok: café, 日本": "unicode ok: café, 日本",
 	}
@@ -109,5 +111,27 @@ func TestErrRedactsQuotedURL(t *testing.T) {
 	}
 	if !strings.Contains(got, "http://127.0.0.1:1") {
 		t.Errorf("origin lost: %s", got)
+	}
+}
+
+func TestJSONEscapesUnsafeRunes(t *testing.T) {
+	in := "{\"a\":\"x\u009b2J\u202e\u2028\x7f\U000e0001\xff\",\n\t\"b\":\"caf\u00e9\"}"
+	got := JSON([]byte(in))
+	want := `{"a":"x\u009b2J\u202e\u2028\u007f\udb40\udc01\ufffd",` + "\n\t" + `"b":"café"}`
+	if string(got) != want {
+		t.Fatalf("JSON(%q) = %q, want %q", in, got, want)
+	}
+	var a, b map[string]string
+	if err := json.Unmarshal(got, &a); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(strings.ReplaceAll(in, "\xff", "\ufffd")), &b); err != nil {
+		t.Fatal(err)
+	}
+	if a["a"] != b["a"] || a["b"] != b["b"] {
+		t.Errorf("JSON changed the decoded value: %q, want %q", a, b)
+	}
+	if clean := []byte(`{"a":"caf\u00e9 \u65e5"}`); &JSON(clean)[0] != &clean[0] {
+		t.Error("JSON copied a clean document")
 	}
 }

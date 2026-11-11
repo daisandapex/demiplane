@@ -19,6 +19,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
 	ttlparse "github.com/daisandapex/demiplane/v3/internal/ttl"
 )
 
@@ -307,9 +308,10 @@ func (p *publisher) publishFile(ctx context.Context, path string) (publishResult
 
 // httpError maps a non-201 publish response to a helpful, token-free error. The
 // server's plain-text error body is trimmed to its first line so a stray HTML
-// error page cannot flood the terminal.
+// error page cannot flood the terminal, and passed through logsafe.Text so
+// its control and format characters are escaped rather than acted on.
 func httpError(code int, body []byte) error {
-	msg := firstLine(string(body))
+	msg := logsafe.Text(firstLine(string(body)))
 	switch code {
 	case http.StatusUnauthorized:
 		return fmt.Errorf("publish: unauthorized (401) — set --token-file or DEMIPLANE_TOKEN")

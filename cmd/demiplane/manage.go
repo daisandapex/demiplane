@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -15,6 +16,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/daisandapex/demiplane/v3/internal/logsafe"
 	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
@@ -167,11 +169,19 @@ func runList(args []string, out io.Writer) error {
 		seen[page.Next] = true
 		q.Set("after", page.Next)
 	}
+	// Every server-supplied string is escaped before it is printed: the
+	// table through logsafe.Text, the JSON through logsafe.JSON, which keeps
+	// it valid JSON with the same value.
 	if *asJSON {
-		return json.NewEncoder(out).Encode(struct {
+		var buf bytes.Buffer
+		if err := json.NewEncoder(&buf).Encode(struct {
 			Artifacts []json.RawMessage `json:"artifacts"`
 			Count     int               `json:"count"`
-		}{items, len(items)})
+		}{items, len(items)}); err != nil {
+			return err
+		}
+		_, err := out.Write(logsafe.JSON(buf.Bytes()))
+		return err
 	}
 	table := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(table, "KIND\tSLUG\tRENDER\tREPLY\tSERIES\tEXPIRES\tURL")
@@ -184,7 +194,7 @@ func runList(args []string, out io.Writer) error {
 		if json.Unmarshal(raw, &item) != nil {
 			return fmt.Errorf("list: unexpected entry")
 		}
-		fmt.Fprintf(table, "%s\t%s\t%s\t%t\t%s\t%s\t%s\n", item.Kind, item.Slug, item.Render, item.Reply, item.Series, item.ExpiresAt, item.URL)
+		fmt.Fprintf(table, "%s\t%s\t%s\t%t\t%s\t%s\t%s\n", logsafe.Text(item.Kind), logsafe.Text(item.Slug), logsafe.Text(item.Render), item.Reply, logsafe.Text(item.Series), logsafe.Text(item.ExpiresAt), logsafe.Text(item.URL))
 	}
 	return table.Flush()
 }
