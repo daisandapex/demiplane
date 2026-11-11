@@ -67,6 +67,12 @@ func TestPublishRefusesUnsafeResultURL(t *testing.T) {
 		"https://:443/empty-host",
 		"https:opaque",
 		"ftp://content.example/x",
+		"https://content.example/\u2028x",       // line separator
+		"https://content.example/\u2029x",       // paragraph separator
+		"https://content.example/\u202ex",       // right-to-left override
+		"https://content\u200b.example/x",       // zero-width space in the host
+		"https://content.example/x ",            // trailing space
+		"https://trusted.example@evil.example/", // userinfo misleads the eye
 	}
 	for _, u := range bad {
 		for _, mode := range [][]string{{"--open"}, {"--watch", "--open"}} {
@@ -135,5 +141,16 @@ func TestPublishOpensSafeResultURL(t *testing.T) {
 			t.Fatalf("stubs not both called with the URL: %q", b)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestCheckResultURLInvalidUTF8: JSON decoding turns invalid UTF-8 into
+// U+FFFD before the value reaches checkResultURL, so the end-to-end table
+// cannot carry it; the check still refuses both forms.
+func TestCheckResultURLInvalidUTF8(t *testing.T) {
+	for _, u := range []string{"https://content.example/\xffx", "https://content.example/\ufffdx"} {
+		if checkResultURL(u) == nil {
+			t.Errorf("checkResultURL(%q) = nil, want an error", u)
+		}
 	}
 }
