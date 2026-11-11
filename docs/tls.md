@@ -22,8 +22,8 @@ That alone is the **zero-config self-signed** mode: on first TLS start the
 module generates an ECDSA P-256 certificate (SANs derived from your
 `--bind`/`--content-bind` addresses, or set `tls_hosts = a,b,…` explicitly),
 persists it under `<store>/modules/tls/`, reuses it across restarts, and
-regenerates it at startup when it nears expiry or no longer names every
-host.
+regenerates it when it nears expiry or no longer names every host (see
+[When the self-signed certificate changes](#when-the-self-signed-certificate-changes)).
 A newly generated certificate's SHA-256 fingerprint is logged so clients can
 pin it (`curl --cacert <store>/modules/tls/self-signed-cert.pem …`).
 
@@ -96,6 +96,45 @@ it in the certificate. Adding a host that the certificate lacks does produce a
 new certificate. To drop a name, stop the server, delete
 `<store>/modules/tls/self-signed-cert.pem` and start it again: it generates a
 new key and certificate for the current set and logs the new fingerprint.
+Clients then need the new file, as below.
+
+## When the self-signed certificate changes
+
+The server picks its certificate once, when `serve` starts, and generates a
+new one only then, when the persisted pair:
+
+- is missing, unreadable, or its key does not match the certificate;
+- expires within 30 days (a server left running past expiry keeps serving
+  the old one until it is restarted);
+- does not name every host in the set above, for example after a new bind
+  address or a host added to `tls_hosts`.
+
+A client holding a copy of the old certificate then refuses the server:
+`demiplane publish` reports `x509: certificate signed by unknown authority`,
+`list` and the other management commands report `request failed`, and curl
+reports `self-signed certificate`. There is no endpoint that hands out the
+certificate: it is the file `<store>/modules/tls/self-signed-cert.pem` on the
+server, and you copy it to each client over a channel you already trust, such
+as ssh:
+
+```sh
+scp server:<store>/modules/tls/self-signed-cert.pem ~/demiplane.pem
+```
+
+Before pointing `SSL_CERT_FILE` or `curl --cacert` at the copy, check it is
+the right file by printing its fingerprint on both ends and comparing them:
+
+```sh
+# on the server
+openssl x509 -noout -fingerprint -sha256 -in <store>/modules/tls/self-signed-cert.pem
+# on the client
+openssl x509 -noout -fingerprint -sha256 -in ~/demiplane.pem
+```
+
+Both print `sha256 Fingerprint=` and the same colon-separated hex. The
+fingerprint the server logs when it generates a certificate is the same
+value, written in lower case without colons. Only the certificate is copied;
+the key file next to it stays on the server.
 
 ## See also
 
