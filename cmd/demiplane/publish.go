@@ -280,7 +280,11 @@ func (p *publisher) publish(ctx context.Context, body io.Reader) (publishResult,
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return publishResult{}, err
+		// A transport error can quote a remote party: a TLS certificate's
+		// names (checked before the chain, so the certificate need not be
+		// trusted), a proxy's reply. Escape it here so both print sites, the
+		// one-shot error and the --watch republish line, get clean text.
+		return publishResult{}, escapedError{err}
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
@@ -294,6 +298,14 @@ func (p *publisher) publish(ctx context.Context, body io.Reader) (publishResult,
 	}
 	return res, nil
 }
+
+// escapedError presents err's text with every control, format and invalid
+// byte escaped by logsafe.Text. Unwrap keeps errors.Is and errors.As working
+// on the cause.
+type escapedError struct{ err error }
+
+func (e escapedError) Error() string { return logsafe.Text(e.err.Error()) }
+func (e escapedError) Unwrap() error { return e.err }
 
 // publishFile opens path fresh and publishes it. Re-opening per call is what lets
 // --watch re-stream a changed file without holding a descriptor open.
