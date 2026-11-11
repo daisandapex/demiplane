@@ -24,6 +24,10 @@ All notable changes to demiplane are documented here. The format follows
 - A reply or answer whose text holds a NUL byte is refused with 400 on every
   submit path. It used to be stored, and the exec hook then never ran for it,
   because an environment variable cannot hold a NUL.
+- `demiplane publish` checks the URL the server returns before printing,
+  copying or opening it: one line, no control characters, http or https, and
+  a host. Any other value is quoted in the error, nothing is copied or opened,
+  and the command exits non-zero.
 
 ## [3.2.0] - 2026-11-08
 

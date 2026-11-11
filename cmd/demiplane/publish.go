@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	ttlparse "github.com/daisandapex/demiplane/v3/internal/ttl"
 )
@@ -136,6 +137,9 @@ Flags:
 	}
 	res, err := p.publish(ctx, body)
 	if err != nil {
+		return err
+	}
+	if err := checkResultURL(res.URL); err != nil {
 		return err
 	}
 	fmt.Println(res.URL)
@@ -346,6 +350,9 @@ func runWatch(ctx context.Context, p *publisher, path string, open bool) error {
 	if err != nil {
 		return err
 	}
+	if err := checkResultURL(res.URL); err != nil {
+		return err
+	}
 	fmt.Println(res.URL)
 	copyClipboard(res.URL)
 	if open {
@@ -395,6 +402,30 @@ func watchLoop(ctx context.Context, path string, interval time.Duration, onChang
 			}
 		}
 	}
+}
+
+// checkResultURL vets the url a publish response returns before it is
+// printed, copied to the clipboard or handed to the browser opener. The
+// control plane is a remote party (and its traffic may be intercepted), so
+// the value must be one line with no control characters, an http or https
+// URL, and name a host. The host is not compared with --url: the content
+// origin differs from the control origin by design.
+func checkResultURL(raw string) error {
+	reason := ""
+	u, err := url.Parse(raw)
+	switch {
+	case strings.IndexFunc(raw, unicode.IsControl) >= 0:
+		reason = "it holds a control character"
+	case err != nil:
+		reason = "it does not parse as a URL"
+	case u.Scheme != "http" && u.Scheme != "https":
+		reason = "its scheme is not http or https"
+	case u.Hostname() == "":
+		reason = "it names no host"
+	default:
+		return nil
+	}
+	return fmt.Errorf("publish: refusing the server's URL %q: %s; not copying or opening it", raw, reason)
 }
 
 // clipboardCandidates is the ordered set of clipboard tools tried by
