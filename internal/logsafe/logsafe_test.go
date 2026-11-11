@@ -82,6 +82,8 @@ func TestTextEscapesControls(t *testing.T) {
 		"bidi\u202eevil":       `bidi\u202eevil`,
 		"ls\u2028ps\u2029":     `ls\u2028ps\u2029`,
 		"bad\xffbyte":          `bad\xffbyte`,
+		"tag\U000e0001x":       `tag\U000e0001x`,
+		"bom\ufeffx":           `bom\ufeffx`,
 		"unicode ok: café, 日本": "unicode ok: café, 日本",
 	}
 	for in, want := range cases {

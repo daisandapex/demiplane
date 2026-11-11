@@ -208,6 +208,16 @@ func escapeRune(r rune) string {
 	if r < 0x100 {
 		return `\x` + string([]byte{digits[r>>4], digits[r&0xf]})
 	}
+	// Runes above U+FFFF (the tag characters, for one, are format runes)
+	// take eight digits; four would drop their high bits.
+	if r > 0xffff {
+		var buf [8]byte
+		for i := 7; i >= 0; i-- {
+			buf[i] = digits[r&0xf]
+			r >>= 4
+		}
+		return `\U` + string(buf[:])
+	}
 	var buf [4]byte
 	for i := 3; i >= 0; i-- {
 		buf[i] = digits[r&0xf]
