@@ -22,9 +22,10 @@ That alone is the **zero-config self-signed** mode: on first TLS start the
 module generates an ECDSA P-256 certificate (SANs derived from your
 `--bind`/`--content-bind` addresses, or set `tls_hosts = a,b,…` explicitly),
 persists it under `<store>/modules/tls/`, reuses it across restarts, and
-regenerates it automatically near expiry or when the bind hosts change. The
-SHA-256 fingerprint is logged so clients can pin it
-(`curl --cacert <store>/modules/tls/self-signed-cert.pem …`).
+regenerates it at startup when it nears expiry or no longer names every
+host.
+A newly generated certificate's SHA-256 fingerprint is logged so clients can
+pin it (`curl --cacert <store>/modules/tls/self-signed-cert.pem …`).
 
 Two more certificate sources, picked by which keys you set (mixing them is a
 hard startup error):
@@ -86,6 +87,15 @@ adding to it, so list the loopback names too if local clients use them:
 ```ini
 tls_hosts = localhost,127.0.0.1,100.64.0.10
 ```
+
+The set decides which names a certificate must cover, not which names it
+holds. At startup the server keeps the persisted certificate when it names
+every host in the set, even if it also names hosts that are no longer in the
+set, so removing a host from `tls_hosts` (or from the bind addresses) leaves
+it in the certificate. Adding a host that the certificate lacks does produce a
+new certificate. To drop a name, stop the server, delete
+`<store>/modules/tls/self-signed-cert.pem` and start it again: it generates a
+new key and certificate for the current set and logs the new fingerprint.
 
 ## See also
 
