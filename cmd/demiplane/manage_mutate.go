@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -162,6 +163,14 @@ func runPatch(command string, args []string, out io.Writer) error {
 	if err = manage.Request(context.Background(), client, base, token, "PATCH", "/"+url.PathEscape(fs.Arg(0)), body, &item); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintln(out, string(logsafe.JSON(item)))
+	// JSON allows tab, CR and LF between tokens and logsafe.JSON keeps them,
+	// so a server could pad its reply to move the cursor or forge a line.
+	// Compact drops that whitespace; logsafe.JSON then escapes what is left
+	// inside strings.
+	var compact bytes.Buffer
+	if err = json.Compact(&compact, item); err != nil {
+		return errors.New("manage: the server's reply is not valid JSON")
+	}
+	_, err = fmt.Fprintln(out, string(logsafe.JSON(compact.Bytes())))
 	return err
 }

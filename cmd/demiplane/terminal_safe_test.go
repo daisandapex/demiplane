@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"unicode"
@@ -153,5 +154,35 @@ func TestPatchEscapesServerJSON(t *testing.T) {
 	_ = json.Unmarshal([]byte(`{"note":`+hostileJSON+`}`), &want)
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil || got.Note != want.Note {
 		t.Errorf("pin output is not the same JSON: %v %q", err, out.String())
+	}
+}
+
+// TestPatchCompactsServerJSON: JSON allows tab, CR and LF between tokens, so
+// a server that pads its reply with them would move the cursor or forge a
+// line through ttl, pin and unpin. The output must be one line of the same
+// JSON.
+func TestPatchCompactsServerJSON(t *testing.T) {
+	t.Setenv("DEMIPLANE_TOKEN", "tok")
+	padded := "\r\n\t{\"slug\":\"x\",\r\t\"pinned\":false,\r\"note\":\r\n\"demiplane: forged\"\t\n,\n\t\"tags\":[\r1,\t2\n]}\r\n"
+	base := hostileServer(t, map[string]func(http.ResponseWriter, *http.Request){
+		"PATCH /x": jsonReply(200, padded),
+	})
+	for _, args := range [][]string{{"ttl", "x", "1h"}, {"pin", "x"}, {"unpin", "x"}} {
+		var out bytes.Buffer
+		if err := runPatch(args[0], append([]string{"--url", base}, args[1:]...), &out); err != nil {
+			t.Fatalf("%s: %v", args[0], err)
+		}
+		body := strings.TrimSuffix(out.String(), "\n")
+		for i := 0; i < len(body); i++ {
+			if c := body[i]; c < 0x20 || c == 0x7f {
+				t.Errorf("%s: raw byte %#x at %d reached the terminal: %q", args[0], c, i, out.String())
+				break
+			}
+		}
+		var got, want any
+		_ = json.Unmarshal([]byte(padded), &want)
+		if err := json.Unmarshal(out.Bytes(), &got); err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s output is not the same JSON: %v %q", args[0], err, out.String())
+		}
 	}
 }
