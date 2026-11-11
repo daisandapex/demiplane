@@ -153,6 +153,13 @@ no capability slugs.
 site deletion and cannot be combined with `--url` or `--token-file`.
 Flag parsing errors omit supplied values and URL environment defaults and exit
 with status 2. Publish failures retain status 1.
+`publish` refuses a result URL from the server that is not http or https,
+names no host, carries userinfo, or holds a control, format, space or other
+invisible character: it prints nothing on stdout, copies and opens nothing,
+reports the refused value quoted on stderr and exits with status 1. Under
+`--watch` the first publish is refused the same way; a later republish whose
+URL is refused is reported on stderr in place of the `republished` line, and
+watching continues.
 The `list` and `delete-site` clients include token configuration advice on 403.
 
 Owner listing and remote site deletion require a configured server token and a
