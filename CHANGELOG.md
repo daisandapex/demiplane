@@ -27,17 +27,38 @@ All notable changes to demiplane are documented here. The format follows
 - `demiplane publish` checks the URL the server returns before printing,
   copying or opening it: only visible characters (no control, format, bidi,
   line separator, zero-width or space characters, no invalid UTF-8), http or
-  https, a host and no userinfo. Any other value is quoted in the error,
+  https, a host and no userinfo. Any other value is refused: the error
+  quotes at most its first 200 bytes and says how many more there were,
   nothing is copied or opened, and the command exits non-zero. Under
   `--watch` every republish is checked the same way; a refused URL is
-  reported quoted, nothing is printed, copied or opened, and watching goes
-  on.
-- The client commands escape every string the server sends before printing
-  it: the `publish` error text, the `list` table, the `delete` manifest and
-  report, and the JSON that `list --json`, `ttl`, `pin` and `unpin` print
-  (still valid JSON with the same values). Control, format, bidi and line
-  separator characters no longer reach the terminal. Log lines now escape
-  U+2028 and U+2029 as well.
+  reported in that form on stderr instead of the `republished` line, and
+  watching goes on.
+- These client outputs now escape C0 and C1 controls, DEL, Unicode format
+  characters (bidi overrides among them), U+2028, U+2029 and invalid UTF-8
+  instead of writing them raw:
+  - `publish`: the first line of an error body from the server, and the text
+    of a transport or TLS error (a certificate's names, for one, which Go
+    quotes when they do not match the host), both in the one-shot error and
+    in each `--watch` `republish failed` line;
+  - `list`: every string in the table;
+  - `delete`: the manifest (instance, kind, id, revision), the host in the
+    interactive confirm prompt, and the report (kind, id, reason);
+  - `list --json`, `ttl`, `pin` and `unpin`: the JSON they print, which stays
+    valid JSON with the same values. `ttl`, `pin` and `unpin` now print it on
+    one line, without the tabs, carriage returns and newlines the server may
+    put between tokens.
+
+  `list`, `delete`, `ttl`, `pin`, `unpin` and `delete-site --url` already
+  reported a failed request or an error status with fixed text that quotes
+  nothing from the server or the connection.
+- `demiplane mcp` passes server text, error bodies and transport error text
+  included, to its JSON-RPC peer without this escaping: that peer is a
+  program, not a terminal. Its own stderr carries no server text.
+- The text escaping these outputs share with the server's log lines for
+  outside values now escapes U+2028 and U+2029 as well, and writes a rune
+  above U+FFFF as `\U` and eight hex digits (`\U000e0001`) rather than a
+  four-digit form that dropped its high bits. The JSON outputs use a `\u`
+  surrogate pair for such a rune.
 - A browser reply or answer refused for a missing or wrong form token no
   longer spends the per-client, per-artifact or global reply rate budget, so
   junk posts cannot lock real repliers out with 429. The budget is charged
