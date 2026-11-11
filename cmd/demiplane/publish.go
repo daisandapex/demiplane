@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	ttlparse "github.com/daisandapex/demiplane/v3/internal/ttl"
 )
@@ -415,25 +416,37 @@ func watchLoop(ctx context.Context, path string, interval time.Duration, onChang
 // checkResultURL vets the url a publish response returns before it is
 // printed, copied to the clipboard or handed to the browser opener. The
 // control plane is a remote party (and its traffic may be intercepted), so
-// the value must be one line with no control characters, an http or https
-// URL, and name a host. The host is not compared with --url: the content
-// origin differs from the control origin by design.
+// the value must hold only visible characters (see unsafeURLRune), be an
+// http or https URL with no userinfo, and name a host. The host is not
+// compared with --url: the content origin differs from the control origin by
+// design.
 func checkResultURL(raw string) error {
 	reason := ""
 	u, err := url.Parse(raw)
 	switch {
-	case strings.IndexFunc(raw, unicode.IsControl) >= 0:
-		reason = "it holds a control character"
+	case strings.IndexFunc(raw, unsafeURLRune) >= 0:
+		reason = "it holds a control, format, space or other invisible character"
 	case err != nil:
 		reason = "it does not parse as a URL"
 	case u.Scheme != "http" && u.Scheme != "https":
 		reason = "its scheme is not http or https"
+	case u.User != nil:
+		reason = "it carries userinfo"
 	case u.Hostname() == "":
 		reason = "it names no host"
 	default:
 		return nil
 	}
 	return fmt.Errorf("publish: refusing the server's URL %q: %s; not copying or opening it", raw, reason)
+}
+
+// unsafeURLRune reports a rune a returned URL may not hold. unicode.IsControl
+// covers only category Cc, so line and paragraph separators, bidi overrides,
+// zero-width characters and spaces would pass it and reach the terminal, the
+// clipboard and the browser. A URL needs none of them: anything not graphic,
+// any space, any format character (Cf) and any invalid UTF-8 is refused.
+func unsafeURLRune(r rune) bool {
+	return r == utf8.RuneError || !unicode.IsGraphic(r) || unicode.IsSpace(r) || unicode.Is(unicode.Cf, r)
 }
 
 // clipboardCandidates is the ordered set of clipboard tools tried by

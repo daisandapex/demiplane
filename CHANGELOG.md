@@ -12,8 +12,9 @@ All notable changes to demiplane are documented here. The format follows
   submit path. It used to be stored, and the exec hook then never ran for it,
   because an environment variable cannot hold a NUL.
 - `demiplane publish` checks the URL the server returns before printing,
-  copying or opening it: one line, no control characters, http or https, and
-  a host. Any other value is quoted in the error, nothing is copied or opened,
+  copying or opening it: only visible characters (no control, format, bidi,
+  line separator, zero-width or space characters), http or https, a host and
+  no userinfo. Any other value is quoted in the error, nothing is copied or opened,
   and the command exits non-zero. Under `--watch` every republish is checked
   the same way; a refused URL is reported quoted and watching goes on.
 - A browser reply or answer refused for a missing or wrong form token no
