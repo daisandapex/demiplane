@@ -53,6 +53,33 @@ deliberately out — in [ADR 0004](./adr/0004-native-tls-module.md).
 > hook scripts, and cron consumers don't rewrite themselves — schedule the
 > scheme flip as a coordinated change, not a config toggle.
 
+## CLI and MCP clients against a self-signed instance
+
+`demiplane publish`, `list`, `mcp` and the other client commands verify the
+server certificate with the system trust store, so they refuse a self-signed
+instance (`x509: certificate signed by unknown authority`). On Linux, point
+them at the generated certificate with `SSL_CERT_FILE`:
+
+```sh
+SSL_CERT_FILE=<store>/modules/tls/self-signed-cert.pem \
+  demiplane publish --url https://127.0.0.1:8080 page.html
+```
+
+Set it in the environment the MCP harness starts `demiplane mcp` with, too.
+The variable replaces the system CA bundle for that process, so set it only
+for commands that talk to this instance.
+
+The certificate must also name the address the client dials. The derived SANs
+are `localhost`, `127.0.0.1`, `::1` and the bind hosts; a wildcard bind
+(`0.0.0.0`) adds the machine's hostname, not its interface IPs. Clients that
+reach the instance by a mesh IP (or any other name) therefore need
+`tls_hosts` set to list it. `tls_hosts` replaces the derived set rather than
+adding to it, so list the loopback names too if local clients use them:
+
+```ini
+tls_hosts = localhost,127.0.0.1,100.64.0.10
+```
+
 ## See also
 
 - [Deployment](./deployment.md) — reachability tiers, the two-origin topology, the config file
