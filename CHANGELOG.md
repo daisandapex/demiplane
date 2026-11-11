@@ -13,10 +13,12 @@ All notable changes to demiplane are documented here. The format follows
   because an environment variable cannot hold a NUL.
 - `demiplane publish` checks the URL the server returns before printing,
   copying or opening it: only visible characters (no control, format, bidi,
-  line separator, zero-width or space characters), http or https, a host and
-  no userinfo. Any other value is quoted in the error, nothing is copied or opened,
-  and the command exits non-zero. Under `--watch` every republish is checked
-  the same way; a refused URL is reported quoted and watching goes on.
+  line separator, zero-width or space characters, no invalid UTF-8), http or
+  https, a host and no userinfo. Any other value is quoted in the error,
+  nothing is copied or opened, and the command exits non-zero. Under
+  `--watch` every republish is checked the same way; a refused URL is
+  reported quoted, nothing is printed, copied or opened, and watching goes
+  on.
 - The client commands escape every string the server sends before printing
   it: the `publish` error text, the `list` table, the `delete` manifest and
   report, and the JSON that `list --json`, `ttl`, `pin` and `unpin` print
@@ -27,6 +29,9 @@ All notable changes to demiplane are documented here. The format follows
   longer spends the per-client, per-artifact or global reply rate budget, so
   junk posts cannot lock real repliers out with 429. The budget is charged
   after the token check.
+- `docs/tls.md` says how CLI and MCP clients trust a self-signed instance.
+  `SSL_CERT_FILE` adds the certificate to the system roots on Debian and
+  Ubuntu; `SSL_CERT_DIR` set to an empty or missing directory drops them.
 
 ## [3.2.0] - 2026-11-08
 
