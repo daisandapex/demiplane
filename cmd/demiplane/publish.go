@@ -369,6 +369,14 @@ func runWatch(ctx context.Context, p *publisher, path string, open bool) error {
 			fmt.Fprintf(os.Stderr, "demiplane publish: republish failed: %v\n", err)
 			return
 		}
+		// Every response is vetted, not only the first: the server can
+		// change its answer between republishes. A refused URL is reported
+		// quoted and the loop keeps watching; the republish only prints, it
+		// never copies or opens.
+		if err := checkResultURL(res.URL); err != nil {
+			fmt.Fprintf(os.Stderr, "demiplane publish: %v\n", err)
+			return
+		}
 		fmt.Fprintf(os.Stderr, "demiplane publish: republished %s\n", res.URL)
 	})
 }
