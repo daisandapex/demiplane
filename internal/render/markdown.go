@@ -1207,7 +1207,10 @@ var workProbe func(n int)
 // raw HTML in the source is rendered as text, never executed. Code spans are
 // then lifted into placeholders BEFORE the emphasis passes run, so `_`/`*`
 // inside inline code (most snake_case identifiers) are never rewritten into
-// <em>/<strong>; the finished spans are restored last.
+// <em>/<strong>; the finished spans are restored last. A link's opening tag
+// is lifted the same way as soon as it is rendered, so the emphasis passes
+// never see its destination: a "*" or "_" there that paired with one outside
+// would put <em> or </em> inside the href that safeURL already checked.
 //
 // Every pass builds one string no longer than the result (inlineUpper bounds
 // it); per match, the code-span pass records two offsets and the link pass
@@ -1221,11 +1224,54 @@ func inline(s string) string {
 	}
 	esc := html.EscapeString(s)
 	s, spans := liftCodeSpans(esc)
-	s = reLink.ReplaceAllStringFunc(s, renderLink)
+	var links []string
+	s = reLink.ReplaceAllStringFunc(s, func(m string) string {
+		open, text, ok := renderLink(m)
+		if !ok {
+			return text
+		}
+		links = append(links, open)
+		return linkSentinel + strconv.Itoa(len(links)-1) + codeSentinel + text + "</a>"
+	})
 	s = reBold.ReplaceAllString(s, "<strong>$1</strong>")
 	s = reItalic.ReplaceAllString(s, "<em>$1</em>")
 	s = reItalicU.ReplaceAllString(s, "<em>$1</em>")
+	s = restoreLinks(s, links)
 	return restoreSpans(s, esc, spans)
+}
+
+// linkSentinel opens a link placeholder, "\x00L<index>\x00": a NUL frame
+// as for code spans, told apart from them by the letter.
+const linkSentinel = codeSentinel + "L"
+
+// restoreLinks puts each lifted link opening tag back in place of its
+// placeholder. Source text holds no NUL (inline replaced it), so every
+// placeholder is one inline wrote.
+func restoreLinks(s string, links []string) string {
+	if len(links) == 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 40*len(links))
+	for {
+		j := strings.Index(s, linkSentinel)
+		if j < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		b.WriteString(s[:j])
+		rest := s[j+len(linkSentinel):]
+		k := strings.IndexByte(rest, codeSentinel[0])
+		idx, err := strconv.Atoi(rest[:max(k, 0)])
+		if k < 0 || err != nil || idx < 0 || idx >= len(links) {
+			// Not one of ours: keep it as it is.
+			b.WriteString(linkSentinel)
+			s = rest
+			continue
+		}
+		b.WriteString(links[idx])
+		s = rest[k+1:]
+	}
 }
 
 // span is a code span's content, as offsets into the escaped text.
@@ -1327,15 +1373,19 @@ func restoreSpans(s, esc string, spans []span) string {
 //     plain text, so javascript:/data:/vbscript: and unknown schemes never
 //     become a live href. Rendered markdown is served same-origin, so this
 //     matters.
-func renderLink(match string) string {
+//
+// It returns the anchor's opening tag and the link text, which goes between
+// that tag and "</a>"; ok is false when the URL is refused, and the link is
+// then its text alone.
+func renderLink(match string) (open, text string, ok bool) {
 	// match is reLink's "[text](url)": text holds no ']', so the first "](" ends
 	// it, and the url runs to the closing ')'.
 	k := strings.IndexByte(match, ']')
 	text, u := match[1:k], match[k+2:len(match)-1]
 	if !safeURL(u) {
-		return text
+		return "", text, false
 	}
-	return `<a href="` + u + `" rel="noopener noreferrer">` + text + `</a>`
+	return `<a href="` + u + `" rel="noopener noreferrer">`, text, true
 }
 
 // safeURL is an allowlist: it permits http/https/mailto absolute URLs and

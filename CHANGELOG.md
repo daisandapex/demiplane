@@ -88,6 +88,11 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Fixed
 
+- A `*` or `_` inside a markdown link destination no longer pairs with one
+  outside it: `[a](/x*y) *z` put `<em>` inside the `href`, so the link went
+  somewhere other than the address the link check allowed, and
+  `*a [b](/c*d) e` put `</em>` there, leaving the emphasis open over the rest
+  of the page, the reply box and colophon included.
 - A reply or answer whose text holds a NUL byte is refused with 400 on every
   submit path. It used to be stored, and the exec hook then never ran for it,
   because an environment variable cannot hold a NUL.

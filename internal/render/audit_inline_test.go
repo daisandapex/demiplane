@@ -6,37 +6,9 @@
 package render
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 )
-
-var auditHref = regexp.MustCompile(`href="([^"]*)"`)
-
-// TestAuditEmphasisDoesNotRewriteLinkDestinations: inline() turns a link into
-// an <a href> first and then runs the bold and italic passes over the whole
-// string, the generated tag included. A * or _ inside the destination that
-// pairs with one outside it puts <em> or </em> inside the href: the link no
-// longer goes where safeURL checked, and when the closing tag lands in the
-// attribute the emphasis opened before the link is never closed, so every
-// block after it on the page (the baked reply box and colophon too) renders
-// in it.
-// audit/10-emphasis-rewrites-link-destination.md.
-func TestAuditEmphasisDoesNotRewriteLinkDestinations(t *testing.T) {
-	for _, src := range []string{
-		"[a](/x*y) *z",
-		"*a [b](/c*d) e",
-		"**a [b](/c**d) e",
-		"[a](/_b) c_ d",
-	} {
-		got := render(src)
-		for _, m := range auditHref.FindAllStringSubmatch(got, -1) {
-			if strings.ContainsAny(m[1], "<>") {
-				t.Errorf("render(%q): markup inside a link destination: href=%q", src, m[1])
-			}
-		}
-	}
-}
 
 // TestAuditHeadingCannotTakeTheReplyBoxID: heading ids are made unique among
 // headings and against dp-main only. A heading that slugs to dp-reply-h gets

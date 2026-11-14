@@ -6,13 +6,16 @@ package render
 import (
 	"html"
 	"math/rand"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 )
 
 // regexInline is inline as it was written with regexp passes for code spans
-// and links, kept as the oracle for the index-based passes.
+// and links, kept as the oracle for the index-based passes. Link opening tags
+// are set aside before the emphasis passes and put back after them, so
+// emphasis never reaches a destination (audit finding 10).
 func regexInline(s string) string {
 	if strings.IndexByte(s, 0) >= 0 {
 		s = strings.ReplaceAll(s, "\x00", "�")
@@ -28,16 +31,22 @@ func regexInline(s string) string {
 		spans = append(spans, open+c+"</code>")
 		return codeSentinel + strconv.Itoa(len(spans)-1) + codeSentinel
 	})
+	var links []string
 	s = reLink.ReplaceAllStringFunc(s, func(match string) string {
 		m := reLink.FindStringSubmatch(match)
 		if !safeURL(m[2]) {
 			return m[1]
 		}
-		return `<a href="` + m[2] + `" rel="noopener noreferrer">` + m[1] + `</a>`
+		links = append(links, `<a href="`+m[2]+`" rel="noopener noreferrer">`)
+		return "\x00L" + strconv.Itoa(len(links)-1) + "\x00" + m[1] + `</a>`
 	})
 	s = reBold.ReplaceAllString(s, "<strong>$1</strong>")
 	s = reItalic.ReplaceAllString(s, "<em>$1</em>")
 	s = reItalicU.ReplaceAllString(s, "<em>$1</em>")
+	s = reLinkHole.ReplaceAllStringFunc(s, func(m string) string {
+		i, _ := strconv.Atoi(m[2 : len(m)-1])
+		return links[i]
+	})
 	if len(spans) == 0 {
 		return s
 	}
@@ -66,6 +75,9 @@ func regexInline(s string) string {
 		s = rest
 	}
 }
+
+// reLinkHole matches the oracle's link placeholders.
+var reLinkHole = regexp.MustCompile("\x00L[0-9]+\x00")
 
 // TestInlineMatchesRegexOracle: the index-based code-span and link passes
 // produce exactly what the regexp passes did, over random text built from
