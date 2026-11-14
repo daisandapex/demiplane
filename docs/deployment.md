@@ -86,6 +86,16 @@ unpaired bracket, or brackets around a name, matches no entry. Behind a
 TLS-terminating proxy, `--base-url` is also what lets the cross-origin write
 guard recognize the browser's `https://` origin.
 
+Without `--allowed-hosts`, a request that arrives on a loopback address (the
+default `127.0.0.1` bind, or a wildcard bind reached through loopback) is
+served only when its `Host` is `localhost`, a loopback IP literal
+(`127.0.0.1`, `[::1]`), or a `--base-url` / `--content-base-url` host; any
+other `Host` gets the same `421`. A web page whose own name is re-pointed at
+`127.0.0.1` (DNS rebinding) is otherwise same-origin with the instance in
+the operator's browser. A request on any other address is served whatever
+its `Host`. A local proxy that passes its public `Host` through needs that
+name as a base URL host or in `--allowed-hosts`.
+
 ## `serve` flags
 
 `--bind <host:port>` (default `127.0.0.1:8080` — control plane; set a
@@ -97,7 +107,8 @@ per-document sandbox, so every page can read every artifact a viewer can open; t
 only, see [DESIGN.md](../DESIGN.md#content-isolation)), `--store <dir>` (**required**), `--base-url <url>`
 (optional; advertise a canonical URL instead of deriving it from the request `Host`),
 `--allowed-hosts <host[:port],...>` (optional; serve only these `Host` values plus
-the base URL hosts, `421` for anything else; see above),
+the base URL hosts, `421` for anything else; when unset, a request on loopback
+must name loopback or a base URL host; see above),
 `--token-file <path>` (optional; bearer token for write/list — `DEMIPLANE_TOKEN` is the
 env-var alternative), `--sweep-interval <dur>` (optional; how often to reap past-TTL
 artifacts, default `1m`), `--browse` (optional; serve an HTML index of non-private

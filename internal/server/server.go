@@ -104,6 +104,7 @@ type Server struct {
 	contentBaseURL   string
 	contentPort      string
 	hostRules        []hostRule    // accepted-host policy; nil = any Host
+	loopbackHosts    []hostRule    // base URL hosts; see hostPolicy
 	proxies          limit.Proxies // trusted reverse proxies for client identity
 	liveLimits       LiveLimits    // live-reload stream caps (live.go)
 	liveHub          *liveHub      // the mounted live-reload hub (tests)
@@ -148,6 +149,7 @@ func New(st *store.Store, cfg Config) *Server {
 		contentBaseURL:   strings.TrimRight(cfg.ContentBaseURL, "/"),
 		contentPort:      cfg.ContentPort,
 		hostRules:        buildHostRules(cfg.AllowedHosts, cfg.BaseURL, cfg.ContentBaseURL),
+		loopbackHosts:    baseHostRules(cfg.BaseURL, cfg.ContentBaseURL),
 		proxies:          cfg.TrustedProxies,
 		liveLimits:       cfg.Live,
 		authToken:        cfg.AuthToken,

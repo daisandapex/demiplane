@@ -52,11 +52,11 @@ func TestBulkRerenderStopsForAGoneClientAfterPipelinedBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Fprintf(conn, "POST /rerender HTTP/1.1\r\nHost: x\r\nAccept: application/json\r\n\r\n")
+	fmt.Fprintf(conn, "POST /rerender HTTP/1.1\r\nHost: localhost\r\nAccept: application/json\r\n\r\n")
 	// The next request arrives once the sweep is running: net/http's
 	// background read takes its first byte and stops watching the connection.
 	time.Sleep(200 * time.Millisecond)
-	fmt.Fprintf(conn, "GET /health HTTP/1.1\r\nHost: x\r\n\r\n")
+	fmt.Fprintf(conn, "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
 	time.Sleep(200 * time.Millisecond)
 	conn.Close()
 

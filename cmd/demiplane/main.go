@@ -213,7 +213,7 @@ func runServe(args []string) error {
 	unsafeNoSandbox := fs.Bool("unsafe-no-sandbox", false, "serve HTML/SVG/XML artifacts without the per-document sandbox, so any published page can read every other artifact a viewer can open (trusted content only)")
 	dir := fs.String("store", "", "directory for content + metadata (required)")
 	baseURL := fs.String("base-url", "", "advertised control-plane base URL; if empty, derived from request Host")
-	allowedHosts := fs.String("allowed-hosts", "", "comma-separated Host values to serve (host or host:port); others get 421. The --base-url and --content-base-url hosts are always included. Empty = any Host")
+	allowedHosts := fs.String("allowed-hosts", "", "comma-separated Host values to serve (host or host:port); others get 421. The --base-url and --content-base-url hosts are always included. Empty = any Host, except that a request arriving on a loopback address must name localhost, a loopback IP or a base URL host")
 	trustedProxy := fs.String("trusted-proxy", "", "comma-separated IPs or CIDRs of reverse proxies whose X-Forwarded-For names the client for per-client limits; empty = the TCP peer is the client")
 	tokenFile := fs.String("token-file", "", "file holding the bearer token for publish/delete/list; overrides DEMIPLANE_TOKEN")
 	defaultTTL := fs.String("default-ttl", "0", "default artifact expiry: 0 (off), or 1m through 365d; sites excluded")

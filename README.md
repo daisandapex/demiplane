@@ -17,7 +17,11 @@ to a box you own, reachable only from your own network.
 > **Loopback by default.** A fresh instance binds `127.0.0.1` and is reachable
 > from nowhere else. Nothing you publish is exposed until *you* bind a LAN or mesh
 > IP. That is the product, not a limitation — if you want a URL a stranger can
-> open, [use a public host instead](#when-not-to-use-it).
+> open, [use a public host instead](#when-not-to-use-it). On loopback it also
+> answers only to loopback names (`localhost`, `127.0.0.1`, `[::1]`, and the
+> `--base-url` hosts): any other `Host` gets `421`, so a web page cannot reach
+> it by re-pointing its own name at `127.0.0.1` (DNS rebinding). To serve
+> another name there, list it in `--allowed-hosts`.
 
 ## Install
 

@@ -90,7 +90,13 @@ func fetchConnect(t *testing.T, srv *testServer, hostHeader string) string {
 // ones. A Host header carrying a quote or a brace must not be able to produce
 // a stanza that parses as anything other than the intended config.
 func TestConnectEmitsValidMCPConfig(t *testing.T) {
-	srv := startServer(t, serverOpts{Token: "s3cret-e2e-token"})
+	// A loopback listener answers only loopback names unless more are listed,
+	// so the plain hostname case needs the list (and the list needs the
+	// loopback address the default case sends).
+	srv := startServer(t, serverOpts{
+		Token: "s3cret-e2e-token",
+		Args:  []string{"--allowed-hosts", "demiplane.internal,127.0.0.1"},
+	})
 
 	hosts := []struct {
 		name string
@@ -116,6 +122,21 @@ func TestConnectEmitsValidMCPConfig(t *testing.T) {
 						t.Skipf("client refused Host %q: %v", hc.host, r)
 					}
 				}()
+				// A Host outside the accepted list is refused before routing,
+				// which is as good as a client-side refusal.
+				if hc.host != "" {
+					req, err := http.NewRequest(http.MethodGet, srv.ControlURL+"/connect", nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					req.Host = hc.host
+					if resp, err := srv.client.Do(req); err == nil {
+						resp.Body.Close()
+						if resp.StatusCode == http.StatusMisdirectedRequest {
+							t.Skipf("server refused Host %q with 421", hc.host)
+						}
+					}
+				}
 				return fetchConnect(t, srv, hc.host)
 			}()
 

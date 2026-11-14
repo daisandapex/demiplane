@@ -4,7 +4,10 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -73,7 +76,8 @@ func TestAllowedHostsPolicy(t *testing.T) {
 	}
 }
 
-// TestNoHostPolicyAcceptsAnyHost: without a list the behavior is unchanged.
+// TestNoHostPolicyAcceptsAnyHost: without a list, a request that did not
+// arrive on loopback is served whatever its Host.
 func TestNoHostPolicyAcceptsAnyHost(t *testing.T) {
 	h := hostPolicyServer(t, Config{}).ControlHandler()
 	if rec := serveHost(h, http.MethodGet, "/help.json", "anything.example"); rec.Code != http.StatusOK {
@@ -256,6 +260,100 @@ func TestAllowedHostsScopedIPv6(t *testing.T) {
 	for _, host := range []string{"[fe80::1%eth0]", "[fe80::1%eth0]:8080"} {
 		if rec := serveHost(srv.Handler(), http.MethodGet, "/help.json", host); rec.Code == http.StatusMisdirectedRequest {
 			t.Errorf("Host %q refused with base URL %q", host, "http://[fe80::1%25eth0]:8080")
+		}
+	}
+}
+
+// TestLoopbackListenerRefusesForeignHost: with no --allowed-hosts, a request
+// that arrives on a loopback address is served only for a loopback Host. A
+// web page whose own host name is re-pointed at 127.0.0.1 (DNS rebinding) is
+// otherwise same-origin with the control plane in the visitor's browser: the
+// browser labels its requests Sec-Fetch-Site: same-origin, so the
+// cross-origin write guard lets them through, and it may read the responses.
+// See audit/03-loopback-host-rebinding.md.
+func TestLoopbackListenerRefusesForeignHost(t *testing.T) {
+	control, content := newSplitServers(t, Config{})
+	publish(t, control, "?slug=notes", "<p>internal notes</p>")
+
+	const foreign = "rebind.attacker.example:8080"
+	send := func(method, url, body string) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest(method, url, strings.NewReader(body))
+		// What a browser sends from a page it loaded from http://<foreign>/
+		// once that name resolves to this listener.
+		req.Host = foreign
+		req.Header.Set("Origin", "http://"+foreign)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, url, err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, strings.TrimSpace(string(b))
+	}
+
+	for _, tc := range []struct {
+		name, method, url, body string
+	}{
+		{"publish", http.MethodPost, control.URL + "/publish?slug=planted", "<p>planted</p>"},
+		{"list", http.MethodGet, control.URL + "/list", ""},
+		{"read artifact", http.MethodGet, content.URL + "/notes", ""},
+		{"delete", http.MethodDelete, control.URL + "/notes", ""},
+	} {
+		code, body := send(tc.method, tc.url, tc.body)
+		if code != http.StatusMisdirectedRequest {
+			t.Errorf("%s with Host %s on a loopback listener = %d (%.80q), want 421", tc.name, foreign, code, body)
+		}
+	}
+}
+
+// TestLoopbackHostNames: with no --allowed-hosts, a request that arrived on
+// a loopback address is served for "localhost", a loopback IP literal and the
+// base URL hosts, and refused with 421 for any other name. A request that
+// arrived on another address is served whatever its Host.
+func TestLoopbackHostNames(t *testing.T) {
+	h := hostPolicyServer(t, Config{
+		BaseURL:        "https://demi.example",
+		ContentBaseURL: "https://content.example",
+		ContentPort:    "8081",
+	}).ControlHandler()
+	cases := []struct {
+		local, host string
+		ok          bool
+	}{
+		{"127.0.0.1:8080", "127.0.0.1:8080", true},
+		{"127.0.0.1:8080", "127.0.0.1", true},
+		{"127.0.0.1:8080", "127.1.2.3:8080", true},
+		{"127.0.0.1:8080", "localhost:8080", true},
+		{"127.0.0.1:8080", "LOCALHOST", true},
+		{"127.0.0.1:8080", "[::1]:8080", true},
+		{"127.0.0.1:8080", "[::ffff:127.0.0.1]:8080", true},
+		{"[::1]:8080", "localhost:8080", true},
+		{"127.0.0.1:8080", "demi.example", true}, // a proxy on this host passing Host through
+		{"127.0.0.1:8080", "content.example:443", true},
+		{"127.0.0.1:8080", "rebind.attacker.example:8080", false},
+		{"[::1]:8080", "rebind.attacker.example", false},
+		{"127.0.0.1:8080", "localhost.attacker.example", false},
+		{"127.0.0.1:8080", "10.0.0.5:8080", false},
+		{"127.0.0.1:8080", "[127.0.0.1]", false},
+		{"127.0.0.1:8080", "", false},
+		{"10.0.0.5:8080", "anything.example", true},
+		{"[fd00::1]:8080", "anything.example", true},
+	}
+	for _, c := range cases {
+		local, err := net.ResolveTCPAddr("tcp", c.local)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodGet, "/help.json", nil)
+		req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, net.Addr(local)))
+		req.Host = c.host
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		refused := rec.Code == http.StatusMisdirectedRequest
+		if refused == c.ok {
+			t.Errorf("arrived on %s, Host %q: status %d, want accepted=%v", c.local, c.host, rec.Code, c.ok)
 		}
 	}
 }

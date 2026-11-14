@@ -445,7 +445,11 @@ inherits the posture above and was reviewed adversarially before release.
   with the content port. For a public deployment, set both base URLs and an
   accepted-host policy, `--allowed-hosts <host[:port],...>`: a request whose
   `Host` is not listed (the base URL hosts are always included) gets
-  `421 Misdirected Request` on both planes before routing.
+  `421 Misdirected Request` on both planes before routing. Without the list,
+  a request that arrives on a loopback address gets the same `421` unless its
+  `Host` is `localhost`, a loopback IP literal or a base URL host, so a page
+  that re-points its own name at `127.0.0.1` (DNS rebinding) cannot reach a
+  loopback instance as its own origin.
 - **Deletion is durable.** Delete, expiry and overwrite record the files they
   stop referencing in the same transaction that drops the reference. A file
   that cannot be unlinked (a read-only or failing disk) is logged and retried

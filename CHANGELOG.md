@@ -8,6 +8,15 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- With no `--allowed-hosts`, a request that arrives on a loopback address
+  is served only for `localhost`, a loopback IP literal or a base URL host;
+  any other `Host` gets `421`. A loopback instance answered any `Host`, so a
+  web page that re-pointed its own name at `127.0.0.1` (DNS rebinding) was
+  same-origin with it in the operator's browser: with no token it could
+  publish, list and delete, and with one it could still read public
+  artifacts. Requests on LAN, mesh and other addresses are unchanged. A
+  local reverse proxy that passes another `Host` through needs that name in
+  `--base-url` or `--allowed-hosts`.
 - A remembered view password now answers only the client that verified it.
   It was keyed by the stored hash and the password alone and looked up
   before any budget, so once anyone had opened a protected page, a client

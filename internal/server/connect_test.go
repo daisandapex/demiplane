@@ -4,11 +4,15 @@
 package server
 
 import (
+	"encoding/json"
 	"flag"
+	"html"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -174,5 +178,48 @@ func TestConnectGolden(t *testing.T) {
 	}
 	if string(want) != body {
 		t.Errorf("connect HTML drifted from golden %s; re-run with -update if intentional", golden)
+	}
+}
+
+// TestConnectHostileHostKeepsStanzaJSON: without a base URL the MCP stanza
+// is built from the request Host. A Host carrying a quote, brace or newline
+// must not give a stanza that parses as anything but the one server entry.
+// The requests go through a recorder, which has no local address, so they
+// stand for a request on a LAN or mesh address: on loopback these Host
+// values are refused before routing (hostPolicy), which is how the e2e
+// harness, bound to loopback, now sees them.
+func TestConnectHostileHostKeepsStanzaJSON(t *testing.T) {
+	h := newConfiguredServer(t, Config{}).Config.Handler
+	re := regexp.MustCompile(`(?s)<span>mcp\.json \(mcpServers stanza\)</span>.*?<pre><code>(.*?)</code></pre>`)
+	for _, host := range []string{
+		"demiplane.internal:8891",
+		`evil"host:8080`,
+		`h","x":"y`,
+		`<script>alert(1)</script>`,
+		`back\slash:1`,
+		"host\nX-Injected: 1",
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/connect", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("Host %q: status %d, want 200", host, rec.Code)
+			continue
+		}
+		m := re.FindStringSubmatch(rec.Body.String())
+		if m == nil {
+			t.Fatalf("Host %q: no mcpServers stanza on /connect", host)
+		}
+		var cfg struct {
+			MCPServers map[string]json.RawMessage `json:"mcpServers"`
+		}
+		if err := json.Unmarshal([]byte(html.UnescapeString(m[1])), &cfg); err != nil {
+			t.Errorf("Host %q: stanza is not valid JSON: %v\n%s", host, err, m[1])
+			continue
+		}
+		if _, ok := cfg.MCPServers["demiplane"]; !ok || len(cfg.MCPServers) != 1 {
+			t.Errorf("Host %q: stanza servers = %v, want only demiplane", host, cfg.MCPServers)
+		}
 	}
 }

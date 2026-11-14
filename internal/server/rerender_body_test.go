@@ -48,7 +48,7 @@ func TestBulkRerenderDisconnectWithUnsentBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Fprintf(conn, "POST /rerender HTTP/1.1\r\nHost: x\r\nAccept: application/json\r\nContent-Length: 10\r\n\r\n")
+	fmt.Fprintf(conn, "POST /rerender HTTP/1.1\r\nHost: localhost\r\nAccept: application/json\r\nContent-Length: 10\r\n\r\n")
 	time.Sleep(200 * time.Millisecond)
 	conn.Close()
 	time.Sleep(200 * time.Millisecond)

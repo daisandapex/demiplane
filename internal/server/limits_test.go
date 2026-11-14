@@ -228,7 +228,7 @@ func TestSlowReaderIsCutAfterItsAllowance(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	fmt.Fprintf(c, "GET /big HTTP/1.1\r\nHost: x\r\n\r\n")
+	fmt.Fprintf(c, "GET /big HTTP/1.1\r\nHost: localhost\r\n\r\n")
 	time.Sleep(3 * time.Second) // read nothing past the allowance
 	_ = c.SetReadDeadline(time.Now().Add(10 * time.Second))
 	got, _ := io.Copy(io.Discard, bufio.NewReader(c))
@@ -504,7 +504,7 @@ func TestStalledReaderIsCutDespiteALongAllowance(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	fmt.Fprintf(c, "GET /big HTTP/1.1\r\nHost: x\r\n\r\n")
+	fmt.Fprintf(c, "GET /big HTTP/1.1\r\nHost: localhost\r\n\r\n")
 	time.Sleep(3 * time.Second) // stop reading
 	_ = c.SetReadDeadline(time.Now().Add(20 * time.Second))
 	got, _ := io.Copy(io.Discard, bufio.NewReader(c))

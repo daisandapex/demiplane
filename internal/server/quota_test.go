@@ -440,7 +440,7 @@ func postReadingEarly(t *testing.T, base, path, body string) string {
 	}
 	defer c.Close()
 	go func() {
-		_, _ = fmt.Fprintf(c, "POST %s HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", path, len(body))
+		_, _ = fmt.Fprintf(c, "POST %s HTTP/1.1\r\nHost: localhost\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", path, len(body))
 		_, _ = io.WriteString(c, body)
 	}()
 	_ = c.SetReadDeadline(time.Now().Add(30 * time.Second))

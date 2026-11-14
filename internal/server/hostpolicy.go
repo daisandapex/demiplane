@@ -21,9 +21,15 @@ import (
 // is not one the operator named, on both planes, before routing. The host
 // names of --base-url and --content-base-url are always accepted, on any port:
 // behind a proxy the Host arrives without the public port, and the content
-// origin derived from --base-url uses the content port. An empty list means
-// no policy (any Host is served), the default for a loopback or mesh-only
-// instance.
+// origin derived from --base-url uses the content port.
+//
+// An empty list means no policy for a request that arrived on a LAN, mesh or
+// other non-loopback address: any Host is served. A request that arrived on a
+// loopback address is still held to loopback names: "localhost", a loopback
+// IP literal, or a base URL host. Anything else gets the same 421. Without
+// it, a web page whose host name is re-pointed at 127.0.0.1 (DNS rebinding)
+// is same-origin with a loopback instance in the operator's browser and can
+// read it and, with no token, write to it.
 
 // hostEntryRe is a hostname or IP literal, optionally with a port: letters,
 // digits, dots, hyphens and underscores, or a bracketed IPv6 address.
@@ -94,6 +100,12 @@ func buildHostRules(allowed []string, baseURLs ...string) []hostRule {
 		h, p := splitHost(e)
 		rules = append(rules, hostRule{h, p})
 	}
+	return append(rules, baseHostRules(baseURLs...)...)
+}
+
+// baseHostRules is one any-port rule per configured base URL host name.
+func baseHostRules(baseURLs ...string) []hostRule {
+	var rules []hostRule
 	for _, b := range baseURLs {
 		if b == "" {
 			continue
@@ -145,13 +157,50 @@ func boundHost(next http.Handler) http.Handler {
 	})
 }
 
-// hostPolicy refuses requests for a Host outside the accepted list.
-func (s *Server) hostPolicy(next http.Handler) http.Handler {
-	if s.hostRules == nil {
-		return next
+// isLoopbackAddr reports whether an address (an IP literal, unbracketed, an
+// IPv4-mapped form included) is a loopback address.
+func isLoopbackAddr(host string) bool {
+	a, err := netip.ParseAddr(host)
+	return err == nil && a.Unmap().IsLoopback()
+}
+
+// arrivedOnLoopback reports whether the request's connection was accepted on
+// a loopback address. A request with no local address (a handler called
+// directly) did not.
+func arrivedOnLoopback(r *http.Request) bool {
+	la, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	if !ok || la == nil {
+		return false
 	}
+	h, _, err := net.SplitHostPort(la.String())
+	return err == nil && isLoopbackAddr(h)
+}
+
+// loopbackHostAllowed reports whether a Host names loopback ("localhost" or
+// a loopback IP literal) or one of the base URL hosts in rules.
+func loopbackHostAllowed(rules []hostRule, hostport string, tls bool) bool {
+	h, _ := splitHost(hostport)
+	if h == "localhost" || isLoopbackAddr(h) {
+		return true
+	}
+	return hostAllowed(rules, hostport, tls)
+}
+
+// hostPolicy refuses requests for a Host outside the accepted list, or, with
+// no list, a request that arrived on loopback for a Host that does not name
+// loopback.
+func (s *Server) hostPolicy(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !hostAllowed(s.hostRules, r.Host, r.TLS != nil) {
+		var ok bool
+		switch {
+		case s.hostRules != nil:
+			ok = hostAllowed(s.hostRules, r.Host, r.TLS != nil)
+		case arrivedOnLoopback(r):
+			ok = loopbackHostAllowed(s.loopbackHosts, r.Host, r.TLS != nil)
+		default:
+			ok = true
+		}
+		if !ok {
 			http.Error(w, "unknown host", http.StatusMisdirectedRequest)
 			return
 		}
