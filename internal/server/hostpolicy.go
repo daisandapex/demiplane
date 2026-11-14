@@ -42,6 +42,9 @@ func ParseHostList(csv string) ([]string, error) {
 		if !hostEntryRe.MatchString(e) {
 			return nil, fmt.Errorf("--allowed-hosts entry %q: want host or host:port", e)
 		}
+		if h, _ := splitHost(e); h == "" {
+			return nil, fmt.Errorf("--allowed-hosts entry %q: brackets are only for an IPv6 address", e)
+		}
 		out = append(out, e)
 	}
 	return out, nil
@@ -51,13 +54,27 @@ func ParseHostList(csv string) ([]string, error) {
 type hostRule struct{ host, port string }
 
 // splitHost lowercases a Host value and splits off its port, unbracketing an
-// IPv6 literal. A value without a port yields port "".
+// IPv6 literal. A value without a port yields port "". Brackets are taken
+// only as a matched pair around an IPv6 literal at the start of the value;
+// any other bracket (unpaired, doubled, or around a name or IPv4 address)
+// yields host "", which no rule matches. Stripping each bracket on its own
+// let "[h" and "h]" pass for an allowed host h.
 func splitHost(hostport string) (host, port string) {
 	hostport = strings.ToLower(hostport)
-	if h, p, err := net.SplitHostPort(hostport); err == nil {
-		return h, p
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host, port = hostport, ""
+		if len(host) >= 2 && host[0] == '[' && host[len(host)-1] == ']' {
+			host = host[1 : len(host)-1]
+		}
 	}
-	return strings.TrimSuffix(strings.TrimPrefix(hostport, "["), "]"), ""
+	if strings.ContainsAny(host, "[]") {
+		return "", ""
+	}
+	if strings.HasPrefix(hostport, "[") && (net.ParseIP(host) == nil || !strings.Contains(host, ":")) {
+		return "", ""
+	}
+	return host, port
 }
 
 // buildHostRules compiles the accepted-host list, adding the host names of

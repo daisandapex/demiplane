@@ -156,17 +156,34 @@ func FuzzCanonicalPaths(f *testing.F) {
 }
 
 // hostKey lowercases a Host value or an --allowed-hosts entry and removes
-// its port with net.SplitHostPort. A value with no port is the bare host,
-// an IPv6 literal without its brackets, and port "".
+// its port. A value with no bracket splits with net.SplitHostPort, or is the
+// bare host with port "" when that fails. A value with a bracket must be
+// "[" IPv6 "]" optionally followed by ":" and a port with no colon; it yields
+// the address without brackets. Any other bracket yields host "", which no
+// entry names.
 func hostKey(v string) (host, port string) {
 	v = strings.ToLower(v)
-	if h, p, err := net.SplitHostPort(v); err == nil {
-		return h, p
+	if !strings.ContainsAny(v, "[]") {
+		if h, p, err := net.SplitHostPort(v); err == nil {
+			return h, p
+		}
+		return v, ""
 	}
-	if len(v) >= 2 && v[0] == '[' && v[len(v)-1] == ']' {
-		return v[1 : len(v)-1], ""
+	end := strings.IndexByte(v, ']')
+	if v[0] != '[' || end < 0 {
+		return "", ""
 	}
-	return v, ""
+	inner, rest := v[1:end], v[end+1:]
+	if net.ParseIP(inner) == nil || !strings.Contains(inner, ":") {
+		return "", ""
+	}
+	switch {
+	case rest == "":
+		return inner, ""
+	case rest[0] == ':' && !strings.ContainsAny(rest[1:], ":[]"):
+		return inner, rest[1:]
+	}
+	return "", ""
 }
 
 // FuzzHostPolicy checks --allowed-hosts parsing, Host matching and the Host
@@ -181,6 +198,9 @@ func FuzzHostPolicy(f *testing.F) {
 		{"*.example", "a.example"}, {"user@h", "h"}, {"h", "h\"><script>"},
 		{"h", "h:80@evil"}, {"h", "[h]"}, {"", ""}, {"h:8080", "h:8080"}, {"h:8080", "h"},
 		{"[fd00::1]", "fd00::1"}, {"h", "h:"},
+		{"h", "[h"}, {"h", "h]"}, {"h", "[h]:80"}, {"[h]", "h"},
+		{"[::1]", "[::1]"}, {"[::1]", "[::1]:8443"}, {"[::1]", "[::1"},
+		{"[::1]:8443", "[::1]:8443"},
 	} {
 		f.Add(s[0], s[1], false)
 	}

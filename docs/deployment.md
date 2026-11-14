@@ -79,7 +79,10 @@ entries; a request naming any other `Host` gets `421 Misdirected Request` on
 both listeners. The base URL host names are always accepted on any port, so the
 list only needs the extra names (a mesh IP, an internal hostname) you also
 serve; list those without a port to accept both the control and content
-ports, since a bare `Host` means the scheme's default port. Behind a
+ports, since a bare `Host` means the scheme's default port. Brackets are
+only for an IPv6 address (`[fd00::1]`, `[fd00::1]:8443`): an entry with
+brackets around anything else is refused at startup, and a `Host` with an
+unpaired bracket, or brackets around a name, matches no entry. Behind a
 TLS-terminating proxy, `--base-url` is also what lets the cross-origin write
 guard recognize the browser's `https://` origin.
 

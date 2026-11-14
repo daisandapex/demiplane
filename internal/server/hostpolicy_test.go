@@ -166,3 +166,49 @@ func TestAllowedHostsServeDerivedContentURL(t *testing.T) {
 		t.Errorf("following the advertised %s = %d, want 200", out.URL, rec.Code)
 	}
 }
+
+// TestAllowedHostsBrackets: brackets are accepted only as a matched pair
+// around an IPv6 literal, optionally followed by a port. An unpaired bracket,
+// or a pair around anything else, matches no rule, so "[h" or "h]" cannot
+// pass for an allowed host h.
+func TestAllowedHostsBrackets(t *testing.T) {
+	rules := buildHostRules([]string{"h", "[::1]", "[fd00::1]:8443"})
+	cases := []struct {
+		host string
+		ok   bool
+	}{
+		{"h", true},
+		{"h:80", true},
+		{"[h", false},
+		{"h]", false},
+		{"[h]", false},
+		{"[h]:80", false},
+		{"h]:80", false},
+		{"[h:80", false},
+		{"[[h]]", false},
+		{"[::1]", true},
+		{"[::1]:8443", true},
+		{"::1", true},
+		{"[::1", false},
+		{"::1]", false},
+		{"[::1]]", false},
+		{"[[::1]]", false},
+		{"[::1]:80]", false},
+		{"[::1]:80:90", false},
+		{"[127.0.0.1]", false},
+		{"[fd00::1]:8443", true},
+		{"[FD00::1]:8443", true},
+		{"[fd00::1]:80", false},
+		{"[fd00::1", false},
+	}
+	for _, c := range cases {
+		if got := hostAllowed(rules, c.host, false); got != c.ok {
+			t.Errorf("Host %q: allowed=%v, want %v", c.host, got, c.ok)
+		}
+	}
+	for _, bad := range []string{"[h]", "[h]:80", "[127.0.0.1]", "[1.2.3.4]:80"} {
+		if _, err := ParseHostList(bad); err == nil {
+			t.Errorf("ParseHostList(%q) accepted brackets around a non-IPv6 host", bad)
+		}
+	}
+}

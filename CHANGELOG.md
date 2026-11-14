@@ -24,6 +24,12 @@ All notable changes to demiplane are documented here. The format follows
   an empty salt and a one-byte key (`pbkdf2-sha256$1$$00`) accepted about one
   password in 256. Every hash demiplane has written has those lengths, so
   existing passwords keep working, at any iteration count.
+- `--allowed-hosts` no longer accepts a `Host` with an unpaired bracket:
+  with the entry `h`, the `Host` values `[h` and `h]` were let through,
+  because each bracket was stripped on its own. Brackets now count only as a
+  matched pair around an IPv6 address, so `[h]` and `[h]:80` are refused
+  too, and an entry with brackets around anything but an IPv6 address
+  (`[127.0.0.1]`) is refused at startup.
 
 ### Fixed
 
