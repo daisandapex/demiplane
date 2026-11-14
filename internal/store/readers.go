@@ -119,17 +119,29 @@ func (s *Store) readerClosed(k fileKey) {
 // which is what the caller releases (or, for a retired file, what retire
 // moved).
 func (s *Store) unlinkFile(path string) (size, counted int64, removed, retired bool, err error) {
+	return s.unlink(path, func() (os.FileInfo, error) { return os.Lstat(path) }, func() error { return os.Remove(path) })
+}
+
+// unlinkIn is unlinkFile for the entry name of the open directory d, by
+// descriptor (sitetree.go); path is its full name for the ledger, never
+// opened.
+func (s *Store) unlinkIn(d *os.Root, name, path string) (size, counted int64, removed, retired bool, err error) {
+	return s.unlink(path, func() (os.FileInfo, error) { return d.Lstat(name) }, func() error { return d.Remove(name) })
+}
+
+// unlink is unlinkFile with the lstat and removal of the entry given.
+func (s *Store) unlink(path string, lstat func() (os.FileInfo, error), remove func() error) (size, counted int64, removed, retired bool, err error) {
 	o := &s.open
 	o.gate.Lock()
 	defer o.gate.Unlock()
-	fi, err := os.Lstat(path)
+	fi, err := lstat()
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, 0, false, false, nil
 		}
 		return 0, 0, false, false, err
 	}
-	if err := os.Remove(path); err != nil {
+	if err := remove(); err != nil {
 		if os.IsNotExist(err) {
 			return 0, 0, false, false, nil
 		}

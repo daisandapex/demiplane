@@ -102,36 +102,44 @@ func (s *Store) releaseSiteEntries(n int64) {
 // entries, abandoned staging trees included and the trees of writers in this
 // process excluded (those are charged in flight).
 func (s *Store) siteStats() (size, entries int64, err error) {
-	root := s.siteRoot()
-	ents, err := os.ReadDir(root)
+	root, err := os.OpenRoot(s.siteRoot())
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, 0, nil
 		}
 		return 0, 0, err
 	}
-	for _, e := range ents {
-		if strings.HasPrefix(e.Name(), tempPrefix) && s.stagingLive(e.Name()) {
+	defer root.Close()
+	names, err := readNames(root)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, name := range names {
+		if strings.HasPrefix(name, tempPrefix) && s.stagingLive(name) {
 			continue
 		}
-		p := filepath.Join(root, e.Name())
-		if _, err := os.Lstat(p); err != nil {
+		if _, err := root.Lstat(name); err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
 			return 0, 0, err
 		}
-		n, c, err := treeStats(p)
-		if err != nil {
-			// A leftover tree that cannot be measured (one with a path past
-			// PATH_MAX, which an older release could leave behind) must not
-			// stop the store from opening or recounting. What was measured
-			// is counted, the rest is not, and reclaim keeps trying to
-			// remove it.
-			if !strings.HasPrefix(e.Name(), tempPrefix) {
-				return 0, 0, err
+		n, c, err := treeStatsIn(root, name)
+		switch {
+		case err == nil:
+			if !strings.HasPrefix(name, tempPrefix) {
+				s.unquarantineSite(name)
 			}
+		case strings.HasPrefix(name, tempPrefix):
+			// A leftover tree that cannot be measured must not stop the
+			// store from opening or recounting. What was measured is
+			// counted, the rest is not, and reclaim keeps trying to remove
+			// it.
 			log.Printf("store: could not measure a leftover site tree, skipping it: %s", logsafe.Err(err))
+		default:
+			// Nor must a live site's: it is quarantined (logged, counted in
+			// part) and served as before.
+			s.quarantineSite(name, err)
 		}
 		size += n
 		entries += c + 1 // the top entry itself

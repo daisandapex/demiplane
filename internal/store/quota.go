@@ -7,10 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -77,6 +74,9 @@ type quotaState struct {
 	// charged in flight; any other ".tmp-" file there is abandoned, counted
 	// as live and reclaimed.
 	temps map[string]struct{}
+	// quarantined holds the live sites whose trees could not be measured
+	// (sitetree.go); they are logged once and counted only in part.
+	quarantined map[string]struct{}
 	// counted is what committed includes of the blob and source files, the
 	// artifact rows and the pending deletion records (ledger.go).
 	counted ledger
@@ -365,44 +365,6 @@ func validateMeta(opts PutOptions) error {
 	return nil
 }
 
-// treeStats sums the regular files under dir and counts its entries (files,
-// directories and anything else, dir itself excluded), skipping temp
-// entries. A missing dir, or an entry removed during the walk, counts as
-// empty.
-func treeStats(dir string) (size, entries int64, err error) {
-	var n, count int64
-	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			return err
-		}
-		if p != dir && strings.HasPrefix(d.Name(), tempPrefix) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if p != dir {
-			count++
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		fi, err := d.Info()
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			return err
-		}
-		n += fi.Size()
-		return nil
-	})
-	return n, count, err
-}
-
 // charge reserves n in-flight bytes, failing with ErrQuota when they do not fit.
 func (s *Store) charge(n int64) error {
 	if n <= 0 {
@@ -493,52 +455,6 @@ type treeRemoval struct{ bytes, retired, entries int64 }
 // and freed bytes leave the live count.
 func (r treeRemoval) change() change {
 	return change{removed: r.bytes + r.entries*metaAllowance, removedEntries: r.entries}
-}
-
-// removeTreeCounted removes dir and everything under it, deepest first, one
-// entry at a time, and returns what this call removed (treeRemoval). A
-// directory it cannot read is left with its unseen contents, and the error is
-// returned; an entry already gone counts for nothing (whoever removed it
-// accounts for it). A missing dir is not an error.
-func (s *Store) removeTreeCounted(dir string) (treeRemoval, error) {
-	var (
-		list []string
-		errs []error
-		r    treeRemoval
-	)
-	werr := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			errs = append(errs, err)
-			if d != nil && d.IsDir() {
-				return filepath.SkipDir // listed already; its contents stay
-			}
-			return nil
-		}
-		list = append(list, p)
-		return nil
-	})
-	if werr != nil {
-		errs = append(errs, werr)
-	}
-	for i := len(list) - 1; i >= 0; i-- {
-		_, size, removed, retired, err := s.unlinkFile(list[i])
-		if err != nil {
-			errs = append(errs, err)
-		}
-		if !removed {
-			continue
-		}
-		if retired {
-			r.retired += size
-		} else {
-			r.bytes += size
-		}
-		r.entries++
-	}
-	return r, errors.Join(errs...)
 }
 
 // chargedWriter charges each write against the quota before passing it on. It

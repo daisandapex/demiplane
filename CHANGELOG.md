@@ -46,7 +46,12 @@ All notable changes to demiplane are documented here. The format follows
   replaced or deleted the renamed tree could be neither removed nor measured:
   the store then refused to open, so `serve` did not come back after a
   restart and every `demiplane receive` failed. A store that already holds
-  such a tree now opens; the tree is logged and skipped.
+  such a tree now opens; the tree is logged and skipped. The bound counts
+  the store directory as spelled at publish, so site trees are now also
+  measured and removed by descriptor, independent of that spelling: a store
+  published through a short relative `--store` and reopened through a
+  longer absolute one no longer fails to open, and a live site that cannot
+  be measured is logged and quarantined instead of stopping the store.
 - With no `--allowed-hosts`, a request that arrives on a loopback address
   is served only for `localhost`, a loopback IP literal or a base URL host;
   any other `Host` gets `421`. A loopback instance answered any `Host`, so a

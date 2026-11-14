@@ -365,9 +365,13 @@ inherits the posture above and was reviewed adversarially before release.
   a named slug) and confined under the site prefix on both write and serve;
   an entry whose path in the store would pass the platform path limit
   (4,095 bytes on Linux, 1,023 elsewhere) under the longest name a replace
-  or delete gives its tree is refused with `400`, so every tree stays
-  removable, and a leftover tree that cannot be measured is logged and
-  skipped rather than stopping the store from opening;
+  or delete gives its tree is refused with `400`. Site trees are measured
+  and removed by descriptor, one name at a time relative to an open
+  directory, so neither the store directory's spelling (a relative
+  `--store`, reopened through a longer absolute path) nor a tree's depth
+  decides whether it can be; a leftover tree that cannot be measured is
+  logged and skipped, and a live site that cannot be is logged and
+  quarantined (counted in part), rather than stopping the store from opening;
   symlink and other non-regular entries are skipped, never materialized. The
   serve path opens every component through an `os.Root` and refuses a symlink
   anywhere on the path (site directory, intermediate directory or file),

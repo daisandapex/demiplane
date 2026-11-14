@@ -27,8 +27,8 @@ func deepPath(n int) string {
 // TestSiteWithLongPathsCanBeRemoved: a site entry may be 32 segments of 128
 // bytes, so its length is bounded by PATH_MAX alone. Replacing or deleting
 // the site renames the tree to a longer name than its staging directory
-// (".tmp-old-<site>-<n>", ".tmp-del-<16 hex>"), and the store removes and
-// measures trees by full path, so an entry that fits only under the staging
+// (".tmp-old-<site>-<n>", ".tmp-del-<16 hex>"), and when the store removed
+// and measured trees by full path an entry that fits only under the staging
 // name would leave a tree that can be neither removed nor counted, and the
 // store would refuse to open. An entry is refused at publish unless it fits
 // under the longest of those names; the longest one accepted survives a
@@ -149,4 +149,114 @@ func shortenErr(err error) string {
 		msg = msg[:120] + " … " + msg[len(msg)-100:]
 	}
 	return msg
+}
+
+// TestSiteTreeSurvivesALongerRootSpelling: the publish-time bound counts the
+// store root as it was spelled, so a store opened as a short relative path
+// accepts an entry that, spelled from a long absolute root, is past
+// PATH_MAX. Measuring and removing a site tree must not depend on how the
+// root is spelled: the store reopened through the long spelling opens,
+// counts the site as before, and deletes it.
+// See audit/04-site-path-past-path-max-bricks-store.md.
+func TestSiteTreeSurvivesALongerRootSpelling(t *testing.T) {
+	const pathMax = 4095
+	base := filepath.Join(t.TempDir(), strings.Repeat("d", 200))
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(base)
+	s, err := Open("s")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	rel := deepPath(s.maxSiteRelPath("site"))
+	sw, err := s.NewSiteWriter("site")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sw.AddFile(rel, strings.NewReader("x")); err != nil {
+		sw.Abort()
+		t.Fatalf("AddFile(%d-byte path): %v", len(rel), err)
+	}
+	if _, err := sw.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	entries := s.quota.entries
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	long := filepath.Join(base, "s")
+	if n := len(filepath.Join(long, contentDirName, "sites", "site", rel)); n <= pathMax {
+		t.Fatalf("setup: the long spelling is only %d bytes", n)
+	}
+	again, err := Open(long)
+	if err != nil {
+		t.Fatalf("the store does not open through a longer spelling: %v", shortenErr(err))
+	}
+	defer again.Close()
+	if again.quota.entries != entries {
+		t.Errorf("site entries through the longer spelling = %d, want %d", again.quota.entries, entries)
+	}
+	if err := again.DeleteSite("site"); err != nil {
+		t.Fatalf("DeleteSite: %v", err)
+	}
+	if left, _ := os.ReadDir(again.siteRoot()); len(left) != 0 {
+		t.Errorf("the deleted site's tree is still on disk: %s", left[0].Name())
+	}
+	if again.quota.entries != 0 {
+		t.Errorf("site entries after the delete = %d, want 0", again.quota.entries)
+	}
+}
+
+// TestOpenQuarantinesAnUnmeasurableLiveSite: a live site tree the store
+// cannot measure (here a directory it may not read) is logged and
+// quarantined, and the store still opens; once it measures again the
+// quarantine lifts. See audit/04-site-path-past-path-max-bricks-store.md.
+func TestOpenQuarantinesAnUnmeasurableLiveSite(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode 000 directory")
+	}
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sw, err := s.NewSiteWriter("site")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"a/b.txt", "c.txt"} {
+		if err := sw.AddFile(rel, strings.NewReader("x")); err != nil {
+			sw.Abort()
+			t.Fatal(err)
+		}
+	}
+	if _, err := sw.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	locked := filepath.Join(s.siteRoot(), "site", "a")
+	s.Close()
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o700) })
+
+	again, err := Open(dir)
+	if err != nil {
+		t.Fatalf("an unmeasurable live site stops the store opening: %v", err)
+	}
+	defer again.Close()
+	if q := again.quarantinedSites(); len(q) != 1 || q[0] != "site" {
+		t.Fatalf("quarantined sites = %q, want [site]", q)
+	}
+	if err := os.Chmod(locked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := again.measureSiteEntries(); err != nil {
+		t.Fatalf("measureSiteEntries: %v", err)
+	}
+	if q := again.quarantinedSites(); len(q) != 0 {
+		t.Fatalf("quarantined sites after the tree measures again = %q, want none", q)
+	}
 }
