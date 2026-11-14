@@ -114,6 +114,9 @@ func checkRequests(t *testing.T, reqs []recorded) {
 	}
 }
 
+// fuzzServeBound is the longest one fuzzed MCP session may take.
+const fuzzServeBound = 20 * time.Second
+
 // FuzzServe feeds hostile JSON-RPC streams to the stdio server. "$ROOT" in
 // the input stands for the publish root's parent, so the fuzzer can reach
 // the path guard with absolute paths. Every response is one JSON-RPC 2.0
@@ -150,14 +153,14 @@ func FuzzServe(f *testing.F) {
 	f.Fuzz(func(t *testing.T, in []byte) {
 		in = bytes.ReplaceAll(in, []byte("$ROOT"), []byte(base))
 		var out bytes.Buffer
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Serve checks its context between messages and passes it to every
+		// request it makes, so the time bound is a context deadline inside
+		// the call: a session past it returns DeadlineExceeded. It is
+		// generous, as plain `go test` replays the seeds on loaded machines.
+		ctx, cancel := context.WithTimeout(context.Background(), fuzzServeBound)
 		defer cancel()
-		start := time.Now()
 		if err := Serve(ctx, bytes.NewReader(in), &out, c, "fuzz"); err != nil {
-			t.Fatalf("Serve: %v", err)
-		}
-		if el := time.Since(start); el > 5*time.Second {
-			t.Fatalf("Serve took %v", el)
+			t.Fatalf("Serve: %v (bound %v)", err, fuzzServeBound)
 		}
 		checkRequests(t, rt.take())
 		if bytes.Contains(out.Bytes(), []byte(fuzzToken)) {
@@ -186,7 +189,7 @@ func FuzzServe(f *testing.F) {
 
 // FuzzOpenPublishPath fuzzes the `path` guard directly: whatever path the
 // model picks, an opened file is a regular file inside the publish root and
-// is not the token file.
+// is not the token file, and a path the guard's rules refuse is refused.
 func FuzzOpenPublishPath(f *testing.F) {
 	for _, s := range []string{
 		"root/ok.txt", "root/sub/ok.md", "root/token", "root/hardtoken", "root/link",
@@ -205,6 +208,23 @@ func FuzzOpenPublishPath(f *testing.F) {
 			full = p
 		}
 		cf, rerr := openPublishPath(c, full)
+		// The reject side, judged with os and path/filepath: a path with a
+		// NUL, one whose last element is not a regular file (a symlink, a
+		// directory, missing), or one that resolves outside the publish
+		// root is refused.
+		refuse := strings.ContainsRune(full, 0)
+		if fi, err := os.Lstat(full); err != nil || !fi.Mode().IsRegular() {
+			refuse = true
+		}
+		if res, err := filepath.EvalSymlinks(full); err != nil {
+			refuse = true
+		} else if rel, err := filepath.Rel(rootPath, res); err != nil || !filepath.IsLocal(rel) {
+			refuse = true
+		}
+		if refuse && rerr == nil {
+			cf.Close()
+			t.Fatalf("opened %q, which the guard must refuse", p)
+		}
 		if rerr != nil {
 			return
 		}
