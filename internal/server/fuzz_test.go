@@ -129,12 +129,16 @@ func FuzzCanonicalPaths(f *testing.F) {
 			}
 		case http.StatusTemporaryRedirect:
 			loc := w.Header().Get("Location")
-			lu, err := url.Parse(loc)
 			// A backslash is a separator to browsers only in the path; the
-			// query is kept as sent.
+			// query is kept as sent. The origin is judged by the Location's
+			// start, not by url.Parse: a query the client sent with '#' in
+			// it comes back as a fragment that url.Parse may refuse ("/?#%",
+			// testdata dee5fd3eac46e290), and a browser still resolves that
+			// to a path on this origin.
 			locPath, _, _ := strings.Cut(loc, "?")
-			if err != nil || lu.Scheme != "" || lu.Host != "" || !strings.HasPrefix(loc, "/") ||
-				strings.HasPrefix(loc, "//") || strings.ContainsRune(locPath, '\\') || strings.ContainsAny(loc, "\r\n") {
+			locPath, _, _ = strings.Cut(locPath, "#")
+			if lu, err := url.Parse(loc); err == nil && (lu.Scheme != "" || lu.Host != "") || !strings.HasPrefix(loc, "/") ||
+				strings.HasPrefix(loc, "//") || strings.ContainsRune(locPath, '\\') || strings.ContainsAny(loc, "\r\n\t") {
 				t.Fatalf("redirect for %q leaves the origin: Location %q", target, loc)
 			}
 			// One redirect reaches the canonical form.
