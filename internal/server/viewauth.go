@@ -22,12 +22,14 @@ import (
 // is kept. That cost makes every wrong guess a CPU charge any viewer can levy,
 // so the gate in front of the KDF does three things:
 //
-//  1. Verified credentials are remembered (keyed by an HMAC of the stored
-//     hash and the password under a per-process key) until they go unused
-//     for verifiedTTL, so a browser re-sending Basic credentials on every
+//  1. Verified credentials are remembered (keyed by an HMAC of the client,
+//     the stored hash and the password under a per-process key) until they
+//     go unused for verifiedTTL, so a browser re-sending Basic credentials on every
 //     page load costs one KDF, not one per request, and an active viewer
 //     never has to win a check during a flood. A new password changes the
-//     hash and so the key.
+//     hash and so the key. The client is in the key so that one viewer's
+//     verified password cannot answer another client's guesses past that
+//     client's own failure budget.
 //  2. Only failures spend rate budget. Each client has a budget of its own
 //     and one per artifact; a KDF run reserves a token from both, refunded
 //     when the password is correct, and a client whose budget is empty gets
@@ -180,8 +182,10 @@ func newViewGate(cfg PasswordLimits, key []byte) *viewGate {
 	}
 }
 
-func (g *viewGate) credKey(hash, pass string) [32]byte {
+func (g *viewGate) credKey(client, hash, pass string) [32]byte {
 	mac := hmac.New(sha256.New, g.key)
+	mac.Write([]byte(client))
+	mac.Write([]byte{0})
 	mac.Write([]byte(hash))
 	mac.Write([]byte{0})
 	mac.Write([]byte(pass))
@@ -237,11 +241,11 @@ func (g *viewGate) check(ctx context.Context, r *http.Request, hash string) (res
 		return module.ViewNeedPassword, 0
 	}
 	now := g.now()
-	ck := g.credKey(hash, pass)
+	client := limit.ClientKey(r)
+	ck := g.credKey(client, hash, pass)
 	if g.remembered(ck, now) {
 		return module.ViewOK, 0
 	}
-	client := limit.ClientKey(r)
 	// Concurrent checks of one credential by one client (a browser fetching
 	// a page's resources in parallel before the password is remembered)
 	// share one verification: one KDF run, one queue place, one result.

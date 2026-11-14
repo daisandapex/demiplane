@@ -521,9 +521,10 @@ only in `-tags reply` builds.
 Notes on the limits:
 
 - **Password checks.** PBKDF2 keeps its 600,000-iteration work factor. Only
-  failures spend budget. A correct password is refunded and remembered (an
-  HMAC of the stored hash and the password under a per-process key) until it
-  goes unused for 10 minutes. A client that keeps failing is refused before
+  failures spend budget. A correct password is refunded and remembered for
+  the client that sent it (an HMAC of the client, the stored hash and the
+  password under a per-process key) until it goes unused for 10 minutes, so
+  one viewer's password does not answer another client's guesses. A client that keeps failing is refused before
   hashing, but a viewer with no recent failures is always verified, so other
   clients' guesses cannot lock it out. Only completed failures count; a
   client's own attempt still being checked does not. A client may have at

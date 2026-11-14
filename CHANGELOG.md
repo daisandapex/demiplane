@@ -8,6 +8,11 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- A remembered view password now answers only the client that verified it.
+  It was keyed by the stored hash and the password alone and looked up
+  before any budget, so once anyone had opened a protected page, a client
+  that had spent its failure budget still got `200` for the right password
+  (and `429` for a wrong one) at no rate limit and for one HMAC a guess.
 - The capture hook runs its restricted-mode copy step with `python3 -I`.
   Python reading a script from stdin puts the working directory first on its
   module path, and the hook runs in the project directory, so a `re.py`
