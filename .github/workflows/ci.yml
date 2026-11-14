@@ -137,6 +137,11 @@ jobs:
       - name: test (pre-push leak audit)
         run: ./scripts/test-pre-push-leak-audit.sh
 
+      # The fuzz runner's name filter and per-target environment, with a stub
+      # in place of go.
+      - name: test (fuzz runner)
+        run: ./scripts/test-fuzz.sh
+
   # Reachable advisories in the standard library or a dependency fail the build.
   # This job runs on setup-go with go-version-file, like release.yml, rather
   # than in the golang container: the container's Go is whatever its digest
