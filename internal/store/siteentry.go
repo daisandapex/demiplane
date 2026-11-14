@@ -123,7 +123,15 @@ func (s *Store) siteStats() (size, entries int64, err error) {
 		}
 		n, c, err := treeStats(p)
 		if err != nil {
-			return 0, 0, err
+			// A leftover tree that cannot be measured (one with a path past
+			// PATH_MAX, which an older release could leave behind) must not
+			// stop the store from opening or recounting. What was measured
+			// is counted, the rest is not, and reclaim keeps trying to
+			// remove it.
+			if !strings.HasPrefix(e.Name(), tempPrefix) {
+				return 0, 0, err
+			}
+			log.Printf("store: could not measure a leftover site tree, skipping it: %s", logsafe.Err(err))
 		}
 		size += n
 		entries += c + 1 // the top entry itself

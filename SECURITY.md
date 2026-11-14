@@ -359,6 +359,11 @@ inherits the posture above and was reviewed adversarially before release.
   not). Every entry path is traversal-checked (`..`, absolute paths and any
   backslash rejected; `/` is the only separator; each segment re-validated as
   a named slug) and confined under the site prefix on both write and serve;
+  an entry whose path in the store would pass the platform path limit
+  (4,095 bytes on Linux, 1,023 elsewhere) under the longest name a replace
+  or delete gives its tree is refused with `400`, so every tree stays
+  removable, and a leftover tree that cannot be measured is logged and
+  skipped rather than stopping the store from opening;
   symlink and other non-regular entries are skipped, never materialized. The
   serve path opens every component through an `os.Root` and refuses a symlink
   anywhere on the path (site directory, intermediate directory or file),

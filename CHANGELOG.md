@@ -8,6 +8,14 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- A site entry is refused with `400` when its path in the store, under the
+  longest name a replace or delete gives the site's tree, would pass the
+  platform path limit (4,095 bytes on Linux, 1,023 elsewhere). An entry that
+  fit only under the shorter staging name was accepted, and once its site was
+  replaced or deleted the renamed tree could be neither removed nor measured:
+  the store then refused to open, so `serve` did not come back after a
+  restart and every `demiplane receive` failed. A store that already holds
+  such a tree now opens; the tree is logged and skipped.
 - With no `--allowed-hosts`, a request that arrives on a loopback address
   is served only for `localhost`, a loopback IP literal or a base URL host;
   any other `Host` gets `421`. A loopback instance answered any `Host`, so a

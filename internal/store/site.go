@@ -28,6 +28,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -38,6 +39,33 @@ import (
 // maxSiteFilenameSegments bounds path depth defensively; a legitimate site is
 // nowhere near this deep, and an absurdly deep path is a red flag.
 const maxSitePathSegments = 32
+
+// maxStorePath is the longest path, in bytes, the store hands the kernel:
+// PATH_MAX without its NUL on Linux (4096), and on macOS and elsewhere
+// 1024. An lstat, open or unlink of a longer path fails with ENAMETOOLONG.
+var maxStorePath = func() int {
+	if runtime.GOOS == "linux" {
+		return 4095
+	}
+	return 1023
+}()
+
+// longestSiteTopName is the length of the longest name a site's tree is
+// ever given under sites/: a replace renames the live tree to
+// ".tmp-old-<site>-<n>" and a delete to ".tmp-del-<16 hex>", both longer
+// than the staging name ".tmp-<site>-<n>" (n is at most 10 digits, as
+// os.MkdirTemp makes it).
+func longestSiteTopName(site string) int {
+	return max(len(tempPrefix+"old-"+site+"-")+10, len(tempPrefix+"del-")+16)
+}
+
+// maxSiteRelPath is the longest site-relative path an entry of site may
+// have, so that the entry's path stays within maxStorePath under every name
+// the tree is given. A longer entry would be served, but once its tree was
+// renamed for a replace or delete it could be neither removed nor measured.
+func (s *Store) maxSiteRelPath(site string) int {
+	return maxStorePath - len(s.siteRoot()) - 1 - longestSiteTopName(site) - 1
+}
 
 // siteRoot is the parent directory that holds every site's file tree.
 func (s *Store) siteRoot() string { return filepath.Join(s.root, contentDirName, "sites") }
@@ -191,6 +219,9 @@ func (w *SiteWriter) AddFile(relpath string, r io.Reader) error {
 	clean, err := cleanSiteRelPath(relpath)
 	if err != nil {
 		return err
+	}
+	if limit := w.store.maxSiteRelPath(w.site); len(clean) > limit {
+		return inputErrorf("site entry %q is too long: this store takes site paths of at most %d bytes", relpath, max(limit, 0))
 	}
 	dest := filepath.Join(w.tmpDir, filepath.FromSlash(clean))
 	if !withinDir(w.tmpDir, dest) {
