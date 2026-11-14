@@ -6,10 +6,12 @@ package server
 import (
 	"archive/tar"
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,13 +20,52 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/daisandapex/demiplane/v3/internal/store"
 )
 
 // fuzzRequestBound is the longest one fuzzed request may take in process.
-const fuzzRequestBound = 5 * time.Second
+// It is checked only when scripts/fuzz.sh sets DEMIPLANE_FUZZ_TIMING: plain
+// `go test` replays the seeds on machines of any speed and load, where a
+// wall-clock limit would only flake.
+const fuzzRequestBound = 10 * time.Second
+
+// fuzzTiming reports whether wall-clock bounds are checked (see
+// fuzzRequestBound).
+func fuzzTiming() bool { return os.Getenv("DEMIPLANE_FUZZ_TIMING") != "" }
+
+// readRequest parses a request the way net/http's server reads one off the
+// wire, so a target skips only what the server itself refuses with 400
+// before any handler runs. ok is false for such a request.
+func readRequest(method, host, target string, hdr [][2]string, body []byte) (r *http.Request, ok bool) {
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "%s %s HTTP/1.1\r\nHost: %s\r\n", method, target, host)
+	for _, h := range hdr {
+		fmt.Fprintf(&b, "%s: %s\r\n", h[0], h[1])
+	}
+	if body != nil {
+		fmt.Fprintf(&b, "Content-Length: %d\r\n", len(body))
+	}
+	b.WriteString("\r\n")
+	b.Write(body)
+	r, err := http.ReadRequest(bufio.NewReader(&b))
+	if err != nil {
+		return nil, false
+	}
+	r.RemoteAddr = "192.0.2.1:40000"
+	return r, true
+}
+
+// validFieldValue reports whether net/http's server accepts v as a header
+// value: no control byte other than a tab.
+func validFieldValue(v string) bool {
+	for i := 0; i < len(v); i++ {
+		if c := v[i]; c < 0x20 && c != '\t' || c == 0x7f {
+			return false
+		}
+	}
+	return true
+}
 
 // pathSeeds are request paths from the canonicalization tests and the fixes
 // for encoded dot segments, backslashes and network-path redirects.
@@ -32,12 +73,19 @@ var pathSeeds = []string{
 	"/", "/a", "/a/", "//a", "///a", "/./a", "/../a", "/a/../b", "/a/./b/",
 	"/%2e%2e/a", "/%2E/a", "/a%2fb", "/a%5cb", `/a\b`, "/a%00b", "/a%7fb",
 	"/%c2%85", "//evil.example/%2e%2e", "/.//evil.example", "/a/..//evil",
-	"/%", "/%zz", "/a?x=1", "/sites/s/a.html", "/_events/a",
+	"/%", "/%zz", "/a?x=1", "/sites/s/a.html", "/_events/a", "/a#b", "/a\tb",
+	"http://demi.example//evil", "*",
 }
 
 // FuzzCanonicalPaths checks the path canonicalizer that sits in front of
 // both muxes: a path is refused, passed on unchanged in canonical form, or
 // redirected once to a same-origin canonical path.
+//
+// Requests are parsed by http.ReadRequest, so the only inputs skipped are
+// the ones net/http answers with 400 itself (a space or CR/LF in the
+// request-target, a target url.ParseRequestURI refuses); everything the
+// server would hand to a handler, including '#', tabs and absolute-form
+// targets, reaches the canonicalizer.
 func FuzzCanonicalPaths(f *testing.F) {
 	for _, p := range pathSeeds {
 		f.Add(p, "")
@@ -50,12 +98,13 @@ func FuzzCanonicalPaths(f *testing.F) {
 	}))
 	serve := func(target string) *httptest.ResponseRecorder {
 		reached = ""
-		r := httptest.NewRequest(http.MethodGet, "http://demi.example", nil)
-		u, err := url.ParseRequestURI(target)
-		if err != nil {
+		if strings.ContainsAny(target, "\r\n") {
+			return nil // would end the request line: not one request-target
+		}
+		r, ok := readRequest(http.MethodGet, "demi.example", target, nil, nil)
+		if !ok {
 			return nil
 		}
-		r.URL, r.RequestURI = u, target
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		return w
@@ -64,9 +113,6 @@ func FuzzCanonicalPaths(f *testing.F) {
 		target := p
 		if query != "" {
 			target += "?" + query
-		}
-		if strings.ContainsAny(target, " \r\n\t#") {
-			return // not a request-target net/http would accept
 		}
 		w := serve(target)
 		if w == nil {
@@ -105,14 +151,32 @@ func FuzzCanonicalPaths(f *testing.F) {
 	})
 }
 
+// hostKey lowercases a Host value or an --allowed-hosts entry and removes
+// its port with net.SplitHostPort. A value with no port is the bare host,
+// an IPv6 literal without its brackets, and port "".
+func hostKey(v string) (host, port string) {
+	v = strings.ToLower(v)
+	if h, p, err := net.SplitHostPort(v); err == nil {
+		return h, p
+	}
+	if len(v) >= 2 && v[0] == '[' && v[len(v)-1] == ']' {
+		return v[1 : len(v)-1], ""
+	}
+	return v, ""
+}
+
 // FuzzHostPolicy checks --allowed-hosts parsing, Host matching and the Host
-// sanitizer that guards reflected URLs.
+// sanitizer that guards reflected URLs. A Host is allowed exactly when,
+// after lowercasing and port removal, it equals one configured entry's host
+// and the entry names no port or the request's port (a Host without one
+// means the scheme's default port).
 func FuzzHostPolicy(f *testing.F) {
 	for _, s := range [][2]string{
-		{"demi.example", "demi.example"}, {"demi.example:443", "DEMI.example"},
+		{"demi.example", "demi.example"}, {"demi.example", "DEMI.Example"}, {"demi.example:443", "DEMI.example"},
 		{"[fd00::1]", "[fd00::1]:8080"}, {"a,b:80", "b"}, {"http://x", "x"},
 		{"*.example", "a.example"}, {"user@h", "h"}, {"h", "h\"><script>"},
-		{"h", "h:80@evil"}, {"h", "[h]"}, {"", ""},
+		{"h", "h:80@evil"}, {"h", "[h]"}, {"", ""}, {"h:8080", "h:8080"}, {"h:8080", "h"},
+		{"[fd00::1]", "fd00::1"}, {"h", "h:"},
 	} {
 		f.Add(s[0], s[1], false)
 	}
@@ -138,20 +202,27 @@ func FuzzHostPolicy(f *testing.F) {
 				t.Fatalf("host entry %q accepted from %q", e, csv)
 			}
 		}
-		rules := buildHostRules(list)
-		if !hostAllowed(rules, host, tls) {
-			return
-		}
-		h, p := splitHost(host)
-		if p == "" {
-			p = map[bool]string{false: "80", true: "443"}[tls]
-		}
-		for _, r := range rules {
-			if r.host == h && (r.port == "" || r.port == p) {
-				return
+		rh, rp := hostKey(host)
+		if rp == "" {
+			rp = "80"
+			if tls {
+				rp = "443"
 			}
 		}
-		t.Fatalf("host %q allowed by no rule of %q", host, csv)
+		want := ""
+		for _, e := range list {
+			if eh, ep := hostKey(e); rh != "" && eh == rh && (ep == "" || ep == rp) {
+				want = e
+				break
+			}
+		}
+		got := hostAllowed(buildHostRules(list), host, tls)
+		if got && want == "" {
+			t.Fatalf("host %q (tls %v) allowed by no entry of %q", host, tls, csv)
+		}
+		if !got && want != "" {
+			t.Fatalf("host %q (tls %v) refused though entry %q of %q names it", host, tls, want, csv)
+		}
 	})
 }
 
@@ -209,9 +280,20 @@ func FuzzSanitizeFilename(f *testing.F) {
 const fuzzSiteBudget = 1 << 20
 
 func tarOf(t testing.TB, entries map[string]string, link bool) []byte {
+	var seq [][2]string
+	for n, c := range entries {
+		seq = append(seq, [2]string{n, c})
+	}
+	return tarSeq(t, seq, link)
+}
+
+// tarSeq writes the entries in the order given, so a seed can put a good
+// entry before a refused one (a partial write, then an error).
+func tarSeq(t testing.TB, entries [][2]string, link bool) []byte {
 	var b bytes.Buffer
 	tw := tar.NewWriter(&b)
-	for n, c := range entries {
+	for _, e := range entries {
+		n, c := e[0], e[1]
 		if err := tw.WriteHeader(&tar.Header{Name: n, Mode: 0o644, Size: int64(len(c)), Typeflag: tar.TypeReg}); err != nil {
 			t.Fatal(err)
 		}
@@ -238,10 +320,71 @@ func zipOf(t testing.TB, entries map[string]string) []byte {
 	return b.Bytes()
 }
 
+// treeOf records every path under dir with its file type.
+func treeOf(t *testing.T, dir string) map[string]fs.FileMode {
+	t.Helper()
+	tree := map[string]fs.FileMode{}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		tree[p] = d.Type()
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tree
+}
+
+// checkSiteTree fails when an extraction left anything outside sitesRoot
+// that was not under parent before (a new path or a changed file type,
+// anywhere in parent), or left under sitesRoot a symlink, a special file,
+// more bytes than the budget or more files than the entry cap. It holds
+// after every extraction, a refused one included: a refusal may come after
+// partial writes.
+func checkSiteTree(t *testing.T, parent, sitesRoot string, before map[string]fs.FileMode) {
+	t.Helper()
+	inSites := func(p string) bool {
+		return p == sitesRoot || strings.HasPrefix(p, sitesRoot+string(filepath.Separator))
+	}
+	var total int64
+	files := 0
+	for p, typ := range treeOf(t, parent) {
+		if !inSites(p) {
+			if old, ok := before[p]; !ok || old != typ {
+				t.Fatalf("extraction created %q (type %v) outside the sites root", p, typ)
+			}
+			continue
+		}
+		switch {
+		case typ.IsDir():
+		case typ.IsRegular():
+			fi, err := os.Lstat(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			total += fi.Size()
+			files++
+		default:
+			t.Fatalf("extracted %q of type %v, not a regular file", p, typ)
+		}
+	}
+	if total > fuzzSiteBudget {
+		t.Fatalf("site holds %d bytes past a %d byte budget", total, fuzzSiteBudget)
+	}
+	if files > maxSiteEntries {
+		t.Fatalf("%d files past the entry cap of %d", files, maxSiteEntries)
+	}
+}
+
 // FuzzSiteArchive extracts hostile tar and zip archives into a real store
 // and checks the result: every extracted file is a regular file inside the
-// site, the decompressed total holds to the budget, the entry cap holds, and
-// extraction finishes in bounded time.
+// sites root, nothing is created anywhere else, the decompressed total holds
+// to the budget and the entry cap holds, whether extraction succeeded or
+// not. Each input gets a fresh temporary parent directory holding the store,
+// so the sites root is a subdirectory and the whole parent can be walked
+// for escapes.
 func FuzzSiteArchive(f *testing.F) {
 	ok := map[string]string{"index.html": "<p>x</p>", "css/a.css": "a{}", "a/b/c.txt": "c"}
 	evil := map[string]string{"../escape": "x", "/abs": "x", `a\..\b`: "x", "a/../../b": "x", ".git/config": "x"}
@@ -249,24 +392,27 @@ func FuzzSiteArchive(f *testing.F) {
 	f.Add(tarOf(f, evil, false), false)
 	f.Add(zipOf(f, ok), true)
 	f.Add(zipOf(f, evil), true)
+	f.Add(tarSeq(f, [][2]string{{"ok.txt", "x"}, {"../../escape", "y"}}, false), false)
 	f.Add([]byte("PK\x05\x06"+strings.Repeat("\x00", 18)), true)
 	f.Add(bytes.Repeat([]byte{0}, 1024), false)
 
 	prev := siteDecompressBudget
 	siteDecompressBudget = fuzzSiteBudget
 	f.Cleanup(func() { siteDecompressBudget = prev })
-	st, err := store.Open(f.TempDir())
-	if err != nil {
-		f.Fatal(err)
-	}
-	f.Cleanup(func() { st.Close() })
-	sitesRoot := filepath.Join(st.Root(), "data", "sites")
 	f.Fuzz(func(t *testing.T, archive []byte, isZip bool) {
+		parent := t.TempDir()
+		st, err := store.Open(filepath.Join(parent, "store"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		sitesRoot := filepath.Join(st.Root(), "data", "sites")
 		sw, err := st.NewSiteWriter("fuzzsite")
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer sw.Abort()
+		before := treeOf(t, parent)
 		start := time.Now()
 		ra := bytes.NewReader(archive)
 		if isZip {
@@ -274,102 +420,87 @@ func FuzzSiteArchive(f *testing.F) {
 		} else {
 			err = extractTar(sw, ra)
 		}
-		if el := time.Since(start); el > fuzzRequestBound {
+		if el := time.Since(start); fuzzTiming() && el > fuzzRequestBound {
 			t.Fatalf("extract took %v", el)
-		}
-		if err != nil {
-			if errors.Is(err, store.ErrDecompressBudget) || errors.Is(err, errTooManyFiles) || errors.Is(err, errTarHeaderTooLarge) {
-				return
-			}
-			return // malformed archive or refused path: a 400
-		}
-		if sw.Files() > maxSiteEntries {
-			t.Fatalf("%d files past the entry cap", sw.Files())
 		}
 		// The staged tree lives under the sites root, so it is checked
 		// before any commit; committing would only add database work per
 		// input (an SQLite commit each) without reaching more parsing.
-		var total int64
-		werr := filepath.WalkDir(sitesRoot, func(p string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			rel, rerr := filepath.Rel(sitesRoot, p)
-			if rerr != nil || strings.HasPrefix(rel, "..") {
-				t.Fatalf("walked outside the sites root: %q", p)
-			}
-			if d.Type()&fs.ModeSymlink != 0 {
-				t.Fatalf("extracted a symlink %q", rel)
-			}
-			if d.Type().IsRegular() {
-				fi, err := d.Info()
-				if err != nil {
-					return err
-				}
-				total += fi.Size()
-			}
-			return nil
-		})
-		if werr != nil {
-			t.Fatal(werr)
-		}
-		if total > fuzzSiteBudget {
-			t.Fatalf("site holds %d bytes past a %d byte budget", total, fuzzSiteBudget)
-		}
-		// Nothing was written beside the store.
-		if _, err := os.Lstat(filepath.Join(st.Root(), "escape")); err == nil {
-			t.Fatal("an entry escaped the sites root")
+		checkSiteTree(t, parent, sitesRoot, before)
+		if err == nil && sw.Files() > maxSiteEntries {
+			t.Fatalf("%d files past the entry cap", sw.Files())
 		}
 	})
 }
 
+// publishRefusals are the statuses an authorised publish may be refused
+// with: a bad request (query, slug, TTL, body), a missing ?next= target,
+// a slug conflict, an oversized body or header. Anything else, 503 and 507
+// included, is a failure: the harness sets no quota, no concurrency limit
+// and no drain, so neither can be its own doing.
+var publishRefusals = map[int]bool{
+	http.StatusBadRequest:                  true,
+	http.StatusNotFound:                    true,
+	http.StatusConflict:                    true,
+	http.StatusRequestEntityTooLarge:       true,
+	http.StatusRequestHeaderFieldsTooLarge: true,
+}
+
 // FuzzPublish drives POST /publish with hostile query strings, content types
-// and bodies through the combined handler, in process. A publish without the
-// token is refused; one that is accepted names a valid slug on this origin and
-// reads back byte for byte; nothing answers 500.
+// and bodies through the combined handler, in process, against a fresh store
+// per input (removed with the input's temporary directory, so the disk does
+// not grow over a run). A publish without the token is refused with 401; an
+// authorised one is accepted with 201 or refused with a status in
+// publishRefusals; an accepted one names a valid slug on this instance and
+// reads back 200 with the published bytes.
+//
+// Requests are parsed by http.ReadRequest, so only what net/http itself
+// refuses is skipped: a CR or LF in the query (it would end the request
+// line) or a control byte in the Content-Type. The byte-for-byte readback is
+// skipped where the stored bytes are not the body by design: a rendered
+// (?render=) page, a site archive, a multipart upload (the stored file is
+// one part) and a password-protected artifact (the readback needs the
+// password exchange).
 func FuzzPublish(f *testing.F) {
 	for _, q := range []string{
 		"", "slug=a", "slug=../x", "slug=publish", "slug=a%2Fb", "private=1", "private=1&slug=a",
 		"ttl=1h", "ttl=-1d", "ttl=" + strings.Repeat("9", 70), "render=md", "render=md&slug=doc",
 		"filename=x.html", "filename=a.txt&slug=b", "series=s&slug=s-1", "reply=form&slug=r",
 		"reply=question&next=r2&slug=r", "next=//evil", "site=s", "password=", "fmt=zip&site=s",
+		"slug=a#b", "slug=a\tb", "slug= a ",
 	} {
 		f.Add(q, "text/plain", []byte("hello <script>x</script>"), true)
 	}
 	f.Add("slug=b", "multipart/form-data; boundary=x", []byte("--x\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.html\"\r\n\r\nhi\r\n--x--\r\n"), true)
 	f.Add("slug=c", "text/plain", []byte("x"), false)
+	f.Add("slug=d", "", []byte{}, true)
 
-	st, err := store.Open(f.TempDir())
-	if err != nil {
-		f.Fatal(err)
-	}
-	f.Cleanup(func() { st.Close() })
 	restore := store.SetPBKDF2IterForTest(2)
 	f.Cleanup(restore)
 	const token = "fuzz-token"
-	h := New(st, Config{AuthToken: token}).Handler()
 	f.Fuzz(func(t *testing.T, query, ctype string, body []byte, authed bool) {
-		if strings.ContainsAny(query, " #\r\n\t") || strings.ContainsAny(ctype, "\r\n\x00") {
+		if strings.ContainsAny(query, "\r\n") || !validFieldValue(ctype) {
 			return
 		}
-		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/publish", bytes.NewReader(body))
-		u, err := url.ParseRequestURI("/publish?" + query)
-		if err != nil {
-			return
-		}
-		r.URL, r.RequestURI = u, "/publish?"+query
-		r.Header.Set("Content-Type", ctype)
+		hdr := [][2]string{{"Content-Type", ctype}}
 		if authed {
-			r.Header.Set("Authorization", "Bearer "+token)
+			hdr = append(hdr, [2]string{"Authorization", "Bearer " + token})
 		}
+		r, ok := readRequest(http.MethodPost, "127.0.0.1:8080", "/publish?"+query, hdr, body)
+		if !ok {
+			return
+		}
+		st, err := store.Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		h := New(st, Config{AuthToken: token}).Handler()
 		w := httptest.NewRecorder()
 		start := time.Now()
 		h.ServeHTTP(w, r)
-		if el := time.Since(start); el > fuzzRequestBound {
+		if el := time.Since(start); fuzzTiming() && el > fuzzRequestBound {
 			t.Fatalf("publish took %v", el)
-		}
-		if w.Code >= 500 && w.Code != http.StatusServiceUnavailable && w.Code != http.StatusInsufficientStorage {
-			t.Fatalf("publish %q answered %d: %s", query, w.Code, w.Body.String())
 		}
 		if !authed {
 			if w.Code != http.StatusUnauthorized {
@@ -378,9 +509,12 @@ func FuzzPublish(f *testing.F) {
 			return
 		}
 		if w.Code != http.StatusCreated {
+			if !publishRefusals[w.Code] {
+				t.Fatalf("publish %q answered %d: %s", query, w.Code, w.Body.String())
+			}
 			return
 		}
-		q := u.Query()
+		q := r.URL.Query()
 		loc, err := url.Parse(strings.TrimSpace(w.Body.String()))
 		if err != nil || loc.Host != "127.0.0.1:8081" && loc.Host != "127.0.0.1:8080" || loc.User != nil {
 			t.Fatalf("publish URL %q is not on this instance", w.Body.String())
@@ -398,41 +532,75 @@ func FuzzPublish(f *testing.F) {
 			}
 		}
 		if q.Get("render") != "" || q.Has("password") || r.Header.Get("X-Demiplane-Password") != "" ||
-			strings.HasPrefix(strings.ToLower(ctype), "multipart/") {
+			strings.HasPrefix(strings.ToLower(strings.TrimSpace(ctype)), "multipart/") {
 			return
 		}
-		g := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/"+slug, nil)
+		g, ok := readRequest(http.MethodGet, loc.Host, loc.RequestURI(), nil, nil)
+		if !ok {
+			t.Fatalf("publish URL %q is not a request net/http accepts", loc)
+		}
 		gw := httptest.NewRecorder()
 		h.ServeHTTP(gw, g)
-		if gw.Code == http.StatusOK && !bytes.Equal(gw.Body.Bytes(), body) {
-			t.Fatalf("artifact %q reads back %d bytes, published %d", slug, gw.Body.Len(), len(body))
+		if gw.Code != http.StatusOK {
+			t.Fatalf("artifact %q published with 201 reads back %d", loc, gw.Code)
+		}
+		if !bytes.Equal(gw.Body.Bytes(), body) {
+			t.Fatalf("artifact %q reads back %d bytes, published %d", loc, gw.Body.Len(), len(body))
 		}
 	})
 }
 
-// FuzzRenderSpec checks the render spec stored with a retained source: what
-// a publish writes reads back unchanged on rebake, and a spec read back from
-// a damaged or foreign record decodes to some spec or is refused, never a
-// panic.
+// jsonReadBack is what encoding/json gives back for a string it stored:
+// invalid UTF-8 comes back as U+FFFD.
+func jsonReadBack(t *testing.T, v string) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out string
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// FuzzRenderSpec checks the render spec stored with a retained source. What
+// a publish writes reads back unchanged on rebake (string fields as
+// encoding/json reads them back, the publish time to the nanosecond), a
+// publish time outside RFC 3339's years is not stored at all, and a spec
+// read back from a damaged or foreign record either fails to decode (the
+// rebake then uses the defaults) or decodes to a spec whose stored form is
+// a fixed point: re-encoding it and reading it again gives the same bytes.
 func FuzzRenderSpec(f *testing.F) {
 	f.Add("doc", "series", "doc", "doc-2", int64(1_700_000_000), int64(5), []byte(`{"named_slug":"a","published":"2026-01-02T03:04:05Z"}`))
 	f.Add("", "", "", "", int64(0), int64(0), []byte(`{"published":"not a time"}`))
 	f.Add("a", "", "", "", int64(-62135596800), int64(0), []byte(`[]`))
+	f.Add("\xff", "", "", "", int64(1<<39), int64(0), []byte(`{"published":"2026-01-02T03:04:05+05:30","series":"\ud800"}`))
 	f.Fuzz(func(t *testing.T, named, series, reply, next string, sec, nsec int64, stored []byte) {
 		var junk renderSpec
-		_ = json.Unmarshal(stored, &junk)
-
-		for _, v := range []string{named, series, reply, next} {
-			if !utf8.ValidString(v) {
-				return // publish values are validated slugs; JSON cannot carry invalid UTF-8
+		if json.Unmarshal(stored, &junk) == nil {
+			enc := marshalRenderSpec(junk)
+			if enc == "" {
+				t.Fatalf("decoded spec %+v from %q does not encode again", junk, stored)
+			}
+			var again renderSpec
+			if err := json.Unmarshal([]byte(enc), &again); err != nil {
+				t.Fatalf("re-encoded spec %q does not decode: %v", enc, err)
+			}
+			if enc2 := marshalRenderSpec(again); enc2 != enc {
+				t.Fatalf("stored spec is not a fixed point: %q -> %q -> %q", stored, enc, enc2)
 			}
 		}
+
 		pub := time.Unix(sec%(1<<40), nsec%1e9).UTC()
-		if y := pub.Year(); y < 0 || y > 9999 {
-			return // outside RFC 3339; publish times are now
-		}
 		spec := renderSpecFor(named, series, reply, next, pub)
 		enc := marshalRenderSpec(spec)
+		if y := pub.Year(); y < 0 || y > 9999 {
+			if enc != "" {
+				t.Fatalf("spec with year %d stored as %q", y, enc)
+			}
+			return // not stored: the source is retained without a spec
+		}
 		if enc == "" {
 			t.Fatalf("spec %+v did not marshal", spec)
 		}
@@ -440,8 +608,9 @@ func FuzzRenderSpec(f *testing.F) {
 		if err := json.Unmarshal([]byte(enc), &back); err != nil {
 			t.Fatalf("stored spec %q does not read back: %v", enc, err)
 		}
-		if back.NamedSlug != named || back.Series != series || back.ReplySlug != reply ||
-			back.ReplyNext != next || !back.Published.Equal(pub) {
+		if back.NamedSlug != jsonReadBack(t, named) || back.Series != jsonReadBack(t, series) ||
+			back.ReplySlug != jsonReadBack(t, reply) || back.ReplyNext != jsonReadBack(t, next) ||
+			!back.Published.Equal(pub) {
 			t.Fatalf("spec round trip: %+v -> %q -> %+v", spec, enc, back)
 		}
 	})
