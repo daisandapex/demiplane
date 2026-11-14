@@ -286,9 +286,9 @@ func FuzzSiteArchive(f *testing.F) {
 		if sw.Files() > maxSiteEntries {
 			t.Fatalf("%d files past the entry cap", sw.Files())
 		}
-		if _, err := sw.Commit(); err != nil {
-			return
-		}
+		// The staged tree lives under the sites root, so it is checked
+		// before any commit; committing would only add database work per
+		// input (an SQLite commit each) without reaching more parsing.
 		var total int64
 		werr := filepath.WalkDir(sitesRoot, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -319,9 +319,6 @@ func FuzzSiteArchive(f *testing.F) {
 		// Nothing was written beside the store.
 		if _, err := os.Lstat(filepath.Join(st.Root(), "escape")); err == nil {
 			t.Fatal("an entry escaped the sites root")
-		}
-		if err := st.DeleteSite("fuzzsite"); err != nil && !errors.Is(err, store.ErrNotFound) {
-			t.Fatal(err)
 		}
 	})
 }
