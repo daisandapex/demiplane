@@ -32,7 +32,11 @@ reply routes, no `reply`/`replies` reserved slugs.
 No new auth primitive: submitting is a *view*-level act (network reachability,
 plus the view password through core's rate-limited check), reading the
 collected replies is a *publish*-level act (bearer token). On an open instance
-(no token) the read side is open too, same as core's `/list`.
+(no token) the read side is open too, same as core's `/list`, but only for
+replies to an artifact anyone may read: replies to a private or
+password-protected artifact (or one that no longer exists) are left out of
+`GET /replies`, and `GET /replies?slug=`, ack and delete answer `403` for
+them. The view password is a separate layer that holds without a token.
 
 Replies are **opt-in per artifact**: publish with `?reply=form` (this module's
 form, page unchanged) or `?reply=question` (the inline box below). The choice is

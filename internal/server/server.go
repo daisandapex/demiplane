@@ -194,6 +194,10 @@ func (s *Server) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return s.requireAuth(next)
 }
 
+// AuthConfigured reports whether a publish token is configured (RequireAuth
+// is a pass-through when it is not).
+func (s *Server) AuthConfigured() bool { return s.authToken != "" }
+
 // RequestBase returns the advertised base URL for the request (no trailing
 // slash). Exported for modules; requestBase is the internal implementation.
 func (s *Server) RequestBase(r *http.Request) string { return s.requestBase(r) }

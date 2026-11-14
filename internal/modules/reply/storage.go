@@ -408,6 +408,19 @@ func (rs *replyStore) deleteID(id int64) error {
 	return nil
 }
 
+// slugOf returns the slug reply id answers, or errNoReply.
+func (rs *replyStore) slugOf(id int64) (string, error) {
+	var slug string
+	err := rs.db.QueryRow(`SELECT slug FROM replies WHERE id = ?`, id).Scan(&slug)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", errNoReply
+	}
+	if err != nil {
+		return "", fmt.Errorf("look up reply: %w", err)
+	}
+	return slug, nil
+}
+
 // errNoReply is returned by ack when the id is unknown.
 var errNoReply = errors.New("reply not found")
 

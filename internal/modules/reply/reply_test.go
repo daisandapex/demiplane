@@ -43,6 +43,7 @@ func (h *fakeHost) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 		next(w, r)
 	}
 }
+func (h *fakeHost) AuthConfigured() bool                 { return true }
 func (h *fakeHost) RequestBase(*http.Request) string     { return "http://test" }
 func (h *fakeHost) BaseURL() string                      { return "" }
 func (h *fakeHost) ModuleDataDir(string) (string, error) { return h.dataDir, nil }

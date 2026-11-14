@@ -36,6 +36,7 @@ Core hands every module a `module.Host` — the entire surface a module may touc
 |---|---|
 | `Store() *store.Store` | the shared artifact store |
 | `RequireAuth(h) h` | wrap a route in core's bearer-token publish auth |
+| `AuthConfigured() bool` | whether a token is configured; without one `RequireAuth` passes every request |
 | `RequestBase(r) string` | advertised base URL for a request |
 | `BaseURL() string` | the configured `--base-url` (`""` if unset) |
 | `ModuleDataDir(name) (string, error)` | an isolated `<store>/modules/<name>` dir for your own persistence |

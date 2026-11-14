@@ -48,7 +48,7 @@ func PasswordChallenge(slug string) string {
 
 // Host is the capability surface core hands to a module at startup. It is an
 // interface (not the concrete *server.Server) so a module can reach only these
-// eight methods; the entire blast radius of any module is reviewing its use of
+// nine methods; the entire blast radius of any module is reviewing its use of
 // this surface. Implemented by *server.Server.
 type Host interface {
 	// Store is the shared artifact content store.
@@ -56,6 +56,10 @@ type Host interface {
 	// RequireAuth wraps a handler with core's bearer-token publish-auth layer, so
 	// a module's privileged routes share one consistent auth posture.
 	RequireAuth(http.HandlerFunc) http.HandlerFunc
+	// AuthConfigured reports whether a publish token is configured. When it
+	// is not, RequireAuth lets every request through, so a module must not
+	// hand such a request anything the view-password layer protects.
+	AuthConfigured() bool
 	// RequestBase returns the advertised base URL for the request (no trailing
 	// slash), honouring --base-url or deriving scheme+host from the request.
 	RequestBase(*http.Request) string

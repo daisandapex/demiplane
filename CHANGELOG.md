@@ -8,6 +8,13 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- On an instance with no token, the reply inbox no longer shows replies to a
+  private or password-protected artifact, and refuses to ack or delete them
+  (`403`). `GET /replies` sits behind the publish token, which is open when
+  none is configured, so anyone who could reach the control plane read what
+  viewers wrote in answer to a page they could not open. Replies to public
+  pages are unchanged; with a token, everything is. Modules see this through
+  a new `module.Host` method, `AuthConfigured`.
 - A publish with an empty or blank `X-Demiplane-Password` header is refused
   with `400`. It was read as no header and stored the artifact public, so an
   unset variable in `-H "X-Demiplane-Password: $PW"` published the page the

@@ -433,12 +433,34 @@ func (m *Module) handleNextWait(w http.ResponseWriter, r *http.Request) {
 	writeHTML(w, http.StatusOK, waitPage(slug, next))
 }
 
+// The inbox routes sit behind RequireAuth, which lets everyone through when
+// no token is configured. The view password is a separate layer that holds
+// even then, so on such an instance the inbox acts only on replies to an
+// artifact anyone may read: one that exists, is not private and has no
+// password. Replies to any other slug are left out of a listing, and acking
+// or deleting them is refused (errTokenNeeded).
+const errTokenNeeded = "configure a token to manage replies to a private or password-protected page"
+
+// readableWithoutToken reports whether the inbox may show or change the
+// replies to slug for a caller that RequireAuth admitted.
+func (m *Module) readableWithoutToken(slug string) bool {
+	if m.host.AuthConfigured() {
+		return true
+	}
+	art, err := m.host.Store().LookupPublic(slug)
+	return err == nil && !art.HasPassword()
+}
+
 // handleList returns replies as JSON (auth). Filters: ?slug=, ?status=.
 func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 	if !m.ready(w) {
 		return
 	}
 	q := r.URL.Query()
+	if slug := q.Get("slug"); slug != "" && !m.readableWithoutToken(slug) {
+		http.Error(w, errTokenNeeded, http.StatusForbidden)
+		return
+	}
 	status := strings.ToLower(q.Get("status"))
 	if status == "" {
 		status = "pending"
@@ -466,7 +488,18 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if replies == nil {
+	if !m.host.AuthConfigured() {
+		// A page may hold fewer replies than the limit, even none, and still
+		// have a next cursor.
+		kept := replies[:0]
+		for _, rep := range replies {
+			if m.readableWithoutToken(rep.Slug) {
+				kept = append(kept, rep)
+			}
+		}
+		replies = kept
+	}
+	if len(replies) == 0 {
 		replies = []Reply{}
 	}
 	resp := map[string]any{"replies": replies, "count": len(replies)}
@@ -486,6 +519,9 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "reply id must be an integer", http.StatusBadRequest)
 		return
 	}
+	if !m.mayChangeReply(w, r, id) {
+		return
+	}
 	if err := m.rs.ack(id); err != nil {
 		if errors.Is(err, errNoReply) {
 			http.NotFound(w, r)
@@ -498,6 +534,29 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// mayChangeReply reports whether the caller may ack or delete reply id,
+// answering 404 for an unknown id and 403 for a reply the inbox withholds
+// without a token (readableWithoutToken) when it may not.
+func (m *Module) mayChangeReply(w http.ResponseWriter, r *http.Request, id int64) bool {
+	if m.host.AuthConfigured() {
+		return true
+	}
+	slug, err := m.rs.slugOf(id)
+	switch {
+	case errors.Is(err, errNoReply):
+		http.NotFound(w, r)
+		return false
+	case err != nil:
+		log.Printf("reply: lookup failed: %s", logsafe.Err(err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return false
+	case !m.readableWithoutToken(slug):
+		http.Error(w, errTokenNeeded, http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
 // handleDelete deletes one reply (auth). 204 on success, 404 for an unknown
 // id. Deleting is how an operator frees reply capacity.
 func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
@@ -507,6 +566,9 @@ func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "reply id must be an integer", http.StatusBadRequest)
+		return
+	}
+	if !m.mayChangeReply(w, r, id) {
 		return
 	}
 	if err := m.rs.deleteID(id); err != nil {
@@ -529,6 +591,10 @@ func (m *Module) handleDeleteSlug(w http.ResponseWriter, r *http.Request) {
 	slug := r.URL.Query().Get("slug")
 	if slug == "" {
 		http.Error(w, "slug is required", http.StatusBadRequest)
+		return
+	}
+	if !m.readableWithoutToken(slug) {
+		http.Error(w, errTokenNeeded, http.StatusForbidden)
 		return
 	}
 	n, err := m.rs.deleteSlug(slug)

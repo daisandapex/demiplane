@@ -572,3 +572,123 @@ func TestSameSecondRepublishInvalidatesToken(t *testing.T) {
 		t.Errorf("a token from the previous publish in the same second: %d, want 403", code)
 	}
 }
+
+// TestRepliesToPasswordPageNeedACredential: on an instance with no token,
+// the reply inbox (GET /replies) passes through requireAuth like the legacy
+// listing does. But the inbox holds what viewers wrote in answer to a
+// password-protected page, which only someone holding the view password
+// could read or answer, so without a token it leaves those replies out.
+// See audit/06-replies-to-password-pages-open-without-token.md.
+func TestRepliesToPasswordPageNeedACredential(t *testing.T) {
+	ts := newTestServer(t, "") // no token
+	publishPassword(t, ts, "?slug=review&reply=form", "letmein", "<html>confidential draft</html>")
+
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/reply/review",
+		strings.NewReader(`{"kind":"comment","body":"the merger closes on the 3rd"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("x", "letmein")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("reply with the view password = %d, want 201", resp.StatusCode)
+	}
+
+	// No password, no token.
+	got, err := http.Get(ts.URL + "/replies?status=all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(got.Body)
+	got.Body.Close()
+	if got.StatusCode == http.StatusOK && strings.Contains(string(body), "the merger closes") {
+		t.Errorf("GET /replies with no credential = 200 and returns the reply to a password-protected page: %.200s", body)
+	}
+}
+
+// TestTokenlessInboxKeepsPublicReplies: without a token the inbox still lists,
+// acks and deletes replies to a public page, and refuses (403) to act on
+// replies to a password-protected one, by slug or by id. With a token, the
+// token holder sees and manages both.
+func TestTokenlessInboxKeepsPublicReplies(t *testing.T) {
+	for _, token := range []string{"", "s3cret"} {
+		ts := newConfiguredServer(t, Config{AuthToken: token})
+		req := func(method, path, password string, body string) (int, string) {
+			t.Helper()
+			r, _ := http.NewRequest(method, ts.URL+path, strings.NewReader(body))
+			if body != "" {
+				r.Header.Set("Content-Type", "application/json")
+			}
+			if password != "" {
+				r.SetBasicAuth("x", password)
+			}
+			if password == "" && token != "" {
+				r.Header.Set("Authorization", "Bearer "+token)
+			}
+			resp, err := http.DefaultClient.Do(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			b, _ := io.ReadAll(resp.Body)
+			return resp.StatusCode, string(b)
+		}
+		if code, b := req(http.MethodPost, "/publish?slug=open&reply=form", "", "<html>open</html>"); code != http.StatusCreated {
+			t.Fatalf("publish open = %d %s", code, b)
+		}
+		r, _ := http.NewRequest(http.MethodPost, ts.URL+"/publish?slug=locked&reply=form", strings.NewReader("<html>locked</html>"))
+		r.Header.Set(PasswordHeader, "letmein")
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		if resp, err := http.DefaultClient.Do(r); err != nil || resp.StatusCode != http.StatusCreated {
+			t.Fatalf("publish locked: %v %v", err, resp)
+		}
+		if code, b := req(http.MethodPost, "/reply/open", "", `{"kind":"comment","body":"public note"}`); code != http.StatusCreated {
+			t.Fatalf("reply open = %d %s", code, b)
+		}
+		if code, b := req(http.MethodPost, "/reply/locked", "letmein", `{"kind":"comment","body":"secret note"}`); code != http.StatusCreated {
+			t.Fatalf("reply locked = %d %s", code, b)
+		}
+
+		code, list := req(http.MethodGet, "/replies?status=all", "", "")
+		if code != http.StatusOK || !strings.Contains(list, "public note") {
+			t.Errorf("token %q: inbox = %d %s, want 200 with the public reply", token, code, list)
+		}
+		if got := strings.Contains(list, "secret note"); got != (token != "") {
+			t.Errorf("token %q: inbox lists the protected reply = %v", token, got)
+		}
+		wantProtected := http.StatusForbidden
+		if token != "" {
+			wantProtected = http.StatusOK
+		}
+		if code, _ := req(http.MethodGet, "/replies?slug=locked&status=all", "", ""); code != wantProtected {
+			t.Errorf("token %q: inbox for the protected slug = %d, want %d", token, code, wantProtected)
+		}
+		// Ids follow submission order: 1 answers "open", 2 answers "locked".
+		wantChange := http.StatusForbidden
+		if token != "" {
+			wantChange = http.StatusNoContent
+		}
+		if code, _ := req(http.MethodPost, "/replies/2/ack", "", ""); code != wantChange {
+			t.Errorf("token %q: ack of the protected reply = %d, want %d", token, code, wantChange)
+		}
+		if code, _ := req(http.MethodDelete, "/replies/2", "", ""); code != wantChange {
+			t.Errorf("token %q: delete of the protected reply = %d, want %d", token, code, wantChange)
+		}
+		if code, _ := req(http.MethodDelete, "/replies?slug=locked", "", ""); code != wantProtected {
+			t.Errorf("token %q: delete by protected slug = %d, want %d", token, code, wantProtected)
+		}
+		if code, _ := req(http.MethodPost, "/replies/1/ack", "", ""); code != http.StatusNoContent {
+			t.Errorf("token %q: ack of the public reply = %d, want 204", token, code)
+		}
+		if code, _ := req(http.MethodDelete, "/replies/1", "", ""); code != http.StatusNoContent {
+			t.Errorf("token %q: delete of the public reply = %d, want 204", token, code)
+		}
+		if code, _ := req(http.MethodDelete, "/replies/99", "", ""); code != http.StatusNotFound {
+			t.Errorf("token %q: delete of an unknown reply = %d, want 404", token, code)
+		}
+	}
+}
