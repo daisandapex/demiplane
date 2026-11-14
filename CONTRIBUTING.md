@@ -90,7 +90,9 @@ shows what it selects). Every go process runs under `GOMEMLIMIT`
 (`FUZZ_GOMEMLIMIT`, default 1GiB) and `ulimit -v` (`FUZZ_VMEM_KB`, default
 4 GiB). Each target gets a fresh `TMPDIR` and `GOTMPDIR` under `FUZZ_TMPDIR`
 (default `$TMPDIR`), which the script moves into `delete-me/` beside it when
-the target ends; empty that directory yourself. Put `FUZZ_TMPDIR` on a tmpfs
+the target ends; empty that directory yourself. The script never deletes, so
+it refuses to start, naming the directory, while `delete-me/` holds more than
+`FUZZ_DELETE_ME_MAX_KB` KiB (default 2 GiB). Put `FUZZ_TMPDIR` on a tmpfs
 if you can: the store-backed targets open SQLite per input and are slow on a
 syncing disk. `scripts/test-fuzz.sh` tests the script itself.
 

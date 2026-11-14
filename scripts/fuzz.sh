@@ -20,8 +20,15 @@
 # Each target gets its own TMPDIR (and GOTMPDIR, which Go uses for
 # t.TempDir), a fresh directory under FUZZ_TMPDIR (default $TMPDIR, else
 # /tmp). Afterwards the script moves it into FUZZ_TMPDIR/delete-me/ rather
-# than deleting it; empty that directory when convenient. A tmpfs there
-# keeps the store-backed targets fast. DEMIPLANE_FUZZ_TIMING=1 is set, which
+# than deleting it; empty that directory when convenient. The script never
+# deletes anything, so delete-me/ is capped instead:
+#
+#   FUZZ_DELETE_ME_MAX_KB   most KiB delete-me/ may hold (default 2097152,
+#                           2 GiB)
+#
+# A run refuses to start, naming the directory to clear, while delete-me/
+# holds more than that, and a run that leaves it over the cap says so. A
+# tmpfs there keeps the store-backed targets fast. DEMIPLANE_FUZZ_TIMING=1 is set, which
 # turns on the targets' wall-clock bounds (plain `go test` leaves them off).
 #
 # It prints one line per target:
@@ -68,6 +75,23 @@ case "$vmem_kb" in
 	;;
 esac
 tmpbase="${FUZZ_TMPDIR:-${TMPDIR:-/tmp}}"
+keep_max_kb="${FUZZ_DELETE_ME_MAX_KB:-2097152}"
+case "$keep_max_kb" in
+'' | *[!0-9]*)
+	echo "FUZZ_DELETE_ME_MAX_KB must be a number of KiB" >&2
+	exit 2
+	;;
+esac
+keep="$tmpbase/delete-me"
+
+# over_cap prints the KiB delete-me/ holds and succeeds when that is more
+# than the cap.
+over_cap() {
+	local kb
+	kb=$(du -sk "$keep" 2>/dev/null | cut -f1)
+	echo "${kb:-0}"
+	[ "${kb:-0}" -gt "$keep_max_kb" ]
+}
 
 # name<TAB>package for every func FuzzXxx(f *testing.F) in a _test.go file,
 # keeping the names that match the filter.
@@ -84,7 +108,12 @@ if [ "$list_only" -eq 1 ]; then
 	exit 0
 fi
 
-mkdir -p "$tmpbase/delete-me" || exit 2
+if kb=$(over_cap); then
+	echo "fuzz.sh: $keep holds ${kb} KiB, over the ${keep_max_kb} KiB cap (FUZZ_DELETE_ME_MAX_KB)." >&2
+	echo "fuzz.sh: it keeps earlier runs' temporary directories; empty $keep, or raise the cap, and run again." >&2
+	exit 2
+fi
+mkdir -p "$keep" || exit 2
 failed=0
 while IFS=$'\t' read -r name pkg; do
 	work=$(mktemp -d "$tmpbase/fuzz-${name}.XXXXXX") || exit 2
@@ -113,6 +142,9 @@ while IFS=$'\t' read -r name pkg; do
 		fi
 	fi
 	printf '%-24s %-28s execs=%-10s new=%-5s %s\n' "$name" "${pkg#./}" "${execs:-0}" "${new:-0}" "$result"
-	mv "$work" "$tmpbase/delete-me/" || failed=1
+	mv "$work" "$keep/" || failed=1
 done <<<"$targets"
+if kb=$(over_cap); then
+	echo "fuzz.sh: $keep now holds ${kb} KiB, over the ${keep_max_kb} KiB cap; empty it before the next run." >&2
+fi
 exit "$failed"

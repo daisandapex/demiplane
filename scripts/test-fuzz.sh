@@ -12,7 +12,8 @@
 # filtering on "Redirect" missed FuzzNextRedirect, and the filter could
 # match a package path. These cases pin the filter to the target name and
 # check the per-target environment (memory ceiling, TMPDIR moved into
-# delete-me/, timing switch) with a stub in place of the go command.
+# delete-me/, timing switch) and the delete-me/ size cap with a stub in
+# place of the go command.
 set -uo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -103,6 +104,30 @@ check "TMPDIR is a per-target directory under FUZZ_TMPDIR" '[[ "$tdir" == "$tmpb
 check "GOTMPDIR follows TMPDIR" 'grep -qx "GOTMPDIR=$tdir" "$record"'
 check "the target's TMPDIR was moved into delete-me/" '[ ! -e "$tdir" ] && [ -e "$tmpbase/delete-me/$(basename "$tdir")/left-behind" ]'
 check "nothing else is left beside delete-me/" '[ "$(ls "$tmpbase")" = "delete-me" ]'
+
+# delete-me/ is capped, never emptied by the script: over the cap a run
+# refuses to start and names the directory; the kept files stay.
+full="$scratch/full"
+mkdir -p "$full/delete-me/fuzz-old.1"
+head -c 262144 /dev/urandom >"$full/delete-me/fuzz-old.1/blob"
+: >"$record"
+out=$(FUZZ_ROOT="$fixture" FUZZ_GO="$stub" FUZZ_TMPDIR="$full" FUZZ_DELETE_ME_MAX_KB=64 "$fuzz" 1 Redirect 2>&1)
+status=$?
+check "a run over the delete-me/ cap exits 2" '[ "$status" -eq 2 ]'
+check "the refusal names the directory to clear and the variable" 'grep -qF "$full/delete-me" <<<"$out" && grep -q FUZZ_DELETE_ME_MAX_KB <<<"$out"'
+check "a refused run starts no target" '[ ! -s "$record" ] && [ "$(ls "$full")" = "delete-me" ]'
+check "a refused run deletes nothing" '[ "$(ls "$full/delete-me")" = "fuzz-old.1" ] && [ "$(wc -c <"$full/delete-me/fuzz-old.1/blob")" -eq 262144 ]'
+out=$(FUZZ_ROOT="$fixture" FUZZ_GO="$stub" FUZZ_TMPDIR="$full" FUZZ_DELETE_ME_MAX_KB=1048576 "$fuzz" 1 Redirect 2>&1)
+status=$?
+check "under a raised cap the same directory runs" '[ "$status" -eq 0 ] && grep -q "^args=" "$record"'
+check "and keeps the earlier run beside the new one" '[ -e "$full/delete-me/fuzz-old.1/blob" ] && [ "$(ls "$full/delete-me" | wc -l)" -eq 2 ]'
+out=$(FUZZ_ROOT="$fixture" FUZZ_GO="$stub" FUZZ_TMPDIR="$scratch/fresh" FUZZ_DELETE_ME_MAX_KB=0 "$fuzz" 1 Redirect 2>&1)
+status=$?
+check "a run that leaves delete-me/ over the cap still passes" '[ "$status" -eq 0 ]'
+check "and warns that the next run will need it cleared" 'grep -qF "$scratch/fresh/delete-me now holds" <<<"$out"'
+out=$(FUZZ_ROOT="$fixture" FUZZ_GO="$stub" FUZZ_TMPDIR="$full" FUZZ_DELETE_ME_MAX_KB=2GiB "$fuzz" 1 Redirect 2>&1)
+status=$?
+check "a cap that is not a number of KiB is refused" '[ "$status" -eq 2 ] && grep -q "FUZZ_DELETE_ME_MAX_KB must be" <<<"$out"'
 
 # The scratch tree is moved aside, not deleted, like the script's own.
 mkdir -p "${TMPDIR:-/tmp}/delete-me"
