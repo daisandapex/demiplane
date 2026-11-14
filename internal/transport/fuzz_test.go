@@ -25,7 +25,9 @@ func slugByte(c byte) bool {
 // element that stays inside any directory it is joined to. The reject
 // side: a name holding a NUL or any byte a slug cannot carry other than a
 // separator ('/' or '\\'), or one with no letter or digit at all, is
-// refused, and so is one whose flattened form would pass 128 bytes.
+// refused, and so is one whose flattened form would pass 128 bytes. The
+// reject side covers names with no ".." segment: pathToSlug resolves ".."
+// (it does not refuse it), which drops the segments it cancels.
 func FuzzPathToSlug(f *testing.F) {
 	for _, s := range []string{
 		"index.html", "a/b/c.html", "../../etc/passwd", "/abs/x", `a\..\b`, "./a",
@@ -36,8 +38,16 @@ func FuzzPathToSlug(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, name string) {
 		slug, err := pathToSlug(name)
-		alnum := false
-		for i := 0; i < len(name); i++ {
+		// pathToSlug resolves ".." rather than refusing it, so a segment a
+		// ".." removes never reaches the slug (" 0/../00" is "00", testdata
+		// f9944f10340da071). The byte rules below apply to names with no
+		// ".." segment; the rest are held to the accept side only.
+		dotdot := false
+		for _, seg := range strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == '\\' }) {
+			dotdot = dotdot || seg == ".."
+		}
+		alnum := dotdot
+		for i := 0; i < len(name) && !dotdot; i++ {
 			c := name[i]
 			if !slugByte(c) && c != '/' && c != '\\' {
 				if err == nil {
