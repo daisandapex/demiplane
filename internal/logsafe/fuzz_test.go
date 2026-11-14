@@ -4,6 +4,7 @@
 package logsafe
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,10 +27,52 @@ func checkLogText(t *testing.T, what, s string) {
 	}
 }
 
+// checkJSONText checks JSON's output for a valid document: it is valid
+// UTF-8, and no control, format or line-separator character is left raw,
+// except tab, CR and LF between tokens, where JSON allows them as white
+// space (both callers compact the document before printing it). Inside a
+// string token none is allowed, not even those three.
+func checkJSONText(t *testing.T, out []byte) {
+	t.Helper()
+	if !utf8.Valid(out) {
+		t.Fatalf("JSON output is not valid UTF-8: %q", out)
+	}
+	inString := false
+	for i := 0; i < len(out); {
+		r, size := utf8.DecodeRune(out[i:])
+		switch {
+		case inString && r == '\\':
+			// An escape: skip the escaped byte, so `\"` stays in the string.
+			size++
+		case r == '"':
+			inString = !inString
+		case inString && unsafeRune(r):
+			t.Fatalf("JSON kept %U inside a string at byte %d: %q", r, i, out)
+		case !inString && unsafeRune(r) && r != '\t' && r != '\r' && r != '\n':
+			t.Fatalf("JSON kept %U between tokens at byte %d: %q", r, i, out)
+		}
+		i += size
+	}
+	if inString {
+		t.Fatalf("JSON output ends inside a string: %q", out)
+	}
+}
+
+// decodeJSON decodes one JSON value, numbers as json.Number.
+func decodeJSON(b []byte) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var v any
+	err := dec.Decode(&v)
+	return v, err
+}
+
 // FuzzLogsafe checks the log scrubbers: Text leaves no control, format or
 // line-separator character and never changes clean text; URL keeps only an
-// origin; Err hides the path and the named secret; JSON escapes without
-// changing what the document means.
+// origin; Err hides the path and the named secret; for valid JSON, JSON
+// keeps the document valid and its value unchanged, and leaves no such
+// character raw but the white space JSON allows between tokens
+// (checkJSONText).
 func FuzzLogsafe(f *testing.F) {
 	for _, s := range []string{
 		"plain", "a\nb", "a\x1b[31mred", "  ", "‮", "\xff\xfe", "\x00",
@@ -38,6 +81,10 @@ func FuzzLogsafe(f *testing.F) {
 	} {
 		f.Add(s, "capslug-ABCDEFGHIJ")
 	}
+	// JSON keeps a carriage return between tokens: once a crasher, when the
+	// target wanted no control character anywhere in JSON's output.
+	f.Add("\r0", "0")
+	f.Add("[1,\r\n\t\"a\\r\\u2028\"]", "0")
 	f.Fuzz(func(t *testing.T, s, secret string) {
 		txt := Text(s)
 		checkLogText(t, "Text", txt)
@@ -71,14 +118,20 @@ func FuzzLogsafe(f *testing.F) {
 
 		if json.Valid([]byte(s)) {
 			out := JSON([]byte(s))
-			var a, b any
-			if json.Unmarshal([]byte(s), &a) != nil || json.Unmarshal(out, &b) != nil {
+			if !json.Valid(out) {
 				t.Fatalf("JSON(%q) = %q is not valid JSON", s, out)
+			}
+			// Numbers decode as json.Number: a valid number may be too
+			// large for a float64, and JSON leaves its digits as they are.
+			a, aerr := decodeJSON([]byte(s))
+			b, berr := decodeJSON(out)
+			if aerr != nil || berr != nil {
+				t.Fatalf("decoding %q: %v; decoding JSON's %q: %v", s, aerr, out, berr)
 			}
 			if !reflect.DeepEqual(a, b) {
 				t.Fatalf("JSON changed the document: %q -> %q", s, out)
 			}
-			checkLogText(t, "JSON", string(out))
+			checkJSONText(t, out)
 		}
 	})
 }

@@ -137,3 +137,28 @@ func TestJSONEscapesUnsafeRunes(t *testing.T) {
 		t.Error("JSON copied a clean document")
 	}
 }
+
+// TestJSONKeepsCRInsideStringEscaped: in valid JSON a carriage return inside
+// a string can only be the escape \r, and JSON leaves it escaped, so the
+// decoded value keeps its CR and the output carries no raw CR there. A raw
+// CR between tokens is white space and is left alone; callers compact the
+// document before printing it.
+func TestJSONKeepsCRInsideStringEscaped(t *testing.T) {
+	in := "{\"a\":\"x\\ry\\u202e\",\r\n\"b\":1}"
+	got := string(JSON([]byte(in)))
+	want := "{\"a\":\"x\\ry\\u202e\",\r\n\"b\":1}"
+	if got != want {
+		t.Fatalf("JSON(%q) = %q, want %q", in, got, want)
+	}
+	str := got[strings.Index(got, `"x`):strings.Index(got, `",`)]
+	if strings.ContainsRune(str, '\r') || !strings.Contains(str, `\r`) {
+		t.Errorf("string token %q: want the CR as the escape \\r, not raw", str)
+	}
+	var v struct{ A string }
+	if err := json.Unmarshal([]byte(got), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.A != "x\ry‮" {
+		t.Errorf("decoded %q, want %q", v.A, "x\ry‮")
+	}
+}
