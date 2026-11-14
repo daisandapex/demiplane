@@ -155,7 +155,7 @@ func treeHTML(st *state, slug string, fam []string, base, current string) (strin
 		}
 	}
 	b := st.newOut()
-	b.WriteString(`<details class="mnav seq" id="ftree"><summary>Series <span class="pos">` +
+	b.WriteString(`<details class="mnav seq" id="` + seriesTreeID + `"><summary>Series <span class="pos">` +
 		strconv.Itoa(pos) + ` of ` + strconv.Itoa(len(fam)) + `</span></summary><nav aria-label="Series"><ol>`)
 	prefix := seriesPrefix(fam)
 	for _, s := range fam {

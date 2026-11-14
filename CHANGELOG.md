@@ -88,6 +88,10 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Fixed
 
+- A markdown heading can no longer take an id the page chrome writes
+  (`dp-reply-h`, `ftree`, as `dp-main` already could not); it gets a suffix
+  instead. `## dp reply h` took the reply box heading's id earlier in the
+  page, so the answer form's accessible name became the document's own text.
 - A `*` or `_` inside a markdown link destination no longer pairs with one
   outside it: `[a](/x*y) *z` put `<em>` inside the `href`, so the link went
   somewhere other than the address the link check allowed, and

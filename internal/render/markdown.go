@@ -444,6 +444,15 @@ func firstH1(st *state, l *lines, from int) (titleHTML string, line int, err err
 // slugger reserves it, so no heading can take it.
 const mainID = "dp-main"
 
+// replyHeadingID is the baked reply box's heading, which labels its form
+// (aria-labelledby); seriesTreeID is the series navigation. The slugger
+// reserves them too: a heading with either id, earlier in the page, would
+// take the label or duplicate the id.
+const (
+	replyHeadingID = "dp-reply-h"
+	seriesTreeID   = "ftree"
+)
+
 // skipLink opens every masthead page so a keyboard reader can jump past the
 // bar to the text.
 const skipLink = `<a class="skip" href="#` + mainID + `">Skip to content</a>` + "\n"
@@ -539,7 +548,7 @@ type slugger struct {
 }
 
 func newSlugger() slugger {
-	return slugger{used: map[string]bool{mainID: true}, next: map[string]int{}}
+	return slugger{used: map[string]bool{mainID: true, replyHeadingID: true, seriesTreeID: true}, next: map[string]int{}}
 }
 
 func (sg slugger) unique(text string) string {
@@ -637,8 +646,8 @@ func replyBox(slug, next, token string) string {
 	if next != "" {
 		nextField += `<input type="hidden" name="next" value="` + html.EscapeString(next) + `">` + "\n"
 	}
-	return `<section class="dp-reply" aria-labelledby="dp-reply-h">
-<h2 id="dp-reply-h">Your answer</h2>
+	return `<section class="dp-reply" aria-labelledby="` + replyHeadingID + `">
+<h2 id="` + replyHeadingID + `">Your answer</h2>
 <form method="post" action="` + action + `">
 ` + nextField + `<textarea name="body" required placeholder="Your answer in your own words…"></textarea>
 <div class="dp-reply-row"><button type="submit">Submit my answer</button></div>

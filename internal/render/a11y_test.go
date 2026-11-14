@@ -42,3 +42,27 @@ func TestOneBannerAndSkipLink(t *testing.T) {
 		t.Error("a chrome-less render should not carry a skip link")
 	}
 }
+
+// TestHeadingCannotTakeTheReplyBoxID: a heading that slugs to an id the page
+// chrome writes (here dp-reply-h, the baked reply box's own heading) gets a
+// suffix instead. Otherwise it would come first in the page and the form's
+// aria-labelledby would resolve to text the document supplied.
+// See audit/11-heading-id-shadows-reply-box.md.
+func TestHeadingCannotTakeTheReplyBoxID(t *testing.T) {
+	page := string(Markdown([]byte("# Lesson\n\n## dp reply h\n\ntext\n"), Options{ReplySlug: "lesson", ReplyToken: "tok"}))
+	if n := strings.Count(page, `id="dp-reply-h"`); n != 1 {
+		t.Errorf(`id="dp-reply-h" appears %d times, want 1 (the reply box's own heading)`, n)
+	}
+}
+
+// TestHeadingsAvoidChromeIDs: every fixed id the page chrome writes is
+// reserved, so a heading that slugs to one gets a suffix.
+func TestHeadingsAvoidChromeIDs(t *testing.T) {
+	for _, id := range []string{mainID, replyHeadingID, seriesTreeID} {
+		src := "# Title\n\n## " + strings.ReplaceAll(id, "-", " ") + "\n"
+		page := string(Markdown([]byte(src), Options{}))
+		if !strings.Contains(page, `<h2 id="`+id+`-1">`) {
+			t.Errorf("heading slugging to %q: want id %q-1 in\n%s", id, id, page)
+		}
+	}
+}
