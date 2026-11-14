@@ -77,28 +77,34 @@ func validConfigKeys() string {
 }
 
 // configPath returns the XDG config-file path:
-// ${XDG_CONFIG_HOME:-~/.config}/demiplane/config.
+// ${XDG_CONFIG_HOME:-~/.config}/demiplane/config, or "" when there is none.
+// A relative XDG_CONFIG_HOME is ignored, as the XDG specification says, and
+// with no absolute home either there is no config file: a relative path
+// would be read from the working directory, which whoever can write there
+// would then choose (the file can name a command the server runs).
 func configPath() string {
 	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
+	if !filepath.IsAbs(base) {
 		home, err := os.UserHomeDir()
-		if err != nil {
-			// No home and no XDG override: nothing to read. Return a path that
-			// won't exist so loadConfig falls through to defaults.
-			return filepath.Join("demiplane", "config")
+		if err != nil || !filepath.IsAbs(home) {
+			return ""
 		}
 		base = filepath.Join(home, ".config")
 	}
 	return filepath.Join(base, "demiplane", "config")
 }
 
-// loadConfig reads the config file at path into a key→value map. A missing file
-// is not an error (returns an empty map). A malformed line or unknown key is a
+// loadConfig reads the config file at path into a key→value map. A missing file,
+// or path "" (no config location, configPath), is not an error (returns an
+// empty map). A malformed line or unknown key is a
 // hard error so misconfiguration never fails silently.
 //
 // The format is a minimal stdlib-only `key = value` parser: one pair per line,
 // '#' line comments, blank lines ignored. No new dependency.
 func loadConfig(path string) (map[string]string, error) {
+	if path == "" {
+		return map[string]string{}, nil
+	}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return map[string]string{}, nil

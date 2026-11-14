@@ -152,7 +152,9 @@ Render-chrome defaults can be set in a file at `${XDG_CONFIG_HOME:-~/.config}/de
 so you don't repeat flags on every launch. It is a minimal `key = value` format (`#`
 comments, blank lines ignored — no dependency). All keys are optional; a missing file means
 all-defaults (zero-config still works perfectly). A malformed file or unknown key is a hard
-startup error.
+startup error. A relative `XDG_CONFIG_HOME` is ignored, and with no absolute `HOME`
+either (a bare service environment) no config file is read: the path is never taken
+relative to the working directory.
 
 ```ini
 # ~/.config/demiplane/config

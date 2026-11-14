@@ -8,6 +8,11 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- With no `XDG_CONFIG_HOME` and no `HOME`, `serve` reads no config file. It
+  read `demiplane/config` relative to the working directory, so whoever could
+  write there chose the configuration, including `reply_hook_exec`, a command
+  the server runs. A relative `XDG_CONFIG_HOME` is now ignored too, as the
+  XDG specification says.
 - On an instance with no token, the reply inbox no longer shows replies to a
   private or password-protected artifact, and refuses to ack or delete them
   (`403`). `GET /replies` sits behind the publish token, which is open when

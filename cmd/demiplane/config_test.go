@@ -169,3 +169,53 @@ func TestParseOnOff(t *testing.T) {
 		t.Error("invalid on/off should error")
 	}
 }
+
+// TestConfigPathIsNeverRelative: with neither XDG_CONFIG_HOME nor HOME (a
+// service started with a bare environment), there is no config file to
+// read. A fallback of "demiplane/config" would be resolved against the
+// working directory, and whoever can write there would choose the server's
+// configuration, including reply_hook_exec in a -tags reply build, a
+// command the server runs. See audit/07-config-path-relative-to-cwd.md.
+func TestConfigPathIsNeverRelative(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	if err := os.MkdirAll(filepath.Join(cwd, "demiplane"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "demiplane", "config"), []byte("footer = off\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	p := configPath()
+	if p != "" && !filepath.IsAbs(p) {
+		t.Errorf("configPath() = %q with no HOME: relative to the working directory", p)
+	}
+	cfg, err := loadConfig(p)
+	if err != nil {
+		t.Fatalf("loadConfig(%q): %v", p, err)
+	}
+	if len(cfg) != 0 {
+		t.Errorf("a config file in the working directory was loaded: %v", cfg)
+	}
+}
+
+// TestConfigPathIgnoresRelativeXDG: a relative XDG_CONFIG_HOME is ignored
+// and HOME is used instead; a relative HOME gives no config path at all.
+func TestConfigPathIgnoresRelativeXDG(t *testing.T) {
+	home := t.TempDir()
+	for _, tc := range []struct{ xdg, home, want string }{
+		{"/etc/xdg-abs", home, "/etc/xdg-abs/demiplane/config"},
+		{"rel/xdg", home, filepath.Join(home, ".config", "demiplane", "config")},
+		{"", home, filepath.Join(home, ".config", "demiplane", "config")},
+		{"rel/xdg", "rel/home", ""},
+		{"", "", ""},
+	} {
+		t.Setenv("XDG_CONFIG_HOME", tc.xdg)
+		t.Setenv("HOME", tc.home)
+		if got := configPath(); got != tc.want {
+			t.Errorf("XDG_CONFIG_HOME=%q HOME=%q: configPath() = %q, want %q", tc.xdg, tc.home, got, tc.want)
+		}
+	}
+}
