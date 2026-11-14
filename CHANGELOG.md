@@ -29,7 +29,9 @@ All notable changes to demiplane are documented here. The format follows
   because each bracket was stripped on its own. Brackets now count only as a
   matched pair around an IPv6 address, so `[h]` and `[h]:80` are refused
   too, and an entry with brackets around anything but an IPv6 address
-  (`[127.0.0.1]`) is refused at startup.
+  (`[127.0.0.1]`) is refused at startup. A scoped address keeps working:
+  with `--base-url http://[fe80::1%25eth0]:8080`, the `Host`
+  `[fe80::1%eth0]`, with or without a port, is still accepted.
 
 ### Fixed
 

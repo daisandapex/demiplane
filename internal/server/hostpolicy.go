@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -55,7 +56,8 @@ type hostRule struct{ host, port string }
 
 // splitHost lowercases a Host value and splits off its port, unbracketing an
 // IPv6 literal. A value without a port yields port "". Brackets are taken
-// only as a matched pair around an IPv6 literal at the start of the value;
+// only as a matched pair around an IPv6 literal, which may carry a non-empty
+// zone ("[fe80::1%eth0]"), at the start of the value;
 // any other bracket (unpaired, doubled, or around a name or IPv4 address)
 // yields host "", which no rule matches. Stripping each bracket on its own
 // let "[h" and "h]" pass for an allowed host h.
@@ -71,8 +73,12 @@ func splitHost(hostport string) (host, port string) {
 	if strings.ContainsAny(host, "[]") {
 		return "", ""
 	}
-	if strings.HasPrefix(hostport, "[") && (net.ParseIP(host) == nil || !strings.Contains(host, ":")) {
-		return "", ""
+	if strings.HasPrefix(hostport, "[") {
+		// netip, unlike net.ParseIP, accepts a zone ("fe80::1%eth0"), which a
+		// base URL such as http://[fe80::1%25eth0]:8080 names.
+		if a, err := netip.ParseAddr(host); err != nil || !a.Is6() {
+			return "", ""
+		}
 	}
 	return host, port
 }

@@ -212,3 +212,50 @@ func TestAllowedHostsBrackets(t *testing.T) {
 		}
 	}
 }
+
+// TestAllowedHostsScopedIPv6: a base URL may name a scoped IPv6 address
+// ("http://[fe80::1%25eth0]:8080"), whose host is "fe80::1%eth0". The Host
+// forms that matched it before brackets were tightened still match: the
+// bracketed literal with or without a port, in any letter case, and the bare
+// literal. An empty zone, another zone, or a zone with "]" or "/" in it
+// matches nothing, as before. The bracket rules still hold for a scoped
+// literal: an unpaired bracket, which once passed, is refused, and so is a
+// zone holding "]" even when a base URL names one, since the first "]"
+// closes the literal.
+func TestAllowedHostsScopedIPv6(t *testing.T) {
+	cases := []struct {
+		base, host string
+		ok         bool
+	}{
+		{"http://[fe80::1%25eth0]:8080", "[fe80::1%eth0]", true},
+		{"http://[fe80::1%25eth0]:8080", "[fe80::1%eth0]:8080", true},
+		{"http://[fe80::1%25eth0]:8080", "[fe80::1%eth0]:9090", true},
+		{"http://[fe80::1%25eth0]:8080", "[FE80::1%ETH0]:8080", true},
+		{"http://[fe80::1%25eth0]:8080", "fe80::1%eth0", true},
+		{"http://[fe80::1%25eth0]:8080", "[fe80::1]", false},
+		{"http://[fe80::1%25eth0]:8080", "[fe80::1%eth1]", false},
+		{"http://[fe80::1%25eth0]:8080", "[fe80::1%]", false},
+		{"http://[fe80::1%25eth0]:8080", "[fe80::1%]:8080", false},
+		{"http://[fe80::1%25eth0]:8080", "[fe80::1%eth]0]", false},
+		{"http://[fe80::1%25eth0]:8080", "[fe80::1%eth]0]:8080", false},
+		{"http://[fe80::1%25eth0]:8080", "[fe80::1%eth0]]", false},
+		{"http://[fe80::1%25eth0]:8080", "[fe80::1%eth/0]", false},
+		{"http://[fe80::1%25eth0]:8080", "[fe80::1%eth/0]:8080", false},
+		// Refusals the bracket rule added; these passed before it.
+		{"http://[fe80::1%25eth0]:8080", "[fe80::1%eth0", false},
+		{"http://[fe80::1%25eth0]:8080", "fe80::1%eth0]", false},
+		{"http://[fe80::1%25eth]0]:8080", "[fe80::1%eth]0]", false},
+	}
+	for _, c := range cases {
+		rules := buildHostRules([]string{"mesh.lan"}, c.base)
+		if got := hostAllowed(rules, c.host, false); got != c.ok {
+			t.Errorf("base %q, Host %q: allowed=%v, want %v", c.base, c.host, got, c.ok)
+		}
+	}
+	srv := hostPolicyServer(t, Config{BaseURL: "http://[fe80::1%25eth0]:8080", AllowedHosts: []string{"mesh.lan"}})
+	for _, host := range []string{"[fe80::1%eth0]", "[fe80::1%eth0]:8080"} {
+		if rec := serveHost(srv.Handler(), http.MethodGet, "/help.json", host); rec.Code == http.StatusMisdirectedRequest {
+			t.Errorf("Host %q refused with base URL %q", host, "http://[fe80::1%25eth0]:8080")
+		}
+	}
+}
