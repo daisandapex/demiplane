@@ -85,10 +85,23 @@ scripts/fuzz.sh 120 Render    # targets whose name matches a regexp
 The script runs one target at a time with `GOFLAGS=-p=1`, `-parallel 2` and
 no `-race`, so it fits a small machine, and prints one line per target: its
 name, package, executions, new corpus entries, and `PASS` or the crasher's
-path. To fuzz one target by hand, keep to the same flags:
+path. The regexp matches target names only (`scripts/fuzz.sh --list Redirect`
+shows what it selects). Every go process runs under `GOMEMLIMIT`
+(`FUZZ_GOMEMLIMIT`, default 1GiB) and `ulimit -v` (`FUZZ_VMEM_KB`, default
+4 GiB). Each target gets a fresh `TMPDIR` and `GOTMPDIR` under `FUZZ_TMPDIR`
+(default `$TMPDIR`), which the script moves into `delete-me/` beside it when
+the target ends; empty that directory yourself. Put `FUZZ_TMPDIR` on a tmpfs
+if you can: the store-backed targets open SQLite per input and are slow on a
+syncing disk. `scripts/test-fuzz.sh` tests the script itself.
+
+The script sets `DEMIPLANE_FUZZ_TIMING=1`, which turns on the targets'
+wall-clock bounds. Plain `go test` leaves them off, because it replays the
+seeds on machines of any speed and load; where the code takes a context the
+bound is a generous context deadline instead and always applies. To fuzz one
+target by hand, keep to the same flags:
 
 ```sh
-GOFLAGS=-p=1 go test -run '^$' -fuzz '^FuzzRender$' -fuzztime 60s -parallel 2 ./internal/render
+DEMIPLANE_FUZZ_TIMING=1 GOFLAGS=-p=1 go test -run '^$' -fuzz '^FuzzRender$' -fuzztime 60s -parallel 2 ./internal/render
 ```
 
 **Adding a target.** Put it in the package's `fuzz_test.go`. Seed it with
@@ -96,8 +109,12 @@ GOFLAGS=-p=1 go test -run '^$' -fuzz '^FuzzRender$' -fuzztime 60s -parallel 2 ./
 fixes. Assert the promise the code makes (what `SECURITY.md` says of it: no
 script in rendered HTML, a path that stays under its root, a cap that holds,
 a redirect that stays on this origin, a value that reaches SQL only as a
-bound parameter, a round trip), not only that it does not panic. Bound the
-time one input may take and fail past it. Never reach the network: use the
+bound parameter, a round trip), not only that it does not panic. State the
+property independently of the code: do not call the function's own helpers
+or copy its logic as the oracle. Where a rule refuses input, assert the
+refusal as well as the acceptance. Bound the time one input may take: with
+a context deadline inside the call if the code takes one, otherwise only
+when `DEMIPLANE_FUZZ_TIMING` is set. Never reach the network: use the
 package's in-process servers, a recording `http.RoundTripper`, and
 `f.TempDir()`. `scripts/fuzz.sh` finds new targets by name; there is no
 list to update.
