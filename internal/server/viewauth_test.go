@@ -170,9 +170,15 @@ func TestCorrectPasswordIsRefundedAndRemembered(t *testing.T) {
 	if w := serve(h, basicReq("locked", "wrong", "192.0.2.1:1")); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("failure past the burst = %d, want 429", w.Code)
 	}
-	// A remembered credential still works while the target is throttled.
-	if w := serve(h, basicReq("locked", "letmein", "192.0.2.1:1")); w.Code != http.StatusOK {
-		t.Fatalf("remembered credential while throttled = %d, want 200", w.Code)
+	// The client is locked out, so its remembered credential gets no answer
+	// either: whoever sent the failures shares its client key
+	// (audit/02-password-cache-bypasses-lockout.md).
+	if w := serve(h, basicReq("locked", "letmein", "192.0.2.1:1")); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("remembered credential while locked out = %d, want 429", w.Code)
+	}
+	// Another client that has not failed is still served.
+	if w := serve(h, basicReq("locked", "letmein", "192.0.2.2:1")); w.Code != http.StatusOK {
+		t.Fatalf("another client while the target is throttled = %d, want 200", w.Code)
 	}
 }
 
@@ -746,5 +752,92 @@ func TestThrottledClientGetsNoAnswerFromVerifiedCache(t *testing.T) {
 	}
 	if code := as(guesser, "correct horse"); code != http.StatusTooManyRequests {
 		t.Errorf("throttled client, correct guess = %d, want 429: the lockout does not hold for a remembered password", code)
+	}
+}
+
+// TestLockoutHoldsForASharedClientsRememberedPassword: a viewer and a guesser
+// that share one client identity (one NAT address, or every user of a proxy
+// not in --trusted-proxy) share the remembered credential. Once the guesses
+// lock the client out, the remembered password must not answer for it: every
+// attempt gets 429, the correct one included. See
+// audit/02-password-cache-bypasses-lockout.md.
+func TestLockoutHoldsForASharedClientsRememberedPassword(t *testing.T) {
+	countKDF(t, 0)
+	h := gateServer(t, Config{})
+	const shared = "192.0.2.1:1"
+	if w := serve(h, basicReq("locked", "letmein", shared)); w.Code != http.StatusOK {
+		t.Fatalf("viewer with the password = %d, want 200", w.Code)
+	}
+	throttled := false
+	for i := 0; i < 15 && !throttled; i++ {
+		switch c := serve(h, basicReq("locked", "wrong", shared)).Code; c {
+		case http.StatusUnauthorized:
+		case http.StatusTooManyRequests:
+			throttled = true
+		default:
+			t.Fatalf("wrong guess %d = %d, want 401 or 429", i, c)
+		}
+	}
+	if !throttled {
+		t.Fatal("the guessing client was never throttled")
+	}
+	if w := serve(h, basicReq("locked", "letmein", shared)); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("locked-out client, remembered correct password = %d, want 429", w.Code)
+	}
+	// Another client is unaffected.
+	if w := serve(h, basicReq("locked", "letmein", "198.51.100.7:1")); w.Code != http.StatusOK {
+		t.Fatalf("another client, correct password = %d, want 200", w.Code)
+	}
+}
+
+// TestLockoutHoldsForARequestJoiningAFlight: a request that would join a
+// verification already in flight for the same client and credential is
+// still refused once the client is locked out; it does not wait for, and
+// get, the flight's answer. See audit/02-password-cache-bypasses-lockout.md.
+func TestLockoutHoldsForARequestJoiningAFlight(t *testing.T) {
+	g := newViewGate(PasswordLimits{
+		Concurrency:     2,
+		PerClientTarget: limit.Rate{Every: time.Hour, Burst: 3},
+	}, []byte("k"))
+	hash, err := store.HashPassword("letmein")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, started := make(chan struct{}), make(chan struct{})
+	prev := verifyPassword
+	verifyPassword = func(hash, pw string) bool {
+		if pw == "letmein" {
+			close(started)
+			<-release
+		}
+		return prev(hash, pw)
+	}
+	t.Cleanup(func() { verifyPassword = prev })
+
+	const client = "192.0.2.1:1"
+	leader := make(chan module.ViewAccess, 1)
+	go func() {
+		res, _ := g.check(context.Background(), basicReq("locked", "letmein", client), hash)
+		leader <- res
+	}()
+	<-started
+	// The leader's reservation and two failures empty the per-artifact
+	// budget of 3.
+	for i := 0; i < 2; i++ {
+		if res, _ := g.check(context.Background(), basicReq("locked", "wrong", client), hash); res != module.ViewNeedPassword {
+			t.Fatalf("wrong guess %d = %v, want ViewNeedPassword", i, res)
+		}
+	}
+	if res, _ := g.check(context.Background(), basicReq("locked", "wrong", client), hash); res != module.ViewThrottled {
+		t.Fatalf("setup: client not locked out (%v)", res)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if res, _ := g.check(ctx, basicReq("locked", "letmein", client), hash); res != module.ViewThrottled {
+		t.Errorf("locked-out client joining a flight = %v, want ViewThrottled", res)
+	}
+	close(release)
+	if res := <-leader; res != module.ViewOK {
+		t.Fatalf("the flight begun before the lockout = %v, want ViewOK", res)
 	}
 }

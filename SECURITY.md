@@ -540,7 +540,10 @@ Notes on the limits:
   the client that sent it (an HMAC of the client, the stored hash and the
   password under a per-process key) until it goes unused for 10 minutes, so
   one viewer's password does not answer another client's guesses. A client that keeps failing is refused before
-  hashing, but a viewer with no recent failures is always verified, so other
+  hashing, and while it is refused every password it sends gets `429`, a
+  remembered one or one already being checked included, since a guesser can
+  share a viewer's client key (one NAT address, or a proxy not listed in
+  `--trusted-proxy`). A viewer with no recent failures is always verified, so a viewer with no recent failures is always verified, so other
   clients' guesses cannot lock it out. Only completed failures count; a
   client's own attempt still being checked does not. A client may have at
   most two checks (or publish-time password hashes) waiting for or running in

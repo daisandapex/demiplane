@@ -1,6 +1,6 @@
 # 02. A locked-out client still gets an answer for the correct password
 
-**Status: Fixed** in `badd483`. The client key is part of the remembered-credential HMAC (the first half of the smallest fix). A guesser that shares the viewer's client key can still be answered from the cache. Test: `internal/server/viewauth_test.go`, `TestThrottledClientGetsNoAnswerFromVerifiedCache`, outside the `audit` tag.
+**Status: Fixed** in `fix(server): key the verified-password cache by client` and `fix(server): refuse a locked-out client before the password cache`. The client key is part of the remembered-credential HMAC, and a client the budgets lock out gets `429` for every password attempt before the remembered credentials or an in-flight verification are consulted, so a guesser sharing the viewer's client key learns nothing from either. There is no view cookie; a viewer that shares the locked-out client key is refused like the guesser until the budget refills. Tests: `internal/server/viewauth_test.go`, `TestThrottledClientGetsNoAnswerFromVerifiedCache`, `TestLockoutHoldsForASharedClientsRememberedPassword` and `TestLockoutHoldsForARequestJoiningAFlight`, outside the `audit` tag.
 
 **Severity: Medium.** It removes the online-guessing bound on a
 password-protected page that someone is currently reading: no token is

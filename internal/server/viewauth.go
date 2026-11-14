@@ -29,7 +29,9 @@ import (
 //     never has to win a check during a flood. A new password changes the
 //     hash and so the key. The client is in the key so that one viewer's
 //     verified password cannot answer another client's guesses past that
-//     client's own failure budget.
+//     client's own failure budget. A client the budgets lock out (2.) gets
+//     429 even for a remembered credential or one already being verified,
+//     so a guesser sharing a viewer's client key learns nothing either.
 //  2. Only failures spend rate budget. Each client has a budget of its own
 //     and one per artifact; a KDF run reserves a token from both, refunded
 //     when the password is correct, and a client whose budget is empty gets
@@ -242,6 +244,13 @@ func (g *viewGate) check(ctx context.Context, r *http.Request, hash string) (res
 	}
 	now := g.now()
 	client := limit.ClientKey(r)
+	// A locked-out client gets 429 for every attempt, before the remembered
+	// credentials and in-flight verifications are consulted: either would
+	// otherwise tell a guesser sharing a viewer's client key (one NAT
+	// address, or a proxy not in --trusted-proxy) which guess is right.
+	if locked, w := g.lockedOut(client, hash); locked {
+		return module.ViewThrottled, w
+	}
 	ck := g.credKey(client, hash, pass)
 	if g.remembered(ck, now) {
 		return module.ViewOK, 0
@@ -284,15 +293,33 @@ type kdfFlight struct {
 	wait time.Duration
 }
 
-// verify is check's verification, budgets and KDF, for one flight.
-func (g *viewGate) verify(ctx context.Context, hash, pass string, ck [32]byte, client string, now time.Time) (module.ViewAccess, time.Duration) {
+// lockedOut reports whether the budgets refuse client a password attempt on
+// the artifact with hash, without charging any: a shared failure budget is
+// empty and the client failed recently, or one of its own budgets is empty.
+// wait is the Retry-After hint.
+func (g *viewGate) lockedOut(client, hash string) (bool, time.Duration) {
 	clientTarget := client + "\x00" + hash
 	// Shared failure budgets refuse only clients with recent completed
 	// failures; an attempt still in flight is not one.
 	if empty, w := g.target.Empty(hash); empty && g.failedClientTarget.Spent(clientTarget) {
-		return module.ViewThrottled, w
+		return true, w
 	}
 	if empty, w := g.global.Empty(""); empty && (g.failedClient.Spent(client) || g.failedClientTarget.Spent(clientTarget)) {
+		return true, w
+	}
+	if empty, w := g.client.Empty(client); empty {
+		return true, w
+	}
+	if empty, w := g.clientTarget.Empty(clientTarget); empty {
+		return true, w
+	}
+	return false, 0
+}
+
+// verify is check's verification, budgets and KDF, for one flight.
+func (g *viewGate) verify(ctx context.Context, hash, pass string, ck [32]byte, client string, now time.Time) (module.ViewAccess, time.Duration) {
+	clientTarget := client + "\x00" + hash
+	if locked, w := g.lockedOut(client, hash); locked {
 		return module.ViewThrottled, w
 	}
 	// The client's own budgets are reserved before hashing, so its concurrent
