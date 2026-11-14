@@ -250,24 +250,67 @@ func FuzzHostPolicy(f *testing.F) {
 	})
 }
 
-// FuzzValidBearer checks the bearer comparison against its plain meaning:
-// the scheme matches case-insensitively and the token exactly, after the
-// surrounding space HTTP allows.
+// FuzzValidBearer checks the bearer comparison by stated properties, not by
+// restating the implementation. For a configured token want (never empty,
+// as requireAuth skips the check when no token is set, and with no
+// surrounding white space, as a token is one word):
+//
+//   - "Bearer " in any letter case, then want, with any spaces before or
+//     after it, is accepted;
+//   - any other token, including one that only extends or shortens want, is
+//     refused;
+//   - an empty token, with or without spaces, is refused;
+//   - the scheme without its space, directly followed by want, is refused;
+//   - want with bytes before or after it other than surrounding white space
+//     is refused;
+//   - another scheme carrying want is refused;
+//   - and for an arbitrary header, acceptance implies the header starts with
+//     the scheme and a space and contains want.
 func FuzzValidBearer(f *testing.F) {
 	key := []byte("0123456789abcdef0123456789abcdef")
-	for _, s := range [][2]string{
-		{"Bearer tok", "tok"}, {"bearer tok", "tok"}, {"BEARER  tok ", "tok"},
-		{"Bearer", "tok"}, {"Bearer ", ""}, {"Basic tok", "tok"}, {"Bearer tok2", "tok"},
-		{"Bearertok", "tok"}, {"Bearer to", "tok"},
-	} {
-		f.Add(s[0], s[1])
-	}
-	f.Fuzz(func(t *testing.T, header, want string) {
-		got := validBearer(header, want, key)
-		exp := len(header) > len("bearer ") && strings.EqualFold(header[:7], "bearer ") &&
-			strings.TrimSpace(header[7:]) == want
-		if got != exp {
-			t.Fatalf("validBearer(%q, %q) = %v, want %v", header, want, got, exp)
+	f.Add("tok", "tok2", "x", uint8(0), uint8(0), uint8(0), "Bearer tok")
+	f.Add("tok", "to", " x", uint8(0x3f), uint8(2), uint8(1), "bearer tok")
+	f.Add("tok", "", "\t", uint8(0x15), uint8(1), uint8(3), "BEARER  tok ")
+	f.Add("0123", " 0123 ", "0", uint8(0x2a), uint8(0), uint8(0), "Bearertok")
+	f.Add("tok", "TOK", "\x00", uint8(1), uint8(0), uint8(0), "Basic tok")
+	f.Fuzz(func(t *testing.T, want, other, extra string, caseMask, lead, trail uint8, header string) {
+		if want == "" || strings.TrimSpace(want) != want {
+			return
+		}
+		var scheme strings.Builder
+		for i, c := range "bearer" {
+			if caseMask>>i&1 == 1 {
+				c -= 'a' - 'A'
+			}
+			scheme.WriteRune(c)
+		}
+		pre := strings.Repeat(" ", int(lead%4))
+		post := strings.Repeat(" ", int(trail%4))
+		check := func(h string, ok bool) {
+			t.Helper()
+			if got := validBearer(h, want, key); got != ok {
+				t.Fatalf("validBearer(%q, %q) = %v, want %v", h, want, got, ok)
+			}
+		}
+		check(scheme.String()+" "+pre+want+post, true)
+		if strings.TrimSpace(other) != want {
+			check(scheme.String()+" "+other, false)
+			check("Bearer "+other, false)
+		}
+		check(scheme.String()+" "+pre+post, false)
+		check(scheme.String(), false)
+		check(scheme.String()+want, false)
+		if strings.TrimSpace(extra) != "" {
+			check("Bearer "+want+extra, false)
+			check("Bearer "+extra+want, false)
+		}
+		check("Basic "+want, false)
+		check("Token "+want, false)
+		if validBearer(header, want, key) {
+			if len(header) < len("bearer ") || !strings.EqualFold(header[:len("bearer ")], "bearer ") ||
+				!strings.Contains(header, want) {
+				t.Fatalf("validBearer(%q, %q) accepted a header without the scheme and token", header, want)
+			}
 		}
 	})
 }
@@ -409,6 +452,11 @@ func checkSiteTree(t *testing.T, parent, sitesRoot string, before map[string]fs.
 // not. Each input gets a fresh temporary parent directory holding the store,
 // so the sites root is a subdirectory and the whole parent can be walked
 // for escapes.
+//
+// The walk sees new paths and changed file types, not new bytes in a file
+// that was already there, so two sentinel files with known bytes are placed
+// first: one beside the sites root and one inside another, committed site.
+// Both must read back unchanged after every extraction.
 func FuzzSiteArchive(f *testing.F) {
 	ok := map[string]string{"index.html": "<p>x</p>", "css/a.css": "a{}", "a/b/c.txt": "c"}
 	evil := map[string]string{"../escape": "x", "/abs": "x", `a\..\b`: "x", "a/../../b": "x", ".git/config": "x"}
@@ -419,7 +467,11 @@ func FuzzSiteArchive(f *testing.F) {
 	f.Add(tarSeq(f, [][2]string{{"ok.txt", "x"}, {"../../escape", "y"}}, false), false)
 	f.Add([]byte("PK\x05\x06"+strings.Repeat("\x00", 18)), true)
 	f.Add(bytes.Repeat([]byte{0}, 1024), false)
+	overwrite := [][2]string{{"../other/index.html", "overwritten"}, {"../../sentinel", "overwritten"}}
+	f.Add(tarSeq(f, overwrite, false), false)
+	f.Add(zipOf(f, map[string]string{overwrite[0][0]: "overwritten", overwrite[1][0]: "overwritten"}), true)
 
+	const sentinel = "sentinel bytes, unchanged by any extraction\n"
 	prev := siteDecompressBudget
 	siteDecompressBudget = fuzzSiteBudget
 	f.Cleanup(func() { siteDecompressBudget = prev })
@@ -431,6 +483,28 @@ func FuzzSiteArchive(f *testing.F) {
 		}
 		defer st.Close()
 		sitesRoot := filepath.Join(st.Root(), "data", "sites")
+		other, err := st.NewSiteWriter("other")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := other.AddFile("index.html", strings.NewReader(sentinel)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := other.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		sentinels := []string{
+			filepath.Join(filepath.Dir(sitesRoot), "sentinel"),
+			filepath.Join(sitesRoot, "other", "index.html"),
+		}
+		if err := os.WriteFile(sentinels[0], []byte(sentinel), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range sentinels {
+			if b, err := os.ReadFile(p); err != nil || string(b) != sentinel {
+				t.Fatalf("sentinel %q not in place: %q, %v", p, b, err)
+			}
+		}
 		sw, err := st.NewSiteWriter("fuzzsite")
 		if err != nil {
 			t.Fatal(err)
@@ -451,6 +525,11 @@ func FuzzSiteArchive(f *testing.F) {
 		// before any commit; committing would only add database work per
 		// input (an SQLite commit each) without reaching more parsing.
 		checkSiteTree(t, parent, sitesRoot, before)
+		for _, p := range sentinels {
+			if b, rerr := os.ReadFile(p); rerr != nil || string(b) != sentinel {
+				t.Errorf("extraction changed %q: now %q, %v", p, b, rerr)
+			}
+		}
 		if err == nil && sw.Files() > maxSiteEntries {
 			t.Fatalf("%d files past the entry cap", sw.Files())
 		}
@@ -470,6 +549,20 @@ var publishRefusals = map[int]bool{
 	http.StatusRequestHeaderFieldsTooLarge: true,
 }
 
+// publishMustAccept are ordinary, authorised publishes FuzzPublish requires
+// to succeed: plain text under a generated, a named and a private slug, a
+// TTL, a rendered page, a series member, a filename and a multipart upload.
+var publishMustAccept = []struct{ query, ctype, body string }{
+	{"", "text/plain", "hello"},
+	{"slug=named", "text/plain", "hello"},
+	{"private=1", "text/plain", "hello"},
+	{"ttl=1h&slug=short", "text/plain", "hello"},
+	{"render=md&slug=doc", "text/markdown", "# Title\n\nbody\n"},
+	{"series=notes&slug=notes-1", "text/plain", "hello"},
+	{"filename=a.txt&slug=file", "text/plain", "hello"},
+	{"slug=upload", "multipart/form-data; boundary=x", "--x\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.html\"\r\n\r\nhi\r\n--x--\r\n"},
+}
+
 // FuzzPublish drives POST /publish with hostile query strings, content types
 // and bodies through the combined handler, in process, against a fresh store
 // per input (removed with the input's temporary directory, so the disk does
@@ -485,6 +578,11 @@ var publishRefusals = map[int]bool{
 // (?render=) page, a site archive, a multipart upload (the stored file is
 // one part) and a password-protected artifact (the readback needs the
 // password exchange).
+//
+// A request that names a slug and is accepted is published under exactly
+// that slug. The requests in publishMustAccept are also seeds and must be
+// accepted with 201, so a server that refuses every publish fails the seed
+// corpus instead of passing as "refused with an allowed status".
 func FuzzPublish(f *testing.F) {
 	for _, q := range []string{
 		"", "slug=a", "slug=../x", "slug=publish", "slug=a%2Fb", "private=1", "private=1&slug=a",
@@ -498,6 +596,9 @@ func FuzzPublish(f *testing.F) {
 	f.Add("slug=b", "multipart/form-data; boundary=x", []byte("--x\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.html\"\r\n\r\nhi\r\n--x--\r\n"), true)
 	f.Add("slug=c", "text/plain", []byte("x"), false)
 	f.Add("slug=d", "", []byte{}, true)
+	for _, p := range publishMustAccept {
+		f.Add(p.query, p.ctype, []byte(p.body), true)
+	}
 
 	restore := store.SetPBKDF2IterForTest(2)
 	f.Cleanup(restore)
@@ -533,6 +634,11 @@ func FuzzPublish(f *testing.F) {
 			return
 		}
 		if w.Code != http.StatusCreated {
+			for _, p := range publishMustAccept {
+				if p.query == query && p.ctype == ctype && p.body == string(body) {
+					t.Fatalf("known-good publish %q refused with %d: %s", query, w.Code, w.Body.String())
+				}
+			}
 			if !publishRefusals[w.Code] {
 				t.Fatalf("publish %q answered %d: %s", query, w.Code, w.Body.String())
 			}
@@ -550,10 +656,8 @@ func FuzzPublish(f *testing.F) {
 		if strings.Contains(slug, "/") || slug == "" || slug == "." || slug == ".." {
 			t.Fatalf("publish URL %q does not name one slug", loc)
 		}
-		if want := q.Get("slug"); want != "" && strings.TrimSpace(want) != slug {
-			if store.ValidateNamedSlug(slug) != nil {
-				t.Fatalf("published under %q, asked for %q", slug, want)
-			}
+		if want := q.Get("slug"); want != "" && slug != want {
+			t.Fatalf("published under %q, asked for %q", slug, want)
 		}
 		if q.Get("render") != "" || q.Has("password") || r.Header.Get("X-Demiplane-Password") != "" ||
 			strings.HasPrefix(strings.ToLower(strings.TrimSpace(ctype)), "multipart/") {
