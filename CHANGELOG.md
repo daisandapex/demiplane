@@ -18,6 +18,12 @@ All notable changes to demiplane are documented here. The format follows
   or later fetches 1.26.11 under the default `GOTOOLCHAIN=auto` and stops with
   an error under `GOTOOLCHAIN=local`.
 - The Docker image and CI now build with Go 1.26.11.
+- A stored view-password hash whose salt is not 16 bytes or whose key is not
+  32 bytes no longer verifies any password. Such a record could only come
+  from a damaged or foreign database, as publishing refuses it, but one with
+  an empty salt and a one-byte key (`pbkdf2-sha256$1$$00`) accepted about one
+  password in 256. Every hash demiplane has written has those lengths, so
+  existing passwords keep working, at any iteration count.
 
 ### Fixed
 

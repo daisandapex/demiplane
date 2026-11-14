@@ -121,12 +121,16 @@ func PasswordMatches(encoded, pw string) bool {
 	if err != nil || iter <= 0 {
 		return false
 	}
+	// Any count is honoured, so hashes from an earlier work factor still
+	// verify, but salt and key must be the lengths hashPassword has always
+	// written: a short key would be guessable by chance and an empty salt
+	// is no salt.
 	salt, err := base64.RawStdEncoding.DecodeString(parts[2])
-	if err != nil {
+	if err != nil || len(salt) != pbkdf2SaltLen {
 		return false
 	}
 	want, err := base64.RawStdEncoding.DecodeString(parts[3])
-	if err != nil {
+	if err != nil || len(want) != pbkdf2KeyLen {
 		return false
 	}
 	got, err := pbkdf2.Key(sha256.New, pw, salt, iter, len(want))
