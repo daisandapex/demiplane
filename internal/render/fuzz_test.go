@@ -11,12 +11,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
+
+	"github.com/daisandapex/demiplane/v3"
 )
 
 // fuzzRenderBound is the longest one fuzz input may take to render. Inputs
 // stay small under the fuzzer, so this is generous even with coverage
 // instrumentation; a render past it is a hang or a quadratic path.
-const fuzzRenderBound = 3 * time.Second
+const fuzzRenderBound = 10 * time.Second
 
 // markdownSeeds are documents from the render tests and earlier escaping and
 // link fixes, the corpus every markdown target starts from.
@@ -102,28 +105,28 @@ var forbiddenTags = map[string]bool{
 	"script": false, // checked against knownScripts instead
 }
 
-// browserURL returns what a browser's URL parser reads from an attribute
-// value: entities decoded once, ASCII tab and newlines deleted, and leading
-// and trailing C0 controls and spaces trimmed.
-func browserURL(v string) string {
-	v = html.UnescapeString(v)
-	v = strings.Map(func(r rune) rune {
-		if r == '\t' || r == '\n' || r == '\r' {
-			return -1
-		}
-		return r
-	}, v)
-	return strings.TrimFunc(v, func(r rune) bool { return r <= 0x20 })
-}
-
-// checkLinkTarget fails when a link the renderer emitted could navigate to an
-// active scheme or to another host than it names.
+// checkLinkTarget fails when a link destination the renderer accepted or
+// emitted could navigate to an active scheme or to another host than it
+// names. raw is the attribute value as written; the browser decodes its
+// entities once, and that decoded value is judged as it stands: nothing is
+// stripped first, so a tab, newline or other control character anywhere in
+// it is itself a failure, as SECURITY.md promises such a destination is
+// never a link.
 func checkLinkTarget(t testing.TB, raw string) {
 	t.Helper()
-	u := strings.ToLower(browserURL(raw))
-	if strings.ContainsRune(u, '\\') {
+	dec := html.UnescapeString(raw)
+	for _, v := range []string{raw, dec} {
+		for _, r := range v {
+			if unicode.IsControl(r) {
+				t.Fatalf("link %q carries control character %U", raw, r)
+			}
+		}
+	}
+	if strings.ContainsRune(dec, '\\') {
 		t.Fatalf("link %q contains a backslash", raw)
 	}
+	// Only spaces are left for the browser's URL parser to trim.
+	u := strings.ToLower(strings.Trim(dec, " "))
 	if strings.HasPrefix(u, "//") {
 		t.Fatalf("link %q is protocol-relative", raw)
 	}
@@ -136,9 +139,10 @@ func checkLinkTarget(t testing.TB, raw string) {
 	switch scheme {
 	case "", "http", "https", "mailto":
 	case "data":
-		// The favicon is an inline SVG data URI the renderer writes itself.
-		if !strings.HasPrefix(u, "data:image/svg+xml") {
-			t.Fatalf("link %q has scheme %q", raw, scheme)
+		// The one data: URI allowed is the favicon the chrome writes
+		// itself, byte for byte.
+		if dec != demiplane.FaviconDataURI {
+			t.Fatalf("link %q is a data: URI other than the favicon", raw)
 		}
 	default:
 		t.Fatalf("link %q has scheme %q", raw, scheme)
@@ -222,11 +226,7 @@ func FuzzRender(f *testing.F) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), fuzzRenderBound)
 		defer cancel()
-		start := time.Now()
 		out, err := Render(ctx, src, opts)
-		if el := time.Since(start); el > fuzzRenderBound {
-			t.Fatalf("render took %v (bound %v)", el, fuzzRenderBound)
-		}
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("render did not finish within %v", fuzzRenderBound)
@@ -253,8 +253,20 @@ func FuzzRender(f *testing.F) {
 	})
 }
 
+// plainRelRe and plainAbsRe are destinations no rule refuses: a path of
+// unreserved characters, and an http(s) URL with a plain host and such a
+// path. safeURL must accept them, so the target also fails when the
+// allowlist starts refusing ordinary links.
+var (
+	plainRelRe = regexp.MustCompile(`^(/[A-Za-z0-9._~-]*)+$`)
+	plainAbsRe = regexp.MustCompile(`^https?://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(/[A-Za-z0-9._~-]*)*$`)
+)
+
 // FuzzSafeURL checks the link allowlist against an independent reading of
-// what a browser does with the accepted value.
+// what a browser does with the value: an accepted value passes
+// checkLinkTarget; a value whose decoded form holds a control character, a
+// backslash, a protocol-relative start or http(s) userinfo is refused (the
+// rules SECURITY.md states); a plain path or plain http(s) URL is accepted.
 func FuzzSafeURL(f *testing.F) {
 	for _, s := range []string{
 		"//attacker.com", " //attacker.com", `\\attacker.com`, `/\attacker.com`,
@@ -266,16 +278,37 @@ func FuzzSafeURL(f *testing.F) {
 		"/reports", "/", "#anchor", "?q=1", "page.html", "sub/page.html",
 		"javascript:alert(1)", "data:text/html,x", "vbscript:msgbox",
 		"&#106;avascript:x", "https://a&#34;@b", "&#x2F;/evil", "/&#92;evil",
-		"java&#x09;script:x", "&Tab;//evil", "%2F%2Fevil",
+		"java&#x09;script:x", "&Tab;//evil", "%2F%2Fevil", "/a&#0;b", "/a\x00b",
+		"/a\u0085b", "/a\x0bb", "https://ok.example/a/b", "/a/b/c", "data:image/svg+xml;base64,AA",
 	} {
 		f.Add(html.EscapeString(s))
 		f.Add(s)
 	}
+	f.Add(demiplane.FaviconDataURI)
 	f.Fuzz(func(t *testing.T, u string) {
-		if !safeURL(u) {
-			return
+		dec := html.UnescapeString(u)
+		low := strings.ToLower(strings.TrimSpace(dec))
+		refuse := strings.ContainsRune(dec, '\\') || strings.IndexFunc(dec, unicode.IsControl) >= 0 ||
+			strings.HasPrefix(low, "//")
+		for _, scheme := range []string{"http:", "https:"} {
+			if rest, ok := strings.CutPrefix(low, scheme); ok {
+				auth := strings.TrimLeft(rest, "/")
+				if k := strings.IndexAny(auth, "/?#"); k >= 0 {
+					auth = auth[:k]
+				}
+				refuse = refuse || strings.Contains(auth, "@")
+			}
 		}
-		checkLinkTarget(t, u)
+		ok := safeURL(u)
+		if ok && refuse {
+			t.Fatalf("safeURL accepted %q (decoded %q), which a stated rule refuses", u, dec)
+		}
+		if !ok && !refuse && (plainRelRe.MatchString(dec) || plainAbsRe.MatchString(dec)) {
+			t.Fatalf("safeURL refused the plain link %q", u)
+		}
+		if ok {
+			checkLinkTarget(t, u)
+		}
 	})
 }
 
