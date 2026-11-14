@@ -420,7 +420,9 @@ func (m *Module) handleNextWait(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if m.artifactExists(next) {
-		// next passed forwardSlug, so it is a named slug (a letter or digit,
+		// next comes from the request's ?to= value, so the redirect target
+		// is request-reachable; what makes it safe is that next passed
+		// forwardSlug, so it is a named slug (a letter or digit,
 		// then letters, digits, '.', '_' or '-'): "/"+next is one path
 		// segment on this origin and can never read as "//host" or "/\host".
 		// FuzzNextRedirect checks this.
