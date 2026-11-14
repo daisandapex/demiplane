@@ -11,9 +11,12 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/daisandapex/demiplane/v3/internal/store"
@@ -687,5 +690,40 @@ func TestSiteDateValidators(t *testing.T) {
 				t.Fatalf("old date: %d %q, want 200 with whole new version", resp.Code, resp.Body.String())
 			}
 		})
+	}
+}
+
+// TestSiteExtractErrorHidesFilesystemPaths: an extraction error that comes
+// from the store's filesystem (a full disk, an I/O error, a path the
+// filesystem refuses) is a server fault: it is answered 500 "internal error"
+// and logged, never echoed, since its text holds the absolute store and
+// staging paths. An error in the archive itself stays a 400 that says what
+// is wrong. See audit/12-site-publish-error-echoes-store-path.md.
+func TestSiteExtractErrorHidesFilesystemPaths(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	s := New(st, Config{})
+	const storePath = "/srv/demiplane/data/sites/.tmp-s-123"
+	for _, tc := range []struct {
+		name string
+		err  error
+		code int
+	}{
+		{"write", fmt.Errorf("write site file %q: %w", "a", &fs.PathError{Op: "write", Path: storePath + "/a", Err: syscall.ENOSPC}), http.StatusInternalServerError},
+		{"stat", fmt.Errorf("stat site dir: %w", &fs.PathError{Op: "lstat", Path: storePath + "/a", Err: syscall.ENAMETOOLONG}), http.StatusInternalServerError},
+		{"rename", fmt.Errorf("commit site file %q: %w", "a", &os.LinkError{Op: "rename", Old: storePath + "/.w-1", New: storePath + "/a", Err: syscall.EIO}), http.StatusInternalServerError},
+		{"truncated tar", fmt.Errorf("read tar: %w", io.ErrUnexpectedEOF), http.StatusBadRequest},
+	} {
+		rec := httptest.NewRecorder()
+		s.writeSiteExtractError(rec, tc.err)
+		if rec.Code != tc.code {
+			t.Errorf("%s: status %d, want %d", tc.name, rec.Code, tc.code)
+		}
+		if strings.Contains(rec.Body.String(), storePath) {
+			t.Errorf("%s: body names a store path: %q", tc.name, rec.Body.String())
+		}
 	}
 }

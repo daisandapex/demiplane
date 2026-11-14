@@ -8,6 +8,11 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- A site publish that fails on the store's filesystem (a full disk, an I/O
+  error, a path the filesystem refuses) answers `500 internal error` and logs
+  the cause. It answered `400 invalid archive:` with the error text, which
+  named the store's absolute path and the staging directory, and reported a
+  server fault as the client's.
 - The MCP `publish` tool refuses a `path` outside the publish root with one
   message whatever is there. It ran `lstat` on the path before the root check
   and reported the result, so a model could learn whether any path the

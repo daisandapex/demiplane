@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -127,6 +129,13 @@ func (s *Server) handleSitePublish(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, bodyTimeoutMessage, http.StatusRequestTimeout)
 			return
 		}
+		if isFilesystemError(err) {
+			// Writing the scratch file failed: a server fault, and its text
+			// holds the store path.
+			log.Printf("site publish: scratch write: %s", logsafe.Err(err))
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 		http.Error(w, "read upload: "+err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -212,9 +221,21 @@ func siteQuotaMessage(err error) string {
 	return quotaMessage
 }
 
+// isFilesystemError reports whether err carries an error from a file
+// operation (os reports each as a *fs.PathError, or a *os.LinkError for a
+// rename or link). Such an error is the server's, not the archive's, and its
+// text names paths in the store. A network read error is neither, so a
+// client that goes away mid-upload is not counted as one.
+func isFilesystemError(err error) bool {
+	var pe *fs.PathError
+	var le *os.LinkError
+	return errors.As(err, &pe) || errors.As(err, &le)
+}
+
 // writeSiteExtractError maps an extraction failure to the right status: the
-// archive-shape caps to 413, a traversal / bad-path (InputError) to 400, and an
-// otherwise-malformed archive to 400.
+// archive-shape caps to 413, a traversal / bad-path (InputError) to 400, a
+// filesystem error in the store to 500 (logged, never echoed: its text holds
+// the store's paths), and an otherwise-malformed archive to 400.
 func (s *Server) writeSiteExtractError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errTooManyFiles), errors.Is(err, errTarHeaderTooLarge):
@@ -225,6 +246,9 @@ func (s *Server) writeSiteExtractError(w http.ResponseWriter, err error) {
 		http.Error(w, siteQuotaMessage(err), http.StatusInsufficientStorage)
 	case isClientError(err):
 		http.Error(w, err.Error(), http.StatusBadRequest)
+	case isFilesystemError(err):
+		log.Printf("site publish: extract: %s", logsafe.Err(err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
 	default:
 		http.Error(w, "invalid archive: "+err.Error(), http.StatusBadRequest)
 	}
