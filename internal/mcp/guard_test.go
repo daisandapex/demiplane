@@ -277,3 +277,65 @@ func TestLoadTokenFileIdentityFromDescriptor(t *testing.T) {
 		t.Fatalf("hardlink to the opened token file was published (err %+v)", rerr)
 	}
 }
+
+// TestPublishPathOutsideRootAnswersUniformly: a path outside the publish
+// root must be refused the same way whatever is there. Calling os.Lstat on
+// the model-chosen path and reporting its result before the root check gave
+// one of three answers (the lstat error, "must be a regular file", or
+// "outside the publish root"), which told a model that was told to probe
+// whether any path the process can stat exists and whether it is a file.
+// See audit/09-mcp-publish-path-probes-outside-root.md.
+func TestPublishPathOutsideRootAnswersUniformly(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	file := filepath.Join(outside, "exists.txt")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, f := newGuardClient(t, "")
+	setPublishRoot(t, c, root)
+
+	answers := map[string]string{}
+	for name, p := range map[string]string{
+		"a file":      file,
+		"a directory": outside,
+		"nothing":     filepath.Join(outside, "missing.txt"),
+	} {
+		rerr, _ := publishPathCall(t, c, f, p)
+		if rerr == nil {
+			t.Fatalf("%s outside the publish root was accepted", name)
+		}
+		answers[name] = rerr.Message
+	}
+	if answers["a file"] != answers["a directory"] || answers["a file"] != answers["nothing"] {
+		t.Errorf("refusals for paths outside the publish root differ by what is there:\n  a file:      %q\n  a directory: %q\n  nothing:     %q",
+			answers["a file"], answers["a directory"], answers["nothing"])
+	}
+}
+
+// TestPublishPathRootThroughSymlink: a publish root named through a symlink
+// (a working directory reached by one, /tmp on macOS) still accepts a file
+// written through that name, though the outside-the-root check now reads
+// the path text before the filesystem; and a path outside both names is
+// still refused.
+func TestPublishPathRootThroughSymlink(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "root")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "page.html"), []byte("INSIDE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, f := newGuardClient(t, "")
+	setPublishRoot(t, c, link)
+	for _, p := range []string{filepath.Join(link, "page.html"), filepath.Join(real, "page.html")} {
+		f.lastBody = ""
+		if rerr, body := publishPathCall(t, c, f, p); rerr != nil || body != "INSIDE" {
+			t.Errorf("%s: err=%+v body=%q, want published", p, rerr, body)
+		}
+	}
+	if rerr, _ := publishPathCall(t, c, f, filepath.Join(filepath.Dir(link), "elsewhere")); rerr == nil || rerr.Message != "path is outside the publish root" {
+		t.Errorf("path beside the root: %+v, want the outside-the-root refusal", rerr)
+	}
+}

@@ -8,6 +8,10 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- The MCP `publish` tool refuses a `path` outside the publish root with one
+  message whatever is there. It ran `lstat` on the path before the root check
+  and reported the result, so a model could learn whether any path the
+  process can see exists and whether it is a regular file.
 - `DEMIPLANE_TOKEN` set but empty or blank is an error, as an empty token
   file already was, for `serve` and the client commands alike. It meant no
   token, so a secret that did not resolve

@@ -52,6 +52,7 @@ type Client struct {
 	// path that named it cannot move it. nil disables publishing by `path`.
 	publishRoot     *os.Root
 	publishRootPath string
+	publishRootAbs  string // the root as named, absolute, symlinks kept
 }
 
 // tokenFileOpened, when set by a test, runs between LoadTokenFile's open and
@@ -117,6 +118,14 @@ func (c *Client) SetPublishRoot(dir string) error {
 	}
 	c.publishRoot = r
 	c.publishRootPath = resolved
+	// The root as named, made absolute but with its symlinks kept: a path
+	// the model gives relative to a working directory reached through a
+	// symlink is under this form, not the resolved one (openPublishPath).
+	if abs, err := filepath.Abs(dir); err == nil {
+		c.publishRootAbs = abs
+	} else {
+		c.publishRootAbs = resolved
+	}
 	return nil
 }
 

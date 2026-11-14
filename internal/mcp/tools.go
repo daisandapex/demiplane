@@ -252,6 +252,10 @@ func (c *cappedFile) Close() error {
 // the token came from a file or from the environment:
 //
 //   - A client with no publish root refuses `path` outright.
+//   - A path that is not, as written (made absolute and cleaned), under the
+//     publish root is refused before anything looks at the filesystem, and
+//     with the same message as one that resolves outside it, so the answer
+//     tells nothing about what is there.
 //   - The given path must not itself be a symlink or special file (Lstat).
 //   - The symlink-resolved path must lie under the publish root, and the file is
 //     opened through the os.Root opened on that directory at startup, so neither
@@ -276,6 +280,11 @@ func openPublishPath(c *Client, p string) (*cappedFile, *rpcError) {
 	if c.publishRoot == nil {
 		return nil, refuse("publishing by `path` is disabled: no publish root is configured (use `content`, or start `demiplane mcp` with --publish-root)")
 	}
+	const outside = "path is outside the publish root"
+	abs, err := filepath.Abs(p)
+	if err != nil || !(underDir(c.publishRootPath, abs) || underDir(c.publishRootAbs, abs)) {
+		return nil, refuse(outside)
+	}
 	fi, err := os.Lstat(p)
 	if err != nil {
 		return nil, refuse("read path: %v", err)
@@ -283,17 +292,13 @@ func openPublishPath(c *Client, p string) (*cappedFile, *rpcError) {
 	if !fi.Mode().IsRegular() {
 		return nil, refuse("path must be a regular file (symlinks and special files are refused)")
 	}
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return nil, refuse("resolve path: %v", err)
-	}
 	resolved, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		return nil, refuse("resolve path: %v", err)
 	}
 	rel, err := filepath.Rel(c.publishRootPath, resolved)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return nil, refuse("path is outside the publish root")
+	if err != nil || !underDir(c.publishRootPath, resolved) {
+		return nil, refuse(outside)
 	}
 
 	// Opened non-blocking: the file at rel can be swapped for a FIFO after the
@@ -330,6 +335,16 @@ func openPublishPath(c *Client, p string) (*cappedFile, *rpcError) {
 	}
 	keep = true
 	return &cappedFile{f: f, r: f, left: maxPublishPathBytes}, nil
+}
+
+// underDir reports whether the clean absolute path p is dir or lies under
+// it, by the text of the paths alone.
+func underDir(dir, p string) bool {
+	if dir == "" {
+		return false
+	}
+	rel, err := filepath.Rel(dir, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // isTokenFile reports whether fi is the token file recorded at startup or the

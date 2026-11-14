@@ -316,7 +316,11 @@ inherits the posture above and was reviewed adversarially before release.
   `DEMIPLANE_PUBLISH_ROOT`, default the working directory; a working directory of
   `/` disables `path` publishing unless `/` is set explicitly), and is opened
   through that root, which is opened once at startup, so neither a raced-in
-  symlink nor a later replacement of the root directory can move the read. The file is opened
+  symlink nor a later replacement of the root directory can move the read. A
+  `path` whose text (made absolute and cleaned) is not under the root is
+  refused before the filesystem is consulted, with the same message as one
+  that resolves outside it, so the refusal does not say whether anything
+  exists there. The file is opened
   non-blocking, so a FIFO raced in after the checks cannot stall the server. It
   refuses symlinks and
   non-regular files, anything on the `/proc`, `/sys` or `/dev` filesystems (so the
