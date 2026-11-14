@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -407,7 +408,7 @@ func zipOf(t testing.TB, entries map[string]string) []byte {
 }
 
 // treeOf records every path under dir with its file type.
-func treeOf(t *testing.T, dir string) map[string]fs.FileMode {
+func treeOf(t testing.TB, dir string) map[string]fs.FileMode {
 	t.Helper()
 	tree := map[string]fs.FileMode{}
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
@@ -464,18 +465,93 @@ func checkSiteTree(t *testing.T, parent, sitesRoot string, before map[string]fs.
 	}
 }
 
+// siteFixture is the store FuzzSiteArchive extracts into: a store in its
+// own parent directory, so the sites root is a subdirectory and the whole
+// parent can be walked for escapes, holding a committed site "other" and two
+// sentinel files with known bytes, one beside the sites root and one inside
+// "other". tree is the parent's tree once that is in place.
+type siteFixture struct {
+	parent    string
+	sitesRoot string
+	st        *store.Store
+	sentinels []string
+	tree      map[string]fs.FileMode
+}
+
+const siteSentinel = "sentinel bytes, unchanged by any extraction\n"
+
+// newSiteFixture builds a siteFixture in a new directory under base.
+func newSiteFixture(t testing.TB, base string) *siteFixture {
+	t.Helper()
+	parent, err := os.MkdirTemp(base, "site")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(parent, "store"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fx := &siteFixture{parent: parent, sitesRoot: filepath.Join(st.Root(), "data", "sites"), st: st}
+	other, err := st.NewSiteWriter("other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.AddFile("index.html", strings.NewReader(siteSentinel)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	fx.sentinels = []string{
+		filepath.Join(filepath.Dir(fx.sitesRoot), "sentinel"),
+		filepath.Join(fx.sitesRoot, "other", "index.html"),
+	}
+	if err := os.WriteFile(fx.sentinels[0], []byte(siteSentinel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if bad := fx.changedSentinel(); bad != "" {
+		t.Fatalf("sentinel %q not in place", bad)
+	}
+	fx.tree = treeOf(t, parent)
+	return fx
+}
+
+// changedSentinel returns the first sentinel that no longer reads back its
+// bytes, or "".
+func (fx *siteFixture) changedSentinel() string {
+	for _, p := range fx.sentinels {
+		if b, err := os.ReadFile(p); err != nil || string(b) != siteSentinel {
+			return p
+		}
+	}
+	return ""
+}
+
+// pristine reports whether the fixture is as newSiteFixture left it: the
+// same tree, file types included, and both sentinels intact.
+func (fx *siteFixture) pristine(t testing.TB) bool {
+	return maps.Equal(treeOf(t, fx.parent), fx.tree) && fx.changedSentinel() == ""
+}
+
 // FuzzSiteArchive extracts hostile tar and zip archives into a real store
 // and checks the result: every extracted file is a regular file inside the
 // sites root, nothing is created anywhere else, the decompressed total holds
 // to the budget and the entry cap holds, whether extraction succeeded or
-// not. Each input gets a fresh temporary parent directory holding the store,
-// so the sites root is a subdirectory and the whole parent can be walked
+// not. The store is a siteFixture, so the whole parent directory is walked
 // for escapes.
 //
 // The walk sees new paths and changed file types, not new bytes in a file
-// that was already there, so two sentinel files with known bytes are placed
-// first: one beside the sites root and one inside another, committed site.
-// Both must read back unchanged after every extraction.
+// that was already there, so the fixture's two sentinel files must read back
+// unchanged after every extraction.
+//
+// Opening a store costs about a hundred times the extraction, and the fuzzer
+// minimises each new interesting input by running it thousands of times, so
+// a fresh store per input left a timed run stuck minimising one input for
+// the whole -fuzzminimizetime. Each worker process therefore keeps its
+// fixture across inputs: the extraction is staged and aborted, which leaves
+// the fixture as it was, and an input that leaves it otherwise (a failed
+// one) gets a new fixture built for the next input, so every input starts
+// from the same tree.
 func FuzzSiteArchive(f *testing.F) {
 	ok := map[string]string{"index.html": "<p>x</p>", "css/a.css": "a{}", "a/b/c.txt": "c"}
 	evil := map[string]string{"../escape": "x", "/abs": "x", `a\..\b`: "x", "a/../../b": "x", ".git/config": "x"}
@@ -490,46 +566,33 @@ func FuzzSiteArchive(f *testing.F) {
 	f.Add(tarSeq(f, overwrite, false), false)
 	f.Add(zipOf(f, map[string]string{overwrite[0][0]: "overwritten", overwrite[1][0]: "overwritten"}), true)
 
-	const sentinel = "sentinel bytes, unchanged by any extraction\n"
 	prev := siteDecompressBudget
 	siteDecompressBudget = fuzzSiteBudget
 	f.Cleanup(func() { siteDecompressBudget = prev })
+	base := f.TempDir()
+	var fx *siteFixture
+	f.Cleanup(func() {
+		if fx != nil {
+			fx.st.Close()
+		}
+	})
 	f.Fuzz(func(t *testing.T, archive []byte, isZip bool) {
-		parent := t.TempDir()
-		st, err := store.Open(filepath.Join(parent, "store"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer st.Close()
-		sitesRoot := filepath.Join(st.Root(), "data", "sites")
-		other, err := st.NewSiteWriter("other")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := other.AddFile("index.html", strings.NewReader(sentinel)); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := other.Commit(); err != nil {
-			t.Fatal(err)
-		}
-		sentinels := []string{
-			filepath.Join(filepath.Dir(sitesRoot), "sentinel"),
-			filepath.Join(sitesRoot, "other", "index.html"),
-		}
-		if err := os.WriteFile(sentinels[0], []byte(sentinel), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		for _, p := range sentinels {
-			if b, err := os.ReadFile(p); err != nil || string(b) != sentinel {
-				t.Fatalf("sentinel %q not in place: %q, %v", p, b, err)
+		if fx == nil || !fx.pristine(t) {
+			if fx != nil {
+				fx.st.Close()
+				if err := os.RemoveAll(fx.parent); err != nil {
+					t.Fatal(err)
+				}
 			}
+			fx = nil
+			fx = newSiteFixture(t, base)
 		}
-		sw, err := st.NewSiteWriter("fuzzsite")
+		sw, err := fx.st.NewSiteWriter("fuzzsite")
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer sw.Abort()
-		before := treeOf(t, parent)
+		before := treeOf(t, fx.parent)
 		start := time.Now()
 		ra := bytes.NewReader(archive)
 		if isZip {
@@ -543,11 +606,9 @@ func FuzzSiteArchive(f *testing.F) {
 		// The staged tree lives under the sites root, so it is checked
 		// before any commit; committing would only add database work per
 		// input (an SQLite commit each) without reaching more parsing.
-		checkSiteTree(t, parent, sitesRoot, before)
-		for _, p := range sentinels {
-			if b, rerr := os.ReadFile(p); rerr != nil || string(b) != sentinel {
-				t.Errorf("extraction changed %q: now %q, %v", p, b, rerr)
-			}
+		checkSiteTree(t, fx.parent, fx.sitesRoot, before)
+		if p := fx.changedSentinel(); p != "" {
+			t.Errorf("extraction changed %q", p)
 		}
 		if err == nil && sw.Files() > maxSiteEntries {
 			t.Fatalf("%d files past the entry cap", sw.Files())
