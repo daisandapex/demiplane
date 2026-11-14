@@ -462,6 +462,10 @@ func (s *Store) stampSchemaVersion() error {
 	case v > storeSchemaVersion:
 		return fmt.Errorf("this store was written by a newer demiplane (schema %d, this binary knows %d); upgrade this binary", v, storeSchemaVersion)
 	case v < storeSchemaVersion:
+		// The only value formatted in is storeSchemaVersion, a compile-time
+		// integer constant; nothing from a request or the store reaches it.
+		// SQLite cannot bind a PRAGMA argument, so it is formatted in.
+		// nosemgrep: go.lang.security.audit.database.string-formatted-query.string-formatted-query
 		if _, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, storeSchemaVersion)); err != nil {
 			return fmt.Errorf("record schema version: %w", err)
 		}
