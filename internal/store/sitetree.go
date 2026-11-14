@@ -195,37 +195,77 @@ func (s *Store) removeIn(d *os.Root, name, path string, r *treeRemoval, errs *[]
 	r.entries++
 }
 
-// quarantineSite records that the live site tree name could not be measured
-// and logs it the first time. What was measured stays counted; the store
-// opens and recounts without the rest rather than failing, and the site is
-// served as before. A later measurement that succeeds lifts it.
-func (s *Store) quarantineSite(name string, err error) {
+// siteCharge is what a site tree under sites/ that could not be measured in
+// full is charged: the bytes of the regular files measured and the entries
+// counted, its top directory included.
+type siteCharge struct{ size, entries int64 }
+
+// logQuarantine logs, the first time, that the live site tree name could not
+// be measured. What was measured stays counted (siteStats records it); the
+// store opens and recounts without the rest rather than failing, and the
+// site is served as before. A later measurement that succeeds lifts it.
+func (s *Store) logQuarantine(name string, err error) {
 	s.quota.mu.Lock()
-	_, seen := s.quota.quarantined[name]
-	if s.quota.quarantined == nil {
-		s.quota.quarantined = make(map[string]struct{})
-	}
-	s.quota.quarantined[name] = struct{}{}
+	_, seen := s.quota.partial[name]
 	s.quota.mu.Unlock()
 	if !seen {
 		log.Printf("store: could not measure site %q, quarantined: its usage is counted only in part: %s", name, logsafe.Err(err))
 	}
 }
 
-// unquarantineSite lifts quarantineSite once name measures again.
-func (s *Store) unquarantineSite(name string) {
-	s.quota.mu.Lock()
-	delete(s.quota.quarantined, name)
-	s.quota.mu.Unlock()
-}
-
-// quarantinedSites reports the sites quarantineSite holds (tests).
+// quarantinedSites reports the live sites charged only in part (tests).
 func (s *Store) quarantinedSites() []string {
 	s.quota.mu.Lock()
 	defer s.quota.mu.Unlock()
 	var names []string
-	for n := range s.quota.quarantined {
-		names = append(names, n)
+	for n := range s.quota.partial {
+		if !strings.HasPrefix(n, tempPrefix) {
+			names = append(names, n)
+		}
 	}
 	return names
+}
+
+// movePartial moves the partial charge recorded for the tree name under
+// sites/, if any, to the name it was renamed to. Call it inside the
+// transition that renames the tree.
+func (s *Store) movePartial(from, to string) {
+	s.quota.mu.Lock()
+	defer s.quota.mu.Unlock()
+	if c, ok := s.quota.partial[from]; ok {
+		delete(s.quota.partial, from)
+		s.quota.partial[to] = c
+	}
+}
+
+// removalChange is the accounting for r, what removeTreeCounted removed of
+// a tree under sites/ that was charged under the name key, with err its
+// error. A tree measured in full releases exactly what was removed. One
+// charged only in part (quarantined, or a leftover tree that could not be
+// measured) releases no more than its charge: the rest of what was removed
+// was never counted, and releasing it would take it out of other trees'
+// charges. Survivors keep the charge not yet released, under survivor, the
+// name they now sit under. Call it inside the removal's transition.
+func (s *Store) removalChange(key, survivor string, r treeRemoval, err error) change {
+	q := &s.quota
+	q.mu.Lock()
+	c, ok := q.partial[key]
+	delete(q.partial, key)
+	rel := c
+	if ok && err != nil {
+		rel = siteCharge{size: min(r.bytes+r.retired, c.size), entries: min(r.entries, c.entries)}
+		if q.partial == nil {
+			q.partial = make(map[string]siteCharge)
+		}
+		q.partial[survivor] = siteCharge{size: c.size - rel.size, entries: c.entries - rel.entries}
+	}
+	q.mu.Unlock()
+	if !ok {
+		return r.change()
+	}
+	// A retired file's bytes already left the live count (unlinkFile), so
+	// they come out of what is still to release, and anything retired past
+	// the charge is given back.
+	removed := rel.size + rel.entries*metaAllowance - r.retired
+	return change{removed: max(removed, 0), restored: max(-removed, 0), removedEntries: rel.entries}
 }

@@ -292,6 +292,9 @@ func (s *Store) settleSwapLocked(site string) error {
 	// transition so a recount does not walk it halfway.
 	s.beginTransition()
 	err = siteRename(filepath.Join(root, from), final)
+	if err == nil {
+		s.movePartial(from, filepath.Base(final)) // a partial charge goes with it
+	}
 	s.endTransition(0, 0)
 	if err != nil {
 		return fmt.Errorf("restore site: %w", err)

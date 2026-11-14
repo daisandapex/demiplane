@@ -37,7 +37,10 @@ import (
 // that failed, and a replaced site's tree that could not be removed, is
 // abandoned: measured and kept charged like a live site, and removed by
 // Open and Reconcile once it is older than orphanGrace. Every removal
-// releases exactly what it removed.
+// releases exactly what it removed, except that a tree that could only be
+// measured in part (a quarantined site, an unreadable leftover) releases no
+// more than it was charged, so its uncounted rest never comes out of other
+// sites' charges.
 
 // DefaultSiteEntryLimit is the default cap on site files and directories
 // across all sites, staged trees included.
@@ -60,12 +63,12 @@ func (s *Store) SetSiteEntryLimit(n int64) {
 
 // measureSiteEntries counts the live site entries (Open).
 func (s *Store) measureSiteEntries() error {
-	_, n, err := s.siteStats()
+	_, n, partial, err := s.siteStats()
 	if err != nil {
 		return fmt.Errorf("count site entries: %w", err)
 	}
 	s.quota.mu.Lock()
-	s.quota.entries = n
+	s.quota.entries, s.quota.partial = n, partial
 	s.quota.mu.Unlock()
 	return nil
 }
@@ -100,19 +103,23 @@ func (s *Store) releaseSiteEntries(n int64) {
 
 // siteStats measures the sites: the bytes of their regular files and their
 // entries, abandoned staging trees included and the trees of writers in this
-// process excluded (those are charged in flight).
-func (s *Store) siteStats() (size, entries int64, err error) {
+// process excluded (those are charged in flight). partial holds, by name,
+// what it counted of each tree it could measure only in part; the caller
+// installs it with the counts (quotaState.partial), so a removal of such a
+// tree releases only that.
+func (s *Store) siteStats() (size, entries int64, partial map[string]siteCharge, err error) {
+	partial = make(map[string]siteCharge)
 	root, err := os.OpenRoot(s.siteRoot())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 0, 0, nil
+			return 0, 0, partial, nil
 		}
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	defer root.Close()
 	names, err := readNames(root)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 	for _, name := range names {
 		if strings.HasPrefix(name, tempPrefix) && s.stagingLive(name) {
@@ -122,14 +129,11 @@ func (s *Store) siteStats() (size, entries int64, err error) {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return 0, 0, err
+			return 0, 0, nil, err
 		}
 		n, c, err := treeStatsIn(root, name)
 		switch {
 		case err == nil:
-			if !strings.HasPrefix(name, tempPrefix) {
-				s.unquarantineSite(name)
-			}
 		case strings.HasPrefix(name, tempPrefix):
 			// A leftover tree that cannot be measured must not stop the
 			// store from opening or recounting. What was measured is
@@ -139,12 +143,15 @@ func (s *Store) siteStats() (size, entries int64, err error) {
 		default:
 			// Nor must a live site's: it is quarantined (logged, counted in
 			// part) and served as before.
-			s.quarantineSite(name, err)
+			s.logQuarantine(name, err)
+		}
+		if err != nil {
+			partial[name] = siteCharge{size: n, entries: c + 1}
 		}
 		size += n
 		entries += c + 1 // the top entry itself
 	}
-	return size, entries, nil
+	return size, entries, partial, nil
 }
 
 // registerStaging and unregisterStaging mark a staging tree under sites/ as
@@ -243,7 +250,7 @@ func (s *Store) reclaimStagingTrees(now time.Time) (int, error) {
 		}
 		r, err := s.removeTreeCounted(filepath.Join(root, name))
 		s.unregisterStaging(name)
-		s.endChange(r.change())
+		s.endChange(s.removalChange(name, name, r, err))
 		removed += int(r.entries)
 		if err != nil {
 			log.Printf("store: could not remove an abandoned site staging tree, will retry: %s", logsafe.Err(err))

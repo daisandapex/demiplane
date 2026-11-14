@@ -462,7 +462,13 @@ func (w *SiteWriter) Commit() (int, error) {
 	// The replaced tree is removed and unregistered inside the same
 	// transition, so no recount sees it registered (skipped) while its charge
 	// is live, or its survivors before they are unregistered.
+	// The replaced tree's charge, partial if it was quarantined, moves with
+	// it to the backup name; the new tree under the site's name was charged
+	// in full as it was staged.
 	c := change{settled: w.charged, settledEntries: w.entries}
+	if backup != "" {
+		s.movePartial(w.site, filepath.Base(backup))
+	}
 	if backup != "" && durable {
 		if beforeBackupRemove != nil {
 			beforeBackupRemove()
@@ -471,8 +477,8 @@ func (w *SiteWriter) Commit() (int, error) {
 		if err != nil {
 			log.Printf("store: could not remove a replaced site tree, will retry: %s", logsafe.Err(err))
 		}
-		rc := r.change()
-		c.removed, c.removedEntries = rc.removed, rc.removedEntries
+		rc := s.removalChange(filepath.Base(backup), filepath.Base(backup), r, err)
+		c.removed, c.removedEntries, c.restored = rc.removed, rc.removedEntries, rc.restored
 	}
 	if backup != "" {
 		// A backup kept because the swap is not durable yet stays charged,
@@ -612,7 +618,7 @@ func (s *Store) deleteSiteLocked(site string) error {
 	// the tombstone name, for the scavenger.
 	r, err := s.removeTreeCounted(tomb)
 	s.unregisterStaging(name)
-	s.endChange(r.change())
+	s.endChange(s.removalChange(site, name, r, err))
 	if err != nil {
 		log.Printf("store: could not remove a deleted site's tree, will retry: %s", logsafe.Err(err))
 	}

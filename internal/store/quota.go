@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -74,9 +75,11 @@ type quotaState struct {
 	// charged in flight; any other ".tmp-" file there is abandoned, counted
 	// as live and reclaimed.
 	temps map[string]struct{}
-	// quarantined holds the live sites whose trees could not be measured
-	// (sitetree.go); they are logged once and counted only in part.
-	quarantined map[string]struct{}
+	// partial holds, by name under sites/, what the trees that could not be
+	// measured in full are charged (sitetree.go): quarantined live sites,
+	// logged once, and leftover trees. It is installed with the entry count
+	// it was measured with, and a removal of such a tree releases no more.
+	partial map[string]siteCharge
 	// counted is what committed includes of the blob and source files, the
 	// artifact rows and the pending deletion records (ledger.go).
 	counted ledger
@@ -93,13 +96,13 @@ func (s *Store) SetQuota(limit int64) error {
 		s.quota.mu.Unlock()
 		return nil
 	}
-	used, entries, l, err := s.measureUsage()
+	used, entries, partial, l, err := s.measureUsage()
 	if err != nil {
 		return err
 	}
 	s.quota.mu.Lock()
 	s.quota.limit, s.quota.committed, s.quota.inflight = limit, used, 0
-	s.quota.entries, s.quota.counted = entries, l
+	s.quota.entries, s.quota.partial, s.quota.counted = entries, partial, l
 	s.quota.mu.Unlock()
 	return nil
 }
@@ -141,7 +144,7 @@ func (s *Store) RecountUsage() error {
 		if busy {
 			continue
 		}
-		used, entries, l, err := s.measureUsage()
+		used, entries, partial, l, err := s.measureUsage()
 		if err != nil {
 			return err
 		}
@@ -151,7 +154,7 @@ func (s *Store) RecountUsage() error {
 		q.mu.Lock()
 		applied := q.limit > 0 && q.active == 0 && q.gen == start
 		if applied {
-			q.committed, q.entries, q.counted = used, entries, l
+			q.committed, q.entries, q.partial, q.counted = used, entries, partial, l
 		}
 		q.mu.Unlock()
 		if applied {
@@ -192,6 +195,10 @@ func (s *Store) endSiteTransition(settled, removed, settledEntries, removedEntri
 type change struct {
 	settled, removed               int64
 	settledEntries, removedEntries int64
+	// restored bytes return to the live count: retired files of a tree
+	// charged only in part took more out of it than the tree was charged
+	// (removalChange).
+	restored int64
 }
 
 func (s *Store) endChange(c change) {
@@ -218,6 +225,7 @@ func (s *Store) endChange(c change) {
 	if removed > 0 {
 		q.committed = max(q.committed-removed, 0)
 	}
+	q.committed += max(c.restored, 0)
 }
 
 // retire moves a removed file a reader holds from the live count, where
@@ -272,9 +280,9 @@ var afterUsageWalk, afterLiveRename func()
 // and the allowances of the artifact rows and site entries, and returns the
 // site entry count with it.
 // The ledger it returns holds what it counted (ledger.go).
-func (s *Store) measureUsage() (used, siteEntries int64, l ledger, err error) {
-	fail := func(err error) (int64, int64, ledger, error) {
-		return 0, 0, ledger{}, fmt.Errorf("measure store usage: %w", err)
+func (s *Store) measureUsage() (used, siteEntries int64, partial map[string]siteCharge, l ledger, err error) {
+	fail := func(err error) (int64, int64, map[string]siteCharge, ledger, error) {
+		return 0, 0, nil, ledger{}, fmt.Errorf("measure store usage: %w", err)
 	}
 	l = newLedger()
 	// Artifact rows and pending deletion records each hold an allowance.
@@ -306,12 +314,12 @@ func (s *Store) measureUsage() (used, siteEntries int64, l ledger, err error) {
 		}
 		total += n
 	}
-	n, entries, err := s.siteStats()
+	n, entries, partial, err := s.siteStats()
 	if err != nil {
 		return fail(err)
 	}
 	total += n
-	return total + (int64(len(l.rows)+len(l.pending))+entries)*metaAllowance, entries, l, nil
+	return total + (int64(len(l.rows)+len(l.pending))+entries)*metaAllowance, entries, partial, l, nil
 }
 
 // usageRows is the part of *sql.Rows a usage scan uses.
@@ -437,12 +445,14 @@ func (s *Store) removeLiveFile(path string) (bool, error) {
 }
 
 // removeLiveTree removes a live site tree and releases exactly what it
-// removed: each file's size and each entry's allowance, dir itself included.
+// removed: each file's size and each entry's allowance, dir itself included,
+// or, for a tree charged only in part, no more than that (removalChange).
 // Whatever survives, measured or not, stays charged.
 func (s *Store) removeLiveTree(dir string) error {
 	s.beginTransition()
 	r, err := s.removeTreeCounted(dir)
-	s.endChange(r.change())
+	name := filepath.Base(dir)
+	s.endChange(s.removalChange(name, name, r, err))
 	return err
 }
 
