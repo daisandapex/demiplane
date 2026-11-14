@@ -594,6 +594,15 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "supply the view password via the "+PasswordHeader+" header, not the URL query", http.StatusBadRequest)
 		return
 	}
+	// A caller who sent the password header asked for a gate. An empty or
+	// blank value (an unset shell variable) is refused rather than read as
+	// no password, which would store the artifact public.
+	for _, pw := range r.Header.Values(PasswordHeader) {
+		if strings.TrimSpace(pw) == "" {
+			http.Error(w, "the "+PasswordHeader+" header is empty; omit it to publish without a password", http.StatusBadRequest)
+			return
+		}
+	}
 
 	// Upload cap (0 = unlimited; the CLI defaults it to 100 MiB). When set, an
 	// oversized body surfaces as *http.MaxBytesError below.

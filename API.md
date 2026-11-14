@@ -86,7 +86,7 @@ after a `--body-timeout` grace, or the request gets `408`.
 | Header | Meaning |
 |---|---|
 | `Authorization: Bearer <token>` | Write auth, when the instance requires it. |
-| `X-Demiplane-Password: <pw>` | Set a view password (never via URL). Reads then need HTTP Basic. |
+| `X-Demiplane-Password: <pw>` | Set a view password (never via URL). Reads then need HTTP Basic. An empty or blank value is a `400`, not a publish without a password; omit the header for that. |
 | `Accept: application/json` | Return a JSON object instead of a plain-text URL. |
 | `Content-Type: multipart/form-data` | Upload the first file part instead of a raw body. At most 16 KiB may precede the part's body (`431` otherwise). |
 

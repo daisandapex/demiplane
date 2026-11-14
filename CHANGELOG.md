@@ -8,6 +8,11 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- A publish with an empty or blank `X-Demiplane-Password` header is refused
+  with `400`. It was read as no header and stored the artifact public, so an
+  unset variable in `-H "X-Demiplane-Password: $PW"` published the page the
+  caller meant to protect with no gate and, in the default text response, no
+  sign of it.
 - A site entry is refused with `400` when its path in the store, under the
   longest name a replace or delete gives the site's tree, would pass the
   platform path limit (4,095 bytes on Linux, 1,023 elsewhere). An entry that
