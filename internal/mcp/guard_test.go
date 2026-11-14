@@ -339,3 +339,52 @@ func TestPublishPathRootThroughSymlink(t *testing.T) {
 		t.Errorf("path beside the root: %+v, want the outside-the-root refusal", rerr)
 	}
 }
+
+// TestPublishPathThroughSymlinkOutOfRootAnswersUniformly: a path whose text
+// is under the publish root but that leads out of it through a symlink
+// inside it must be refused the same way whatever is at the far end. With
+// <root>/escape -> /, an lstat of the model's path followed the link before
+// the resolved path was checked, so a file, a directory and nothing at all
+// got three different answers. The same holds for a relative link that
+// climbs out (<root>/up -> ..).
+// See audit/09-mcp-publish-path-probes-outside-root.md.
+func TestPublishPathThroughSymlinkOutOfRootAnswersUniformly(t *testing.T) {
+	if fi, err := os.Stat("/etc/passwd"); err != nil || !fi.Mode().IsRegular() {
+		t.Skip("needs a regular /etc/passwd")
+	}
+	root := t.TempDir()
+	if err := os.Symlink("/", filepath.Join(root, "escape")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	if err := os.Symlink("..", filepath.Join(root, "up")); err != nil {
+		t.Fatal(err)
+	}
+	sibling := t.TempDir() // beside root, so <root>/up/<base> names it
+	if err := os.WriteFile(filepath.Join(sibling, "f"), []byte("OUTSIDE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(sibling, "d"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	viaUp := filepath.Join(root, "up", filepath.Base(sibling))
+	c, f := newGuardClient(t, "")
+	setPublishRoot(t, c, root)
+	const outside = "path is outside the publish root"
+	for _, p := range []string{
+		filepath.Join(root, "escape", "etc", "passwd"),
+		filepath.Join(root, "escape", "etc"),
+		filepath.Join(root, "escape", "missing"),
+		filepath.Join(viaUp, "f"),
+		filepath.Join(viaUp, "d"),
+		filepath.Join(viaUp, "missing"),
+	} {
+		f.lastBody = ""
+		rerr, body := publishPathCall(t, c, f, p)
+		if rerr == nil || rerr.Message != outside {
+			t.Errorf("%s: %+v, want the refusal %q", p, rerr, outside)
+		}
+		if body != "" {
+			t.Errorf("%s: something was published", p)
+		}
+	}
+}

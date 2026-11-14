@@ -16,7 +16,12 @@ All notable changes to demiplane are documented here. The format follows
 - The MCP `publish` tool refuses a `path` outside the publish root with one
   message whatever is there. It ran `lstat` on the path before the root check
   and reported the result, so a model could learn whether any path the
-  process can see exists and whether it is a regular file.
+  process can see exists and whether it is a regular file. The same held for
+  a path under the root through a symlink in it that leads out (with
+  `<root>/escape -> /`, `escape/etc/passwd`, `escape/etc` and
+  `escape/missing` got three answers): the path is now resolved inside the
+  root, one component at a time, and refused with the one message as soon
+  as a link leaves it.
 - `DEMIPLANE_TOKEN` set but empty or blank is an error, as an empty token
   file already was, for `serve` and the client commands alike. It meant no
   token, so a secret that did not resolve

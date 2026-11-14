@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -256,11 +257,15 @@ func (c *cappedFile) Close() error {
 //     publish root is refused before anything looks at the filesystem, and
 //     with the same message as one that resolves outside it, so the answer
 //     tells nothing about what is there.
-//   - The given path must not itself be a symlink or special file (Lstat).
-//   - The symlink-resolved path must lie under the publish root, and the file is
-//     opened through the os.Root opened on that directory at startup, so neither
-//     a component swapped for a symlink after the check nor a replaced root
-//     directory can move the read outside it.
+//   - The path is then resolved one component at a time inside the root
+//     (resolveInRoot): every lstat and readlink names an entry inside it,
+//     and a symlink whose target leaves it ends the resolution with that
+//     same message before anything past it is looked at. So no answer
+//     depends on what is outside the root, whatever the path's text says.
+//   - The given path must not itself be a symlink or special file.
+//   - The file is opened through the os.Root opened on the root at startup,
+//     so neither a component swapped for a symlink after the check nor a
+//     replaced root directory can move the read outside it.
 //   - The file is opened non-blocking, so a FIFO swapped in after the checks
 //     cannot stall the request loop before the descriptor checks refuse it.
 //   - The opened file must be a regular file that does not live on the /proc,
@@ -285,20 +290,15 @@ func openPublishPath(c *Client, p string) (*cappedFile, *rpcError) {
 	if err != nil || !(underDir(c.publishRootPath, abs) || underDir(c.publishRootAbs, abs)) {
 		return nil, refuse(outside)
 	}
-	fi, err := os.Lstat(p)
+	rel, fi, dirOnly, escapes, err := c.resolveInRoot(p)
+	if escapes {
+		return nil, refuse(outside)
+	}
 	if err != nil {
 		return nil, refuse("read path: %v", err)
 	}
-	if !fi.Mode().IsRegular() {
+	if dirOnly || !fi.Mode().IsRegular() {
 		return nil, refuse("path must be a regular file (symlinks and special files are refused)")
-	}
-	resolved, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return nil, refuse("resolve path: %v", err)
-	}
-	rel, err := filepath.Rel(c.publishRootPath, resolved)
-	if err != nil || !underDir(c.publishRootPath, resolved) {
-		return nil, refuse(outside)
 	}
 
 	// Opened non-blocking: the file at rel can be swapped for a FIFO after the
@@ -335,6 +335,123 @@ func openPublishPath(c *Client, p string) (*cappedFile, *rpcError) {
 	}
 	keep = true
 	return &cappedFile{f: f, r: f, left: maxPublishPathBytes}, nil
+}
+
+// maxPublishPathLinks bounds the symlinks resolveInRoot follows for one path.
+const maxPublishPathLinks = 255
+
+// resolveInRoot's failures inside the root.
+var (
+	errNotDir       = errors.New("not a directory")
+	errTooManyLinks = errors.New("too many levels of symbolic links")
+)
+
+// resolveInRoot resolves the model's path p, whose text (made absolute and
+// cleaned) is under the publish root, to rel, a path relative to the root
+// with no symlink in it, and returns the lstat of what rel names. It walks p
+// as given, one component at a time from the root, through the root's
+// descriptor, so it only ever looks at entries inside the root: the entry it
+// inspects next always sits in a directory already known to be inside.
+//
+// p must reach the root by its text alone: a path that gets there through a
+// ".." outside it would need what is outside looked at, so it escapes. Inside,
+// ".." is the real parent; a component that is not a directory cannot be
+// passed through (ENOTDIR, as the kernel would answer). A symlink before the
+// last component is followed by reading its target: one that leaves the root
+// (an absolute target outside it, or a ".." above it) stops the walk with
+// escapes set, before anything past it is looked at. A symlink as the last
+// component is not followed; fi reports it. dirOnly reports a trailing
+// separator, which names a directory. err is a failure inside the root.
+func (c *Client) resolveInRoot(p string) (rel string, fi os.FileInfo, dirOnly, escapes bool, err error) {
+	raw := p
+	if !filepath.IsAbs(raw) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", nil, false, true, nil
+		}
+		raw = wd + string(filepath.Separator) + raw
+	}
+	split := func(p string) []string {
+		var out []string
+		for _, c := range strings.Split(filepath.ToSlash(p), "/") {
+			if c != "" && c != "." {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	slashed := filepath.ToSlash(raw)
+	dirOnly = strings.HasSuffix(slashed, "/") || strings.HasSuffix(slashed, "/.")
+	comps := split(raw)
+	var pending []string
+	for _, root := range []string{c.publishRootPath, c.publishRootAbs} {
+		rc := split(root)
+		if root == "" || len(comps) < len(rc) || !slices.Equal(comps[:len(rc)], rc) {
+			continue
+		}
+		pending = comps[len(rc):]
+		break
+	}
+	if pending == nil {
+		if !slices.Equal(comps, split(c.publishRootPath)) && !slices.Equal(comps, split(c.publishRootAbs)) {
+			return "", nil, false, true, nil
+		}
+	}
+	var cur []string // resolved so far: real directories, no symlinks
+	links := 0
+	for len(pending) > 0 {
+		comp := pending[0]
+		pending = pending[1:]
+		if comp == ".." {
+			if len(cur) == 0 {
+				return "", nil, false, true, nil
+			}
+			cur = cur[:len(cur)-1]
+			continue
+		}
+		next := filepath.Join(append(cur[:len(cur):len(cur)], comp)...)
+		info, err := c.publishRoot.Lstat(next)
+		if err != nil {
+			return "", nil, false, false, err
+		}
+		if info.Mode()&os.ModeSymlink == 0 || len(pending) == 0 {
+			if len(pending) > 0 && !info.IsDir() {
+				return "", nil, false, false, &os.PathError{Op: "lstat", Path: next, Err: errNotDir}
+			}
+			cur = append(cur, comp)
+			fi = info
+			continue
+		}
+		if links++; links > maxPublishPathLinks {
+			return "", nil, false, false, &os.PathError{Op: "lstat", Path: next, Err: errTooManyLinks}
+		}
+		target, err := c.publishRoot.Readlink(next)
+		if err != nil {
+			return "", nil, false, false, err
+		}
+		if filepath.IsAbs(target) {
+			t := filepath.Clean(target)
+			var in string
+			switch {
+			case underDir(c.publishRootPath, t):
+				in, err = filepath.Rel(c.publishRootPath, t)
+			case underDir(c.publishRootAbs, t):
+				in, err = filepath.Rel(c.publishRootAbs, t)
+			default:
+				return "", nil, false, true, nil
+			}
+			if err != nil {
+				return "", nil, false, true, nil
+			}
+			cur, target = nil, in
+		}
+		pending = append(split(target), pending...)
+	}
+	if len(cur) == 0 {
+		info, err := c.publishRoot.Lstat(".")
+		return ".", info, dirOnly, false, err
+	}
+	return filepath.Join(cur...), fi, dirOnly, false, nil
 }
 
 // underDir reports whether the clean absolute path p is dir or lies under

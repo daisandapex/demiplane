@@ -1,6 +1,6 @@
 # 09. The MCP `publish` tool tells a model whether any path outside the publish root exists
 
-**Status: Fixed** in `7a93d7a`. A path whose text is not under the root (as resolved or as named) is refused with the one outside-the-root message before any `lstat`. Test: `internal/mcp/guard_test.go`, `TestPublishPathOutsideRootAnswersUniformly` and `TestPublishPathRootThroughSymlink`, outside the `audit` tag.
+**Status: Fixed** in `fix(mcp): refuse a publish path outside the root before stat-ing it` and `fix(mcp): resolve a publish path inside the root before any lstat`. A path whose text is not under the root is refused with the one outside-the-root message before any filesystem call. A path whose text is under it is resolved one component at a time through the root's descriptor (`os.Root` lstat and readlink), so only entries inside the root are examined; a symlink whose target leaves the root, or a path that reaches the root through a `..` outside it, gets the same message before anything past it is looked at. Tests: `internal/mcp/guard_test.go`, `TestPublishPathOutsideRootAnswersUniformly`, `TestPublishPathRootThroughSymlink` and `TestPublishPathThroughSymlinkOutOfRootAnswersUniformly`, plus the `FuzzOpenPublishPath` seeds, outside the `audit` tag.
 
 **Severity: Low.** Nothing is read or published from outside the root; the
 confinement itself held up under review. But the tool's arguments are chosen

@@ -320,7 +320,11 @@ inherits the posture above and was reviewed adversarially before release.
   `path` whose text (made absolute and cleaned) is not under the root is
   refused before the filesystem is consulted, with the same message as one
   that resolves outside it, so the refusal does not say whether anything
-  exists there. The file is opened
+  exists there. A path whose text is under the root is then resolved one
+  component at a time through the root's descriptor, so only entries inside
+  the root are looked at: a symlink in it whose target leaves the root (or a
+  path that reaches the root through a `..` outside it) gets that same
+  message before anything past it is examined. The file is opened
   non-blocking, so a FIFO raced in after the checks cannot stall the server. It
   refuses symlinks and
   non-regular files, anything on the `/proc`, `/sys` or `/dev` filesystems (so the
