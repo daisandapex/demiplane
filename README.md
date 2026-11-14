@@ -20,8 +20,12 @@ to a box you own, reachable only from your own network.
 > open, [use a public host instead](#when-not-to-use-it). On loopback it also
 > answers only to loopback names (`localhost`, `127.0.0.1`, `[::1]`, and the
 > `--base-url` hosts): any other `Host` gets `421`, so a web page cannot reach
-> it by re-pointing its own name at `127.0.0.1` (DNS rebinding). To serve
-> another name there, list it in `--allowed-hosts`.
+> it by re-pointing its own name at `127.0.0.1` (DNS rebinding). The
+> `--base-url` hosts are trusted on loopback by design, so a same-machine
+> reverse proxy can pass its public `Host` through: use only host names you
+> control, since whoever controls a name's DNS can point it at `127.0.0.1`
+> and reach the instance through a visitor's browser. To serve another name
+> there, list it in `--allowed-hosts`.
 
 ## Install
 
