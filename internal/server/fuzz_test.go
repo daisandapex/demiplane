@@ -159,8 +159,10 @@ func FuzzCanonicalPaths(f *testing.F) {
 // its port. A value with no bracket splits with net.SplitHostPort, or is the
 // bare host with port "" when that fails. A value with a bracket must be
 // "[" IPv6 "]" optionally followed by ":" and a port with no colon; it yields
-// the address without brackets. Any other bracket yields host "", which no
-// entry names.
+// the address without brackets. The IPv6 address may end in "%" and a zone:
+// the zone must be non-empty and hold no bracket, and it is kept, so
+// "[fe80::1%eth0]:80" yields "fe80::1%eth0". Any other bracket yields host
+// "", which no entry names.
 func hostKey(v string) (host, port string) {
 	v = strings.ToLower(v)
 	if !strings.ContainsAny(v, "[]") {
@@ -174,7 +176,8 @@ func hostKey(v string) (host, port string) {
 		return "", ""
 	}
 	inner, rest := v[1:end], v[end+1:]
-	if net.ParseIP(inner) == nil || !strings.Contains(inner, ":") {
+	addr, zone, scoped := strings.Cut(inner, "%")
+	if net.ParseIP(addr) == nil || !strings.Contains(addr, ":") || scoped && (zone == "" || strings.Contains(zone, "[")) {
 		return "", ""
 	}
 	switch {
@@ -186,11 +189,20 @@ func hostKey(v string) (host, port string) {
 	return "", ""
 }
 
+// fuzzScopedBase is the base URL FuzzHostPolicy configures beside the
+// --allowed-hosts list. It names a scoped IPv6 address, so the policy also
+// accepts fuzzScopedHost, zone included, on any port.
+const (
+	fuzzScopedBase = "http://[fe80::1%25eth0]:8080"
+	fuzzScopedHost = "fe80::1%eth0"
+)
+
 // FuzzHostPolicy checks --allowed-hosts parsing, Host matching and the Host
 // sanitizer that guards reflected URLs. A Host is allowed exactly when,
-// after lowercasing and port removal, it equals one configured entry's host
-// and the entry names no port or the request's port (a Host without one
-// means the scheme's default port).
+// after lowercasing and port removal (hostKey), it equals one configured
+// entry's host and the entry names no port or the request's port (a Host
+// without one means the scheme's default port), or it equals the host of
+// the scoped base URL, on any port.
 func FuzzHostPolicy(f *testing.F) {
 	for _, s := range [][2]string{
 		{"demi.example", "demi.example"}, {"demi.example", "DEMI.Example"}, {"demi.example:443", "DEMI.example"},
@@ -201,6 +213,10 @@ func FuzzHostPolicy(f *testing.F) {
 		{"h", "[h"}, {"h", "h]"}, {"h", "[h]:80"}, {"[h]", "h"},
 		{"[::1]", "[::1]"}, {"[::1]", "[::1]:8443"}, {"[::1]", "[::1"},
 		{"[::1]:8443", "[::1]:8443"},
+		{"h", "[fe80::1%eth0]"}, {"h", "[fe80::1%eth0]:8080"}, {"h", "[FE80::1%ETH0]:80"},
+		{"h", "fe80::1%eth0"}, {"h", "[fe80::1%]"}, {"h", "[fe80::1%]:8080"},
+		{"h", "[fe80::1%eth]0]"}, {"h", "[fe80::1%eth/0]"}, {"h", "[fe80::1%eth0"},
+		{"h", "fe80::1%eth0]"}, {"h", "[fe80::1%eth1]"}, {"[fd00::1]", "[fd00::1%eth0]"},
 	} {
 		f.Add(s[0], s[1], false)
 	}
@@ -240,7 +256,10 @@ func FuzzHostPolicy(f *testing.F) {
 				break
 			}
 		}
-		got := hostAllowed(buildHostRules(list), host, tls)
+		if want == "" && len(list) > 0 && rh == fuzzScopedHost {
+			want = fuzzScopedBase
+		}
+		got := hostAllowed(buildHostRules(list, fuzzScopedBase), host, tls)
 		if got && want == "" {
 			t.Fatalf("host %q (tls %v) allowed by no entry of %q", host, tls, csv)
 		}
