@@ -7,6 +7,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/daisandapex/demiplane/v3/internal/store"
 )
@@ -407,6 +409,43 @@ func FuzzPublish(f *testing.F) {
 		h.ServeHTTP(gw, g)
 		if gw.Code == http.StatusOK && !bytes.Equal(gw.Body.Bytes(), body) {
 			t.Fatalf("artifact %q reads back %d bytes, published %d", slug, gw.Body.Len(), len(body))
+		}
+	})
+}
+
+// FuzzRenderSpec checks the render spec stored with a retained source: what
+// a publish writes reads back unchanged on rebake, and a spec read back from
+// a damaged or foreign record decodes to some spec or is refused, never a
+// panic.
+func FuzzRenderSpec(f *testing.F) {
+	f.Add("doc", "series", "doc", "doc-2", int64(1_700_000_000), int64(5), []byte(`{"named_slug":"a","published":"2026-01-02T03:04:05Z"}`))
+	f.Add("", "", "", "", int64(0), int64(0), []byte(`{"published":"not a time"}`))
+	f.Add("a", "", "", "", int64(-62135596800), int64(0), []byte(`[]`))
+	f.Fuzz(func(t *testing.T, named, series, reply, next string, sec, nsec int64, stored []byte) {
+		var junk renderSpec
+		_ = json.Unmarshal(stored, &junk)
+
+		for _, v := range []string{named, series, reply, next} {
+			if !utf8.ValidString(v) {
+				return // publish values are validated slugs; JSON cannot carry invalid UTF-8
+			}
+		}
+		pub := time.Unix(sec%(1<<40), nsec%1e9).UTC()
+		if y := pub.Year(); y < 0 || y > 9999 {
+			return // outside RFC 3339; publish times are now
+		}
+		spec := renderSpecFor(named, series, reply, next, pub)
+		enc := marshalRenderSpec(spec)
+		if enc == "" {
+			t.Fatalf("spec %+v did not marshal", spec)
+		}
+		var back renderSpec
+		if err := json.Unmarshal([]byte(enc), &back); err != nil {
+			t.Fatalf("stored spec %q does not read back: %v", enc, err)
+		}
+		if back.NamedSlug != named || back.Series != series || back.ReplySlug != reply ||
+			back.ReplyNext != next || !back.Published.Equal(pub) {
+			t.Fatalf("spec round trip: %+v -> %q -> %+v", spec, enc, back)
 		}
 	})
 }
