@@ -141,13 +141,13 @@ func FuzzCleanSiteRelPath(f *testing.F) {
 
 // wellFormedHash reports whether encoded has the shape hashPassword writes,
 // read with the standard library: the scheme, a positive decimal
-// iteration count, and base64 salt and key of the stored lengths.
+// iteration count (hashCount), and base64 salt and key of the stored lengths.
 func wellFormedHash(encoded string) bool {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 4 || parts[0] != "pbkdf2-sha256" {
 		return false
 	}
-	if n, err := strconv.ParseUint(parts[1], 10, 63); err != nil || n == 0 {
+	if n, ok := hashCount(parts[1]); !ok || n <= 0 {
 		return false
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[2])
@@ -156,6 +156,13 @@ func wellFormedHash(encoded string) bool {
 	}
 	key, err := base64.RawStdEncoding.DecodeString(parts[3])
 	return err == nil && len(key) == pbkdf2KeyLen
+}
+
+// hashCount reads a stored iteration count as the verifier does: a decimal
+// number that may have leading zeros and a sign ("02" and "+2" are 2).
+func hashCount(s string) (int64, bool) {
+	n, err := strconv.ParseInt(s, 10, strconv.IntSize)
+	return n, err == nil
 }
 
 // FuzzPasswordHash checks the stored-hash parser and verifier: a hash it
@@ -174,6 +181,9 @@ func FuzzPasswordHash(f *testing.F) {
 	}
 	f.Add(good, "seed")
 	f.Add(good, "seed ")
+	// Other spellings of the same count are the same work factor.
+	f.Add(strings.Replace(good, "$2$", "$02$", 1), "seed")
+	f.Add(strings.Replace(good, "$2$", "$+2$", 1), "seed")
 	f.Add("pbkdf2-sha256$2$$", "")
 	f.Add("pbkdf2-sha256$2$AAAAAAAAAAAAAAAAAAAAAA$AA", "")
 	f.Add("pbkdf2-sha256$600000$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "x")
@@ -194,8 +204,10 @@ func FuzzPasswordHash(f *testing.F) {
 				return
 			}
 		}
-		if validPasswordHash(encoded) && parts[1] != strconv.Itoa(pbkdf2Iter) {
-			t.Fatalf("hash %q accepted at another work factor", encoded)
+		if validPasswordHash(encoded) {
+			if n, ok := hashCount(parts[1]); !ok || n != int64(pbkdf2Iter) {
+				t.Fatalf("hash %q accepted at another work factor", encoded)
+			}
 		}
 		if validPasswordHash(encoded) && !wellFormedHash(encoded) {
 			t.Fatalf("malformed hash %q accepted for Put", encoded)
