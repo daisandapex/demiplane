@@ -1,5 +1,7 @@
 # 08. A blank `DEMIPLANE_TOKEN` starts the server with no authentication
 
+**Status: Fixed** in `8958edb`. `DEMIPLANE_TOKEN` set but blank is an error for `serve` and the client commands; the e2e harness now unsets it. Test: `cmd/demiplane/exit_test.go`, `TestBlankTokenEnvIsRefused`, outside the `audit` tag.
+
 **Severity: Low.** The operator meant to set a token and gets an open
 instance. The generic "no auth token configured" warning is logged and the
 banner says `OPEN`, so it is visible to someone who reads the log; under a

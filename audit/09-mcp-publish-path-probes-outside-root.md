@@ -1,5 +1,7 @@
 # 09. The MCP `publish` tool tells a model whether any path outside the publish root exists
 
+**Status: Fixed** in `7a93d7a`. A path whose text is not under the root (as resolved or as named) is refused with the one outside-the-root message before any `lstat`. Test: `internal/mcp/guard_test.go`, `TestPublishPathOutsideRootAnswersUniformly` and `TestPublishPathRootThroughSymlink`, outside the `audit` tag.
+
 **Severity: Low.** Nothing is read or published from outside the root; the
 confinement itself held up under review. But the tool's arguments are chosen
 by the model, and a model that has been told what to do by a page it fetched

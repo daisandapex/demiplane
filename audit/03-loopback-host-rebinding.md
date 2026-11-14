@@ -1,5 +1,7 @@
 # 03. A loopback instance answers any Host, so a web page can reach it by DNS rebinding
 
+**Status: Fixed** in `a580ee4`. With no `--allowed-hosts`, a request that arrives on a loopback address is served for `localhost`, a loopback IP literal or a base URL host, and gets `421` otherwise. The base URL hosts stay accepted so a same-machine reverse proxy that passes its public `Host` through keeps working. Test: `internal/server/hostpolicy_test.go`, `TestLoopbackListenerRefusesForeignHost` and `TestLoopbackHostNames`, outside the `audit` tag.
+
 **Severity: Medium.** On the default instance (`demiplane serve --store dir`:
 loopback, no token) a web page the operator merely visits can publish, delete
 and list. With a token set, the same page can still read every public

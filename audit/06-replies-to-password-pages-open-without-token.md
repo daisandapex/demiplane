@@ -1,5 +1,7 @@
 # 06. On an instance with no token, replies to password-protected pages can be read and deleted by anyone
 
+**Status: Fixed** in `ef1dfc7`. The second form of the smallest fix: with no token configured, the inbox leaves out replies to a private or password-protected artifact and answers `403` to a `?slug=`, ack or delete that names one. Failing the whole inbox closed would have removed the tokenless inbox for public pages, which the reply README documents. Test: `internal/server/reply_integration_test.go` (build tag `reply`), `TestRepliesToPasswordPageNeedACredential` and `TestTokenlessInboxKeepsPublicReplies`, outside the `audit` tag.
+
 **Severity: Low.** It only applies when no token is configured, a state the
 server warns about at start-up, and in that state anyone can already publish
 and delete. What they cannot otherwise do is read a password-protected page

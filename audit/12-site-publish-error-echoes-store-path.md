@@ -1,5 +1,7 @@
 # 12. A failed site publish answers with the store's absolute path
 
+**Status: Fixed** in `ae44076`. A filesystem error (`*fs.PathError`, `*os.LinkError`) during a site publish is logged and answered `500 internal error`. The original test passed once 04 was fixed (its entry is refused before the filesystem), so it was kept as a regression, and a new test of the error mapping is the red one. Test: `internal/server/site_test.go`, `TestSiteExtractErrorHidesFilesystemPaths`; `internal/server/site_error_path_linux_test.go`, `TestSitePublishErrorDoesNotNameStorePaths`, outside the `audit` tag.
+
 **Severity: Low.** Only a caller who may publish sees it, and what it learns
 is where the store lives on the server and the name of the staging
 directory. It is listed because the rest of the server is careful never to

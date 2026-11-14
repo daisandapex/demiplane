@@ -2,7 +2,12 @@
 
 Audited commit: `d137eea` (`seat/demiplane-fuzz-zone/fix`). Scope: this
 repository and an instance built from it and run on loopback. Twelve findings
-are validated by a failing test each; nothing is fixed here.
+are validated by a failing test each.
+
+**Status: all twelve fixed** on `seat/demiplane-mythos-fixes/fix`, one commit
+each (listed in the table). Each test has moved out of the `audit` tag into
+the package's ordinary test files, so it runs in the usual gates; each report
+says where.
 
 Already known and not reported again: the password-verifier salt and key
 lengths and the bracketed `Host` forms (both fixed on this branch), and
@@ -10,37 +15,33 @@ ops-o4db9 (a damaged closing multipart boundary answers `500`).
 
 ## Findings, by severity
 
-| # | Severity | Finding | Needs | Test |
-|---|---|---|---|---|
-| [01](01-capture-hook-imports-from-cwd.md) | High | The capture hook runs `re.py` from the project directory | hook in restricted mode; a file written into the project | `e2e/audit_capture_hook_test.go` |
-| [02](02-password-cache-bypasses-lockout.md) | Medium | A locked-out client still gets an answer for the correct password | nothing; a page someone is reading | `internal/server/audit_password_cache_test.go` |
-| [03](03-loopback-host-rebinding.md) | Medium | A loopback instance answers any `Host`, so a web page can reach it by DNS rebinding | operator's browser on a hostile page; worst with no token | `internal/server/audit_loopback_host_test.go` |
-| [04](04-site-path-past-path-max-bricks-store.md) | Medium | A site with near-limit paths leaves a tree the store cannot remove, and the store stops opening | publish token (or none configured) | `internal/store/audit_site_pathmax_test.go` |
-| [05](05-empty-password-header.md) | Low | An empty `X-Demiplane-Password` publishes with no password | publisher's mistake | `internal/server/audit_empty_password_test.go` |
-| [06](06-replies-to-password-pages-open-without-token.md) | Low | With no token, replies to password-protected pages are readable by anyone | no token configured; `-tags reply` | `internal/server/audit_replies_open_test.go` |
-| [07](07-config-path-relative-to-cwd.md) | Low | With no `HOME`, the config file is read from the working directory | bare environment; writable working directory | `cmd/demiplane/audit_startup_test.go` |
-| [08](08-blank-token-env-starts-open.md) | Low | A blank `DEMIPLANE_TOKEN` starts the server open | operator's mistake | `cmd/demiplane/audit_startup_test.go` |
-| [09](09-mcp-publish-path-probes-outside-root.md) | Low | MCP `publish` tells a model whether a path outside the publish root exists | a model following injected instructions | `internal/mcp/audit_path_probe_test.go` |
-| [10](10-emphasis-rewrites-link-destination.md) | Low | Emphasis markers inside a link destination rewrite the `href` after it was checked | markdown source | `internal/render/audit_inline_test.go` |
-| [11](11-heading-id-shadows-reply-box.md) | Low | A heading can take the reply box's element id | markdown source | `internal/render/audit_inline_test.go` |
-| [12](12-site-publish-error-echoes-store-path.md) | Low | A failed site publish answers with the store's absolute path | publish token | `internal/server/audit_site_error_path_test.go` |
+| # | Severity | Finding | Needs | Test (as audited) | Fixed in |
+|---|---|---|---|---|---|
+| [01](01-capture-hook-imports-from-cwd.md) | High | The capture hook runs `re.py` from the project directory | hook in restricted mode; a file written into the project | `e2e/audit_capture_hook_test.go` | `4ce478d` |
+| [02](02-password-cache-bypasses-lockout.md) | Medium | A locked-out client still gets an answer for the correct password | nothing; a page someone is reading | `internal/server/audit_password_cache_test.go` | `badd483` |
+| [03](03-loopback-host-rebinding.md) | Medium | A loopback instance answers any `Host`, so a web page can reach it by DNS rebinding | operator's browser on a hostile page; worst with no token | `internal/server/audit_loopback_host_test.go` | `a580ee4` |
+| [04](04-site-path-past-path-max-bricks-store.md) | Medium | A site with near-limit paths leaves a tree the store cannot remove, and the store stops opening | publish token (or none configured) | `internal/store/audit_site_pathmax_test.go` | `6e99382` |
+| [05](05-empty-password-header.md) | Low | An empty `X-Demiplane-Password` publishes with no password | publisher's mistake | `internal/server/audit_empty_password_test.go` | `57b621b` |
+| [06](06-replies-to-password-pages-open-without-token.md) | Low | With no token, replies to password-protected pages are readable by anyone | no token configured; `-tags reply` | `internal/server/audit_replies_open_test.go` | `ef1dfc7` |
+| [07](07-config-path-relative-to-cwd.md) | Low | With no `HOME`, the config file is read from the working directory | bare environment; writable working directory | `cmd/demiplane/audit_startup_test.go` | `00ecfbc` |
+| [08](08-blank-token-env-starts-open.md) | Low | A blank `DEMIPLANE_TOKEN` starts the server open | operator's mistake | `cmd/demiplane/audit_startup_test.go` | `8958edb` |
+| [09](09-mcp-publish-path-probes-outside-root.md) | Low | MCP `publish` tells a model whether a path outside the publish root exists | a model following injected instructions | `internal/mcp/audit_path_probe_test.go` | `7a93d7a` |
+| [10](10-emphasis-rewrites-link-destination.md) | Low | Emphasis markers inside a link destination rewrite the `href` after it was checked | markdown source | `internal/render/audit_inline_test.go` | `1f6e469` |
+| [11](11-heading-id-shadows-reply-box.md) | Low | A heading can take the reply box's element id | markdown source | `internal/render/audit_inline_test.go` | `9f93157` |
+| [12](12-site-publish-error-echoes-store-path.md) | Low | A failed site publish answers with the store's absolute path | publish token | `internal/server/audit_site_error_path_test.go` | `ae44076` |
 
 ## Running the tests
 
-The tests sit beside the code they exercise, in the repository's own test
-style, behind the build tag `audit`, so the ordinary gates (`go build`,
-`go vet`, `go test`, with or without `reply tls`) are unchanged by this
-branch. Every one fails today and is written to pass once its finding is
-fixed; the fix task can drop the tag as it goes.
+The tests ran behind the build tag `audit` while the findings were open; they
+now sit in the ordinary test files, so the usual gates run them:
 
 ```sh
-go test -tags "audit reply" -run TestAudit -count=1 \
-    ./internal/server/ ./internal/store/ ./internal/render/ ./internal/mcp/ ./cmd/demiplane/
-go test -tags "e2e audit" -run TestAudit -count=1 ./e2e/
+go test ./internal/server/ ./internal/store/ ./internal/render/ ./internal/mcp/ ./cmd/demiplane/
+go test -tags reply -run TestRepliesToPasswordPage ./internal/server/
+go test -tags e2e -run TestCaptureHookDoesNotImport ./e2e/
 ```
 
-`gofmt -l .` prints nothing and `go vet -tags "audit reply tls" ./...` is
-clean. Two tests are Linux-only (`PATH_MAX`).
+Two tests are Linux-only (`PATH_MAX`), in `_linux_test.go` files.
 
 ## Suspicions: not validated by a test
 

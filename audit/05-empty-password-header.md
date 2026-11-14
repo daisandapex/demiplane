@@ -1,5 +1,7 @@
 # 05. An empty `X-Demiplane-Password` publishes with no password and says nothing
 
+**Status: Fixed** in `57b621b`. An empty or blank `X-Demiplane-Password` is a `400`. Test: `internal/server/server_test.go`, `TestEmptyPasswordHeaderIsRefused`, outside the `audit` tag.
+
 **Severity: Low.** The page the publisher meant to protect is stored public
 and readable by anyone who can reach the content origin. It takes a mistake
 on the publisher's side (an unset variable in `-H "X-Demiplane-Password:

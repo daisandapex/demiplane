@@ -1,5 +1,7 @@
 # 04. Replacing or deleting a site with near-limit paths leaves a tree the store cannot remove, and the store stops opening
 
+**Status: Fixed** in `6e99382`. `AddFile` refuses (400) an entry whose path would pass the platform limit under the longest name the tree is ever given, and Open logs and skips a leftover `.tmp-` tree it cannot measure. The test was adapted: the near-limit entry it publishes is now refused, so it expects that `InputError` and checks that the longest accepted entry survives a replace, a delete and a reopen. Test: `internal/store/site_pathmax_linux_test.go`, `TestSiteWithLongPathsCanBeRemoved` and `TestOpenToleratesUnmeasurableLeftoverTree`, outside the `audit` tag.
+
 **Severity: Medium.** One site publish followed by one replace or delete
 makes the store unusable until someone removes a directory by hand: `serve`
 will not start again after its next restart, every `demiplane receive` fails

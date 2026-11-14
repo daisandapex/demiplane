@@ -1,5 +1,7 @@
 # 07. With no `HOME`, the config file is read from the working directory
 
+**Status: Fixed** in `00ecfbc`. `configPath` returns `""` with no absolute home, `loadConfig("")` is empty, and a relative `XDG_CONFIG_HOME` is ignored. Test: `cmd/demiplane/config_test.go`, `TestConfigPathIsNeverRelative` and `TestConfigPathIgnoresRelativeXDG`, outside the `audit` tag.
+
 **Severity: Low.** The config file can name a command the server runs
 (`reply_hook_exec`, in a `-tags reply` build), so whoever can write
 `demiplane/config` under the server's working directory can run code as the

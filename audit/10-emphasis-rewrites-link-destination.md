@@ -1,5 +1,7 @@
 # 10. Emphasis markers inside a link destination rewrite the `href` after it was checked
 
+**Status: Fixed** in `1f6e469`. Link opening tags are lifted into placeholders before the emphasis passes, as code spans are. Test: `internal/render/markdown_test.go`, `TestEmphasisDoesNotRewriteLinkDestinations`, outside the `audit` tag.
+
 **Severity: Low.** No script can be injected: the inserted tags contain no
 quote, so they stay inside the quoted attribute, and nothing is removed from
 the destination. The effect is a link that no longer goes where the allowlist

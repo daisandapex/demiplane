@@ -1,5 +1,7 @@
 # 01. The capture hook runs `re.py` from the project directory
 
+**Status: Fixed** in `4ce478d`. The copy step runs as `python3 -I -`. It is the only `python3` call in `companion/`. Test: `e2e/capture_hook_test.go`, `TestCaptureHookDoesNotImportFromWorkingDirectory` (build tag `e2e`), outside the `audit` tag.
+
 **Severity: High.** The outcome is arbitrary code running as the user. It needs
 two things that are both ordinary: the hook wired in its restricted mode
 (`DEMIPLANE_CAPTURE=1` with `DEMIPLANE_CAPTURE_DIR`, the setting that is

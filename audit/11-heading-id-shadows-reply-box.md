@@ -1,5 +1,7 @@
 # 11. A heading can take the reply box's element id
 
+**Status: Fixed** in `9f93157`. The slugger reserves `dp-main`, `dp-reply-h` and `ftree`. Test: `internal/render/a11y_test.go`, `TestHeadingCannotTakeTheReplyBoxID` and `TestHeadingsAvoidChromeIDs`, outside the `audit` tag.
+
 **Severity: Low.** The document cannot forge the reply form or read its
 token. It can make the form's accessible name its own text: a screen reader
 announces the document's heading as the label of the first-party answer box.
