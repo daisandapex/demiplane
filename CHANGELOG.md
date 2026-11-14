@@ -8,6 +8,11 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- The capture hook runs its restricted-mode copy step with `python3 -I`.
+  Python reading a script from stdin puts the working directory first on its
+  module path, and the hook runs in the project directory, so a `re.py`
+  there ran as the user on the next `Write` or `Edit` once
+  `DEMIPLANE_CAPTURE_DIR` was set.
 - The minimum Go version is now 1.26.11, up from 1.26.10. Go 1.26.11 fixes
   GO-2026-6859 (CVE-2026-97054): an HTTP/1 server can crash when a body read
   through `http.MaxBytesReader` passes its limit while the handler writes a

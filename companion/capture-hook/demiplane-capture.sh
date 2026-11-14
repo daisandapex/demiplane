@@ -221,7 +221,11 @@ if [[ -n ${DEMIPLANE_CAPTURE_DIR:-} ]]; then
 	fi
 	trap 'rm -rf -- "$capture_tmp"' EXIT
 	source=$capture_tmp/artifact
-	if ! python3 - "$DEMIPLANE_CAPTURE_DIR" "$file" \
+	# -I (isolated): a script read from stdin would otherwise put the working
+	# directory, which is the project, first on sys.path, so a planted re.py
+	# would run on `import re`. -I also ignores PYTHON* variables and the
+	# user site directory.
+	if ! python3 -I - "$DEMIPLANE_CAPTURE_DIR" "$file" \
 		"${DEMIPLANE_CAPTURE_MAX_BYTES:-$default_capture_max_bytes}" >"$source" <<'PY'
 import os
 import re
