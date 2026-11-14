@@ -5,8 +5,13 @@ package store
 
 import (
 	"context"
+	"crypto/pbkdf2"
+	"crypto/sha256"
+	"encoding/base64"
+	"fmt"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -41,6 +46,15 @@ func FuzzValidateNamedSlug(f *testing.F) {
 		serr := ValidateSeries(name)
 		if serr != nil && err == nil {
 			t.Fatalf("slug %q accepted but refused as a series: %v", name, serr)
+		}
+		// The reject side: a name that is empty, a dot segment, longer
+		// than 128 bytes, or holds a NUL, a separator or a backslash is
+		// refused, as a slug and as a series.
+		if name == "" || name == "." || name == ".." || len(name) > 128 ||
+			strings.ContainsAny(name, "\x00/\\") {
+			if err == nil || serr == nil {
+				t.Fatalf("name %q accepted (slug err %v, series err %v)", name, err, serr)
+			}
 		}
 		if err != nil {
 			return
@@ -82,6 +96,23 @@ func FuzzCleanSiteRelPath(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, name string) {
 		clean, err := cleanSiteRelPath(name)
+		// The reject side: an absolute path, a ".." segment, a NUL or a
+		// backslash anywhere, or more than the segment cap once empty and
+		// "." segments are dropped, is refused.
+		kept := 0
+		dotdot := false
+		for _, seg := range strings.Split(name, "/") {
+			dotdot = dotdot || seg == ".."
+			if seg != "" && seg != "." {
+				kept++
+			}
+		}
+		if strings.HasPrefix(name, "/") || dotdot || strings.ContainsAny(name, "\x00\\") || kept > maxSitePathSegments {
+			if err == nil {
+				t.Fatalf("site path %q accepted as %q", name, clean)
+			}
+			return
+		}
 		if err != nil {
 			return
 		}
@@ -108,9 +139,32 @@ func FuzzCleanSiteRelPath(f *testing.F) {
 	})
 }
 
-// FuzzPasswordHash checks the stored-hash parser: a hash it accepts on Put
-// verifies at the store's own work factor, and a hash read back never matches
-// a password it was not made from.
+// wellFormedHash reports whether encoded has the shape hashPassword writes,
+// read with the standard library: the scheme, a positive decimal
+// iteration count, and base64 salt and key of the stored lengths.
+func wellFormedHash(encoded string) bool {
+	parts := strings.Split(encoded, "$")
+	if len(parts) != 4 || parts[0] != "pbkdf2-sha256" {
+		return false
+	}
+	if n, err := strconv.ParseUint(parts[1], 10, 63); err != nil || n == 0 {
+		return false
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(parts[2])
+	if err != nil || len(salt) != pbkdf2SaltLen {
+		return false
+	}
+	key, err := base64.RawStdEncoding.DecodeString(parts[3])
+	return err == nil && len(key) == pbkdf2KeyLen
+}
+
+// FuzzPasswordHash checks the stored-hash parser and verifier: a hash it
+// accepts on Put is at the store's own work factor; a malformed hash (wrong
+// shape, a count that is not a positive number, salt or key of the wrong
+// length) never verifies any password, as PasswordMatches promises; a
+// well-formed hash at another count, as an older work factor left in the
+// store, verifies the password it was made from and no other; and a fresh
+// hash verifies only its own password.
 func FuzzPasswordHash(f *testing.F) {
 	restore := SetPBKDF2IterForTest(2)
 	f.Cleanup(restore)
@@ -121,8 +175,10 @@ func FuzzPasswordHash(f *testing.F) {
 	f.Add(good, "seed")
 	f.Add(good, "seed ")
 	f.Add("pbkdf2-sha256$2$$", "")
+	f.Add("pbkdf2-sha256$2$AAAAAAAAAAAAAAAAAAAAAA$AA", "")
 	f.Add("pbkdf2-sha256$600000$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "x")
 	f.Add("pbkdf2-sha256$-1$a$b", "x")
+	f.Add("pbkdf2-sha256$0$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "x")
 	f.Add("pbkdf2-sha256$99999999999999999999$a$b", "x")
 	f.Add("", "")
 	f.Fuzz(func(t *testing.T, encoded, pw string) {
@@ -141,10 +197,29 @@ func FuzzPasswordHash(f *testing.F) {
 		if validPasswordHash(encoded) && parts[1] != strconv.Itoa(pbkdf2Iter) {
 			t.Fatalf("hash %q accepted at another work factor", encoded)
 		}
-		if encoded == "" && PasswordMatches(encoded, pw) {
-			t.Fatal("empty hash matched")
+		if validPasswordHash(encoded) && !wellFormedHash(encoded) {
+			t.Fatalf("malformed hash %q accepted for Put", encoded)
 		}
-		_ = PasswordMatches(encoded, pw)
+		if !wellFormedHash(encoded) {
+			for _, cand := range []string{pw, "", "x", pw + "x"} {
+				if PasswordMatches(encoded, cand) {
+					t.Fatalf("malformed hash %q verified password %q", encoded, cand)
+				}
+			}
+		}
+
+		// A well-formed hash at another count, built here with the
+		// standard library, verifies exactly its own password.
+		salt := []byte("0123456789abcdef")
+		key, err := pbkdf2.Key(sha256.New, pw, salt, 3, pbkdf2KeyLen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		enc := base64.RawStdEncoding.EncodeToString
+		old := fmt.Sprintf("pbkdf2-sha256$3$%s$%s", enc(salt), enc(key))
+		if !PasswordMatches(old, pw) || PasswordMatches(old, pw+"x") {
+			t.Fatalf("hash at count 3 of %q verifies wrongly", pw)
+		}
 
 		h, err := hashPassword(pw)
 		if err != nil {
@@ -173,6 +248,22 @@ func FuzzParseListCursor(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, v string) {
 		c, err := ParseListCursor(v)
+		// The reject side: no '.', an empty or over-long (255 byte) slug,
+		// or a creation time that is not a decimal number of seconds at or
+		// after the epoch is refused.
+		ts, slug, ok := strings.Cut(v, ".")
+		body := ts
+		if ts != "" && (ts[0] == '+' || ts[0] == '-') {
+			body = ts[1:]
+		}
+		digits := body != "" && strings.Trim(body, "0123456789") == ""
+		negative := strings.HasPrefix(ts, "-") && strings.Trim(body, "0") != ""
+		if !ok || slug == "" || len(slug) > 255 || !digits || negative {
+			if err == nil {
+				t.Fatalf("cursor %q accepted as %+v", v, c)
+			}
+			return
+		}
 		if err != nil {
 			return
 		}
@@ -187,52 +278,94 @@ func FuzzParseListCursor(f *testing.F) {
 }
 
 // FuzzListPage drives the listing query with hostile cursors and owners
-// against a real store: every value must reach SQLite as a bound parameter,
-// so the query never fails, never returns another owner's or a private
-// artifact, and only returns artifacts after the cursor.
+// against a real store. Each input adds a public and a private artifact
+// owned by the fuzzed owner (and deletes them again, so the store stays the
+// same size); the setup holds three public artifacts of DefaultOwner and
+// one of another owner. The page must be exactly the expected rows: the
+// owner's public artifacts after the cursor, newest first then by slug, up
+// to the limit. Every value must reach SQLite as a bound parameter, so the
+// query never fails and never returns another owner's or a private
+// artifact.
 func FuzzListPage(f *testing.F) {
 	s, err := Open(f.TempDir())
 	if err != nil {
 		f.Fatal(err)
 	}
 	f.Cleanup(func() { s.Close() })
-	for _, o := range []PutOptions{{Slug: "alpha"}, {Slug: "beta"}, {Slug: "gamma"}, {Private: true}} {
-		if _, err := s.Put(o, strings.NewReader("x")); err != nil {
-			f.Fatal(err)
-		}
+	type row struct {
+		slug, owner string
+		created     int64
 	}
+	var rows []row
+	put := func(tb testing.TB, slug, owner string, private bool) row {
+		a, err := s.Put(PutOptions{Slug: slug, Private: private}, strings.NewReader("x"))
+		if err != nil {
+			tb.Fatal(err)
+		}
+		if _, err := s.db.Exec(`UPDATE artifacts SET owner = ? WHERE slug = ?`, owner, a.Slug); err != nil {
+			tb.Fatal(err)
+		}
+		return row{a.Slug, owner, a.CreatedAt.Unix()}
+	}
+	for _, sl := range []string{"alpha", "beta", "gamma"} {
+		rows = append(rows, put(f, sl, DefaultOwner, false))
+	}
+	rows = append(rows, put(f, "delta", "other", false))
+	put(f, "", DefaultOwner, true)
 	now := strconv.FormatInt(time.Now().Unix(), 10)
-	for _, c := range []string{now + ".alpha", now + ".a' OR '1'='1", "0.a", now + ".zzz", "9999999999.a"} {
+	for _, c := range []string{now + ".alpha", now + ".a' OR '1'='1", "0.a", now + ".zzz", "9999999999.a", ""} {
 		f.Add(c, DefaultOwner, uint8(2))
+		f.Add(c, "other", uint8(5))
 	}
 	f.Add("1.a", "local' OR 1=1 --", uint8(200))
-	f.Add("1.a", "x\") UNION SELECT * FROM artifacts --", uint8(0))
+	f.Add("9999999999.a", "x\") UNION SELECT * FROM artifacts --", uint8(0))
+	n := 0
 	f.Fuzz(func(t *testing.T, cursor, owner string, limit uint8) {
 		var after *ListCursor
 		if c, err := ParseListCursor(cursor); err == nil {
 			after = &c
 		}
-		arts, next, err := s.ListPage(context.Background(), owner, after, int(limit))
+		n++
+		mine := put(t, fmt.Sprintf("fz-%d", n), owner, false)
+		hidden := put(t, "", owner, true)
+		defer func() {
+			for _, sl := range []string{mine.slug, hidden.slug} {
+				if err := s.Delete(sl); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}()
+		var want []string
+		cands := append(slices.Clone(rows), mine)
+		slices.SortFunc(cands, func(a, b row) int {
+			if a.created != b.created {
+				return int(b.created - a.created)
+			}
+			return strings.Compare(a.slug, b.slug)
+		})
+		lim := max(int(limit), 1)
+		for _, r := range cands {
+			if r.owner != owner || len(want) == lim {
+				continue
+			}
+			if after != nil && (r.created > after.Created || r.created == after.Created && r.slug <= after.Slug) {
+				continue
+			}
+			want = append(want, r.slug)
+		}
+		arts, _, err := s.ListPage(context.Background(), owner, after, int(limit))
 		if err != nil {
 			t.Fatalf("ListPage(%q, %q): %v", owner, cursor, err)
 		}
-		if owner != DefaultOwner && len(arts) > 0 {
-			t.Fatalf("owner %q listed %d artifacts of another owner", owner, len(arts))
-		}
-		if len(arts) > max(int(limit), 1) {
-			t.Fatalf("page of %d past limit %d", len(arts), limit)
-		}
+		var got []string
 		for _, a := range arts {
 			if a.Private || a.Owner != owner {
 				t.Fatalf("listed %+v for owner %q", a, owner)
 			}
-			if after != nil {
-				c := a.CreatedAt.Unix()
-				if c > after.Created || (c == after.Created && a.Slug <= after.Slug) {
-					t.Fatalf("listed %q (%d) not after cursor %+v", a.Slug, c, *after)
-				}
-			}
+			got = append(got, a.Slug)
 		}
-		_ = next
+		if !slices.Equal(got, want) {
+			t.Fatalf("ListPage(%q, %q, %d) = %q, want %q", owner, cursor, limit, got, want)
+		}
 	})
 }
