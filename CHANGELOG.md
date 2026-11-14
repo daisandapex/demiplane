@@ -34,6 +34,15 @@ All notable changes to demiplane are documented here. The format follows
   viewers wrote in answer to a page they could not open. Replies to public
   pages are unchanged; with a token, everything is. Modules see this through
   a new `module.Host` method, `AuthConfigured`.
+- Without a token, a reply to a password-protected page stays out of the
+  inbox after the page is republished without a password: each reply now
+  records whether its artifact was protected when it was written (replies
+  stored earlier take it from their artifact when the server starts).
+  Hidden replies are filtered out before the inbox is paged, so a page is not
+  emptied by them and no `next` cursor carries a hidden reply's time and id;
+  ack and delete of a hidden reply answer `404`, as for an unknown id,
+  instead of `403`; and `DELETE /replies?slug=` removes only the replies the
+  inbox would list.
 - A publish with an empty or blank `X-Demiplane-Password` header is refused
   with `400`. It was read as no header and stored the artifact public, so an
   unset variable in `-H "X-Demiplane-Password: $PW"` published the page the

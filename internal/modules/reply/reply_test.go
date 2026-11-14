@@ -29,6 +29,9 @@ type fakeHost struct {
 	// onCheckView, when set, runs at each view check (a submission's target
 	// lookup), before the request body is read.
 	onCheckView func()
+	// tokenless makes the host an instance with no token: RequireAuth lets
+	// every request through and AuthConfigured is false.
+	tokenless bool
 }
 
 const testToken = "secret"
@@ -36,14 +39,14 @@ const testToken = "secret"
 func (h *fakeHost) Store() *store.Store { return h.st }
 func (h *fakeHost) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+testToken {
+		if !h.tokenless && r.Header.Get("Authorization") != "Bearer "+testToken {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next(w, r)
 	}
 }
-func (h *fakeHost) AuthConfigured() bool                 { return true }
+func (h *fakeHost) AuthConfigured() bool                 { return !h.tokenless }
 func (h *fakeHost) RequestBase(*http.Request) string     { return "http://test" }
 func (h *fakeHost) BaseURL() string                      { return "" }
 func (h *fakeHost) ModuleDataDir(string) (string, error) { return h.dataDir, nil }

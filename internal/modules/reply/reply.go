@@ -136,6 +136,11 @@ func (m *Module) ensureStore(host module.Host) {
 	// A deletion that fails is logged and not retried: those replies stay
 	// until DELETE /replies?slug= removes them.
 	rs := m.rs
+	// Replies stored before their artifact's protection was recorded take
+	// it from the artifact as it is now.
+	if err := rs.backfillProtected(func(slug string) bool { return !m.publicNow(slug) }); err != nil {
+		log.Printf("reply: %s; those replies stay hidden from an inbox without a token", logsafe.Err(err))
+	}
 	host.Store().OnRemove(func(slug string) {
 		if _, err := rs.deleteSlug(slug); err != nil {
 			log.Printf("reply: could not remove a deleted artifact's replies (DELETE /replies?slug= removes them): %s", logsafe.Err(err))
@@ -435,20 +440,47 @@ func (m *Module) handleNextWait(w http.ResponseWriter, r *http.Request) {
 
 // The inbox routes sit behind RequireAuth, which lets everyone through when
 // no token is configured. The view password is a separate layer that holds
-// even then, so on such an instance the inbox acts only on replies to an
-// artifact anyone may read: one that exists, is not private and has no
-// password. Replies to any other slug are left out of a listing, and acking
-// or deleting them is refused (errTokenNeeded).
+// even then, so on such an instance the inbox acts only on replies written
+// to an artifact anyone could read (one that existed, was not private and
+// had no password, recorded with the reply) that still answer one anyone can
+// read. Other replies are left out of a listing before it is paged, a
+// ?slug= listing of a protected artifact is refused (errTokenNeeded), and
+// acking or deleting one by id answers as for an id that does not exist.
 const errTokenNeeded = "configure a token to manage replies to a private or password-protected page"
+
+// publicNow reports whether slug names an artifact anyone may read: it
+// exists, is not private and has no password.
+func (m *Module) publicNow(slug string) bool {
+	art, err := m.host.Store().LookupPublic(slug)
+	return err == nil && !art.HasPassword()
+}
 
 // readableWithoutToken reports whether the inbox may show or change the
 // replies to slug for a caller that RequireAuth admitted.
 func (m *Module) readableWithoutToken(slug string) bool {
+	return m.host.AuthConfigured() || m.publicNow(slug)
+}
+
+// visibleSlugs returns, for a caller without a token, the slugs whose
+// unprotected replies it may see (listOnly); nil when a token is configured.
+func (m *Module) visibleSlugs(slug string) (*[]string, error) {
 	if m.host.AuthConfigured() {
-		return true
+		return nil, nil
 	}
-	art, err := m.host.Store().LookupPublic(slug)
-	return err == nil && !art.HasPassword()
+	if slug != "" {
+		return &[]string{slug}, nil // checked readable by the caller
+	}
+	all, err := m.rs.unprotectedSlugs()
+	if err != nil {
+		return nil, err
+	}
+	only := []string{}
+	for _, s := range all {
+		if m.publicNow(s) {
+			only = append(only, s)
+		}
+	}
+	return &only, nil
 }
 
 // handleList returns replies as JSON (auth). Filters: ?slug=, ?status=.
@@ -480,24 +512,21 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 		}
 		after = &c
 	}
-	// One page at a time: a response holds at most listPageSize replies (each
-	// at most the reply text cap), whatever the store holds.
-	replies, next, err := m.rs.list(q.Get("slug"), status, after, listPageSize)
+	only, err := m.visibleSlugs(q.Get("slug"))
 	if err != nil {
 		log.Printf("reply: list failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	if !m.host.AuthConfigured() {
-		// A page may hold fewer replies than the limit, even none, and still
-		// have a next cursor.
-		kept := replies[:0]
-		for _, rep := range replies {
-			if m.readableWithoutToken(rep.Slug) {
-				kept = append(kept, rep)
-			}
-		}
-		replies = kept
+	// One page at a time: a response holds at most listPageSize replies (each
+	// at most the reply text cap), whatever the store holds. Without a token
+	// the replies the caller may not see are filtered out by the query, so
+	// they neither empty a page nor give a cursor.
+	replies, next, err := m.rs.listOnly(q.Get("slug"), status, after, listPageSize, only)
+	if err != nil {
+		log.Printf("reply: list failed: %s", logsafe.Err(err))
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 	if len(replies) == 0 {
 		replies = []Reply{}
@@ -534,24 +563,22 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// mayChangeReply reports whether the caller may ack or delete reply id,
-// answering 404 for an unknown id and 403 for a reply the inbox withholds
-// without a token (readableWithoutToken) when it may not.
+// mayChangeReply reports whether the caller may ack or delete reply id. A
+// reply the inbox withholds without a token (written to a protected
+// artifact, or answering one that is not public now) is answered 404 like
+// an unknown id, so ids cannot be probed for replies to protected pages.
 func (m *Module) mayChangeReply(w http.ResponseWriter, r *http.Request, id int64) bool {
 	if m.host.AuthConfigured() {
 		return true
 	}
-	slug, err := m.rs.slugOf(id)
+	slug, protected, err := m.rs.slugOf(id)
 	switch {
-	case errors.Is(err, errNoReply):
+	case errors.Is(err, errNoReply), err == nil && (protected || !m.publicNow(slug)):
 		http.NotFound(w, r)
 		return false
 	case err != nil:
 		log.Printf("reply: lookup failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
-		return false
-	case !m.readableWithoutToken(slug):
-		http.Error(w, errTokenNeeded, http.StatusForbidden)
 		return false
 	}
 	return true
@@ -597,7 +624,11 @@ func (m *Module) handleDeleteSlug(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errTokenNeeded, http.StatusForbidden)
 		return
 	}
-	n, err := m.rs.deleteSlug(slug)
+	del := m.rs.deleteSlug
+	if !m.host.AuthConfigured() {
+		del = m.rs.deleteSlugUnprotected // what the caller could list
+	}
+	n, err := del(slug)
 	if err != nil {
 		log.Printf("reply: delete failed for %s: %s", logsafe.Slug(slug), logsafe.Err(err, slug))
 		http.Error(w, "internal error", http.StatusInternalServerError)

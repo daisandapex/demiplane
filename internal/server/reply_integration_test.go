@@ -609,9 +609,9 @@ func TestRepliesToPasswordPageNeedACredential(t *testing.T) {
 }
 
 // TestTokenlessInboxKeepsPublicReplies: without a token the inbox still lists,
-// acks and deletes replies to a public page, and refuses (403) to act on
-// replies to a password-protected one, by slug or by id. With a token, the
-// token holder sees and manages both.
+// acks and deletes replies to a public page, and refuses to act on replies
+// to a password-protected one: 403 by slug, and by id 404 as for an unknown
+// id. With a token, the token holder sees and manages both.
 func TestTokenlessInboxKeepsPublicReplies(t *testing.T) {
 	for _, token := range []string{"", "s3cret"} {
 		ts := newConfiguredServer(t, Config{AuthToken: token})
@@ -668,7 +668,7 @@ func TestTokenlessInboxKeepsPublicReplies(t *testing.T) {
 			t.Errorf("token %q: inbox for the protected slug = %d, want %d", token, code, wantProtected)
 		}
 		// Ids follow submission order: 1 answers "open", 2 answers "locked".
-		wantChange := http.StatusForbidden
+		wantChange := http.StatusNotFound
 		if token != "" {
 			wantChange = http.StatusNoContent
 		}

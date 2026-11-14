@@ -209,7 +209,11 @@ func (m *Module) record(art store.Artifact, kind, body string) (Reply, *refusal,
 		return Reply{}, &refusal{status: http.StatusServiceUnavailable, msg: "the server is busy; try again shortly",
 			header: "Retry-After", value: "5"}, nil
 	}
-	rep, err := m.rs.addLimited(slug, kind, body, time.Now(), m.admission().lim, verify)
+	// The reply keeps its artifact's protection as of now: replies survive a
+	// republish, and an inbox without a token must not hand them out if the
+	// slug is later republished unprotected.
+	protected := art.Private || art.HasPassword()
+	rep, err := m.rs.addLimited(slug, kind, body, protected, time.Now(), m.admission().lim, verify)
 	switch {
 	case errors.Is(err, errPublishChanged):
 		ticket.release()

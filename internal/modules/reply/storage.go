@@ -5,6 +5,7 @@ package reply
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -97,6 +98,20 @@ CREATE INDEX IF NOT EXISTS idx_replies_page_slug_status ON replies(slug, status,
 	if _, err := rs.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate replies schema: %w", err)
 	}
+	// protected records whether the reply's artifact was private or
+	// password-protected when the reply was written: 1 or 0, NULL for a
+	// reply stored before the column existed (backfillProtected). A reply
+	// keeps it whatever the artifact later becomes, since replies survive a
+	// republish.
+	var hasProtected int
+	if err := rs.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('replies') WHERE name = 'protected'`).Scan(&hasProtected); err != nil {
+		return fmt.Errorf("migrate replies schema: %w", err)
+	}
+	if hasProtected == 0 {
+		if _, err := rs.db.Exec(`ALTER TABLE replies ADD COLUMN protected INTEGER`); err != nil {
+			return fmt.Errorf("migrate replies schema: %w", err)
+		}
+	}
 	// Aggregate totals for the storage limits, kept in the database by
 	// triggers so they change in the same transaction as the rows they count.
 	// Created once, seeded from the rows already there.
@@ -136,10 +151,11 @@ func (rs *replyStore) close() error {
 	return rs.db.Close()
 }
 
-// add inserts a reply and returns it with its assigned id.
+// add inserts a reply to an unprotected artifact and returns it with its
+// assigned id.
 func (rs *replyStore) add(slug, kind, body string, now time.Time) (Reply, error) {
 	res, err := rs.db.Exec(
-		`INSERT INTO replies (slug, kind, body, created_at, status) VALUES (?, ?, ?, ?, 'pending')`,
+		`INSERT INTO replies (slug, kind, body, created_at, status, protected) VALUES (?, ?, ?, ?, 'pending', 0)`,
 		slug, kind, body, now.Unix(),
 	)
 	if err != nil {
@@ -156,7 +172,8 @@ func (rs *replyStore) add(slug, kind, body string, now time.Time) (Reply, error)
 // the store's mutex and write lock.
 var beforeReplyLock func()
 
-// addLimited inserts a reply if lim allows it: fewer than lim.PerArtifact
+// addLimited inserts a reply, recording whether its artifact is protected
+// (private or password-protected), if lim allows it: fewer than lim.PerArtifact
 // replies for slug, and room under lim.Total and lim.TotalBytes. The checks
 // and the insert run in one IMMEDIATE transaction, so concurrent submissions,
 // from this process or another one sharing the database, cannot all pass a
@@ -168,7 +185,7 @@ var beforeReplyLock func()
 // INSERT; an error from it rolls the transaction back and is returned. Only
 // the INSERT and the COMMIT follow it, and holding the write lock, neither
 // waits for another writer.
-func (rs *replyStore) addLimited(slug, kind, body string, now time.Time, lim Limits, verify func() error) (Reply, error) {
+func (rs *replyStore) addLimited(slug, kind, body string, protected bool, now time.Time, lim Limits, verify func() error) (Reply, error) {
 	if beforeReplyLock != nil {
 		beforeReplyLock()
 	}
@@ -202,8 +219,8 @@ func (rs *replyStore) addLimited(slug, kind, body string, now time.Time, lim Lim
 		}
 	}
 	res, err := tx.Exec(
-		`INSERT INTO replies (slug, kind, body, created_at, status) VALUES (?, ?, ?, ?, 'pending')`,
-		slug, kind, body, now.Unix(),
+		`INSERT INTO replies (slug, kind, body, created_at, status, protected) VALUES (?, ?, ?, ?, 'pending', ?)`,
+		slug, kind, body, now.Unix(), protected,
 	)
 	if err != nil {
 		return Reply{}, fmt.Errorf("insert reply: %w", err)
@@ -325,11 +342,27 @@ func parseListCursor(s string) (listCursor, error) {
 // most limit+1 rows along an index and returns the cursor of the next page,
 // or nil when this is the last.
 func (rs *replyStore) list(slug, status string, after *listCursor, limit int) ([]Reply, *listCursor, error) {
+	return rs.listOnly(slug, status, after, limit, nil)
+}
+
+// listOnly is list restricted, when only is not nil, to the replies a caller
+// without a token may see: written to an unprotected artifact and answering
+// one of the slugs in *only. The restriction is part of the query, so pages
+// and their cursors are taken from those replies alone.
+func (rs *replyStore) listOnly(slug, status string, after *listCursor, limit int, only *[]string) ([]Reply, *listCursor, error) {
 	q := `SELECT id, slug, kind, body, created_at, status FROM replies`
 	var (
 		conds []string
 		args  []any
 	)
+	if only != nil {
+		slugs, err := json.Marshal(*only)
+		if err != nil {
+			return nil, nil, fmt.Errorf("list replies: %w", err)
+		}
+		conds = append(conds, "protected = 0", "slug IN (SELECT value FROM json_each(?))")
+		args = append(args, string(slugs))
+	}
 	if slug != "" {
 		conds = append(conds, "slug = ?")
 		args = append(args, slug)
@@ -392,6 +425,68 @@ func (rs *replyStore) deleteSlug(slug string) (int64, error) {
 	return res.RowsAffected()
 }
 
+// deleteSlugUnprotected is deleteSlug for the replies to slug written while
+// it was unprotected only.
+func (rs *replyStore) deleteSlugUnprotected(slug string) (int64, error) {
+	res, err := rs.db.Exec(`DELETE FROM replies WHERE slug = ? AND protected = 0`, slug)
+	if err != nil {
+		return 0, fmt.Errorf("delete replies: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// unprotectedSlugs returns the slugs that have replies written while they
+// were unprotected.
+func (rs *replyStore) unprotectedSlugs() ([]string, error) {
+	rows, err := rs.db.Query(`SELECT DISTINCT slug FROM replies WHERE protected = 0`)
+	if err != nil {
+		return nil, fmt.Errorf("list reply slugs: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			return nil, fmt.Errorf("list reply slugs: %w", err)
+		}
+		out = append(out, slug)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list reply slugs: %w", err)
+	}
+	return out, nil
+}
+
+// backfillProtected records protection for the replies stored before it was
+// recorded, from their artifact as it is now (protectedNow), the best that
+// is still known. Until it has run they count as protected.
+func (rs *replyStore) backfillProtected(protectedNow func(slug string) bool) error {
+	rows, err := rs.db.Query(`SELECT DISTINCT slug FROM replies WHERE protected IS NULL`)
+	if err != nil {
+		return fmt.Errorf("backfill reply protection: %w", err)
+	}
+	var slugs []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			rows.Close()
+			return fmt.Errorf("backfill reply protection: %w", err)
+		}
+		slugs = append(slugs, slug)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return fmt.Errorf("backfill reply protection: %w", err)
+	}
+	for _, slug := range slugs {
+		if _, err := rs.db.Exec(`UPDATE replies SET protected = ? WHERE slug = ? AND protected IS NULL`, protectedNow(slug), slug); err != nil {
+			return fmt.Errorf("backfill reply protection: %w", err)
+		}
+	}
+	return nil
+}
+
 // deleteID deletes one reply. Returns errNoReply if the id does not exist.
 func (rs *replyStore) deleteID(id int64) error {
 	res, err := rs.db.Exec(`DELETE FROM replies WHERE id = ?`, id)
@@ -408,17 +503,19 @@ func (rs *replyStore) deleteID(id int64) error {
 	return nil
 }
 
-// slugOf returns the slug reply id answers, or errNoReply.
-func (rs *replyStore) slugOf(id int64) (string, error) {
-	var slug string
-	err := rs.db.QueryRow(`SELECT slug FROM replies WHERE id = ?`, id).Scan(&slug)
+// slugOf returns the slug reply id answers and whether its artifact was
+// protected when it was written (a reply not yet backfilled counts as
+// protected), or errNoReply.
+func (rs *replyStore) slugOf(id int64) (slug string, protected bool, err error) {
+	var p sql.NullBool
+	err = rs.db.QueryRow(`SELECT slug, protected FROM replies WHERE id = ?`, id).Scan(&slug, &p)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", errNoReply
+		return "", false, errNoReply
 	}
 	if err != nil {
-		return "", fmt.Errorf("look up reply: %w", err)
+		return "", false, fmt.Errorf("look up reply: %w", err)
 	}
-	return slug, nil
+	return slug, !p.Valid || p.Bool, nil
 }
 
 // errNoReply is returned by ack when the id is unknown.
