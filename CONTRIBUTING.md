@@ -68,6 +68,46 @@ go test -race -tags "reply tls" ./...
 - **Security-sensitive code** (auth, rendering, slug handling, anything touching
   the store path) gets extra scrutiny — explain the threat you considered.
 
+## Fuzzing
+
+Everything that parses input demiplane did not write (markdown, slugs and
+site paths, request paths and headers, archives, MCP messages, reply
+submissions, TTLs, cursors, stored records) has a native Go fuzz target
+(`func FuzzXxx(f *testing.F)`) in a `fuzz_test.go` beside the code. CI does
+not run them; run them before you change a parser, and after:
+
+```sh
+make fuzz                     # every target, 60s each
+scripts/fuzz.sh 300           # every target, 5 minutes each
+scripts/fuzz.sh 120 Render    # targets whose name matches a regexp
+```
+
+The script runs one target at a time with `GOFLAGS=-p=1`, `-parallel 2` and
+no `-race`, so it fits a small machine, and prints one line per target: its
+name, package, executions, new corpus entries, and `PASS` or the crasher's
+path. To fuzz one target by hand, keep to the same flags:
+
+```sh
+GOFLAGS=-p=1 go test -run '^$' -fuzz '^FuzzRender$' -fuzztime 60s -parallel 2 ./internal/render
+```
+
+**Adding a target.** Put it in the package's `fuzz_test.go`. Seed it with
+`f.Add` from the package's own test fixtures and the inputs of earlier
+fixes. Assert the promise the code makes (what `SECURITY.md` says of it: no
+script in rendered HTML, a path that stays under its root, a cap that holds,
+a redirect that stays on this origin, a value that reaches SQL only as a
+bound parameter, a round trip), not only that it does not panic. Bound the
+time one input may take and fail past it. Never reach the network: use the
+package's in-process servers, a recording `http.RoundTripper`, and
+`f.TempDir()`. `scripts/fuzz.sh` finds new targets by name; there is no
+list to update.
+
+**Crashers.** A failing input is minimised and written to
+`testdata/fuzz/<Target>/<hash>` in the package, and from then on plain
+`go test` replays it. Commit it with the fix as its regression test. If the
+invariant was too strict rather than the code wrong, fix the target and keep
+the input anyway, with a comment in the target saying why it is allowed.
+
 ## Commit and PR conventions
 
 - Conventional-commit style subject lines (`feat:`, `fix:`, `docs:`, `chore:`,
