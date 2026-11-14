@@ -1,0 +1,5 @@
+go test fuzz v1
+string("slug=upload")
+string("multipart/form-data; boundary=x")
+[]byte("--x\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.html\"\r\n\r\nhi\r\nJ-x--\r\n")
+bool(true)
