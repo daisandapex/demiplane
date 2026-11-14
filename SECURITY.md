@@ -396,7 +396,9 @@ inherits the posture above and was reviewed adversarially before release.
 - **Bind loopback by default.** `--bind` defaults to `127.0.0.1:8080`; expose it
   only by binding a specific mesh/LAN IP or `0.0.0.0` (which logs a warning).
 - **Always set a token** (`--token-file` / `DEMIPLANE_TOKEN`) once the instance is
-  reachable by anything you don't fully trust.
+  reachable by anything you don't fully trust. An empty token file or a
+  `DEMIPLANE_TOKEN` that is set but blank stops the server at startup
+  instead of starting it open; unset the variable to run without a token.
 - **Timeouts.** `ReadHeaderTimeout` (15s) mitigates slowloris header stalls.
   Bodies and responses get per-route deadlines instead of a whole-request
   `ReadTimeout`/`WriteTimeout`, which would cut off large transfers and the

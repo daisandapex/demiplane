@@ -434,7 +434,13 @@ func TestClientPublishFailureExit(t *testing.T) {
 		return
 	}
 	c := exec.Command(os.Args[0], "-test.run=^TestClientPublishFailureExit$")
-	c.Env = append(os.Environ(), "DEMIPLANE_TEST_PUBLISH_FAILURE=1", "DEMIPLANE_TOKEN=")
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "DEMIPLANE_TOKEN=") {
+			env = append(env, kv)
+		}
+	}
+	c.Env = append(env, "DEMIPLANE_TEST_PUBLISH_FAILURE=1")
 	c.Stdin = strings.NewReader("page")
 	output, err := c.CombinedOutput()
 	var exitErr *exec.ExitError

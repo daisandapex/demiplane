@@ -110,7 +110,8 @@ only, see [DESIGN.md](../DESIGN.md#content-isolation)), `--store <dir>` (**requi
 the base URL hosts, `421` for anything else; when unset, a request on loopback
 must name loopback or a base URL host; see above),
 `--token-file <path>` (optional; bearer token for write/list — `DEMIPLANE_TOKEN` is the
-env-var alternative), `--sweep-interval <dur>` (optional; how often to reap past-TTL
+env-var alternative; an empty token file, or `DEMIPLANE_TOKEN` set but blank, is a startup
+error rather than an open instance), `--sweep-interval <dur>` (optional; how often to reap past-TTL
 artifacts, default `1m`), `--browse` (optional; serve an HTML index of non-private
 artifacts at `GET /` and make `GET /gallery` public; without it `/gallery` needs the bearer
 token), `--max-upload <bytes>` (optional; cap publish size, default

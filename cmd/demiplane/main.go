@@ -791,7 +791,10 @@ func runReceive(args []string) error {
 
 // resolveToken returns the bearer token from --token-file (preferred) or the
 // DEMIPLANE_TOKEN environment variable, or "" if neither is set. A token file
-// is read whole and trimmed of surrounding whitespace/newlines.
+// is read whole and trimmed of surrounding whitespace/newlines. An empty token
+// file, or DEMIPLANE_TOKEN set but blank (a failed command substitution, a
+// secret that did not resolve), is an error: the caller meant to set a token,
+// and serve would otherwise start with no authentication.
 func resolveToken(tokenFile string) (string, error) {
 	if tokenFile != "" {
 		b, err := os.ReadFile(tokenFile)
@@ -804,10 +807,14 @@ func resolveToken(tokenFile string) (string, error) {
 		}
 		return tok, nil
 	}
-	tok := strings.TrimSpace(os.Getenv("DEMIPLANE_TOKEN"))
+	raw, set := os.LookupEnv("DEMIPLANE_TOKEN")
+	tok := strings.TrimSpace(raw)
 	// Out of the environment once read, so nothing the server starts (a
 	// reply hook, its children) inherits it.
 	os.Unsetenv("DEMIPLANE_TOKEN")
+	if set && tok == "" {
+		return "", fmt.Errorf("DEMIPLANE_TOKEN is set but empty; unset it to run without a token")
+	}
 	return tok, nil
 }
 

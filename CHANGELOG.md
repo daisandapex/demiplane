@@ -8,6 +8,11 @@ All notable changes to demiplane are documented here. The format follows
 
 ### Security
 
+- `DEMIPLANE_TOKEN` set but empty or blank is an error, as an empty token
+  file already was, for `serve` and the client commands alike. It meant no
+  token, so a secret that did not resolve
+  (`DEMIPLANE_TOKEN=$(cat /run/secrets/token)` with the file missing) started
+  an open instance. Unset the variable to run without a token.
 - With no `XDG_CONFIG_HOME` and no `HOME`, `serve` reads no config file. It
   read `demiplane/config` relative to the working directory, so whoever could
   write there chose the configuration, including `reply_hook_exec`, a command

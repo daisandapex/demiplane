@@ -49,8 +49,7 @@ func mcpRaw(t *testing.T, args []string, stdinLines []string) (stdout, stderr st
 	cmd.Dir = repoRoot
 	// Neutralize ambient config so the test controls the whole environment: a
 	// developer's real DEMIPLANE_TOKEN/URL must not change what this asserts.
-	cmd.Env = append(os.Environ(),
-		"DEMIPLANE_TOKEN=",
+	cmd.Env = append(envWithout("DEMIPLANE_TOKEN"),
 		"DEMIPLANE_URL=",
 		"XDG_CONFIG_HOME="+t.TempDir(),
 	)

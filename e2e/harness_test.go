@@ -196,9 +196,10 @@ func startServerWithStoreDir(t *testing.T, storeDir string, opts serverOpts) *te
 
 	cmd := exec.Command(binPath, args...)
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(),
+	// Never inherit a dev's env token. Unset, not blank: a blank
+	// DEMIPLANE_TOKEN is a startup error.
+	cmd.Env = append(envWithout("DEMIPLANE_TOKEN"),
 		"XDG_CONFIG_HOME="+xdg,
-		"DEMIPLANE_TOKEN=", // never inherit a dev's env token
 	)
 	stderr := &syncBuffer{}
 	cmd.Stdout = stderr // startup banner + WARNING lines go to stderr, but be safe
@@ -373,7 +374,7 @@ func startMCP(t *testing.T, controlURL, contentURL, tokenFile string, extra ...s
 	args = append(args, extra...)
 	cmd := exec.Command(binPath, args...)
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "DEMIPLANE_TOKEN=", "DEMIPLANE_URL=", "DEMIPLANE_PUBLISH_ROOT=")
+	cmd.Env = append(envWithout("DEMIPLANE_TOKEN"), "DEMIPLANE_URL=", "DEMIPLANE_PUBLISH_ROOT=")
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -607,4 +608,22 @@ func assertNoSecret(t *testing.T, secret, where string, hay ...string) {
 			t.Fatalf("token leaked in %s", where)
 		}
 	}
+}
+
+// envWithout is the process environment with the named variables removed.
+func envWithout(names ...string) []string {
+	var out []string
+	for _, kv := range os.Environ() {
+		drop := false
+		for _, n := range names {
+			if strings.HasPrefix(kv, n+"=") {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			out = append(out, kv)
+		}
+	}
+	return out
 }

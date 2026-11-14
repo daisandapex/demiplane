@@ -40,3 +40,17 @@ func TestResolveTokenClearsTheEnvironment(t *testing.T) {
 		t.Fatalf("DEMIPLANE_TOKEN still set to %q", v)
 	}
 }
+
+// TestBlankTokenEnvIsRefused: an empty token file is a startup error, and so
+// is DEMIPLANE_TOKEN set to an empty or blank value (a failed command
+// substitution, a missing secret), which would otherwise start the server
+// with no authentication. See audit/08-blank-token-env-starts-open.md.
+func TestBlankTokenEnvIsRefused(t *testing.T) {
+	for _, v := range []string{"", "  \n"} {
+		t.Setenv("DEMIPLANE_TOKEN", v)
+		tok, err := resolveToken("")
+		if err == nil {
+			t.Errorf("resolveToken with DEMIPLANE_TOKEN=%q = %q, nil: want an error, as for an empty token file", v, tok)
+		}
+	}
+}
