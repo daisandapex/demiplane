@@ -95,7 +95,7 @@ check() {
 }
 check "a stub run exits 0" '[ "$status" -eq 0 ]'
 check "the run reports the stub's counts" 'grep -q "FuzzNextRedirect.*execs=42 .*new=3 .*PASS" <<<"$out"'
-check "only the filtered target ran" '[ "$(grep -c "^args=" "$record")" -eq 1 ] && grep -q "^args=test -run ^\$ -fuzz ^FuzzNextRedirect\$ -fuzztime 1s -parallel 2 ./internal/reply$" "$record"'
+check "only the filtered target ran" '[ "$(grep -c "^args=" "$record")" -eq 1 ] && grep -q "^args=test -run ^\$ -fuzz ^FuzzNextRedirect\$ -fuzztime 1s -fuzzminimizetime 1000x -parallel 2 ./internal/reply$" "$record"'
 check "GOMEMLIMIT is overridable" 'grep -qx "GOMEMLIMIT=123MiB" "$record"'
 check "ulimit -v is overridable" 'grep -qx "ulimit=2097152" "$record"'
 check "the timing switch is set" 'grep -qx "timing=1" "$record"'
@@ -128,6 +128,21 @@ check "and warns that the next run will need it cleared" 'grep -qF "$scratch/fre
 out=$(FUZZ_ROOT="$fixture" FUZZ_GO="$stub" FUZZ_TMPDIR="$full" FUZZ_DELETE_ME_MAX_KB=2GiB "$fuzz" 1 Redirect 2>&1)
 status=$?
 check "a cap that is not a number of KiB is refused" '[ "$status" -eq 2 ] && grep -q "FUZZ_DELETE_ME_MAX_KB must be" <<<"$out"'
+
+# Minimisation is bounded by a count, 1000 calls unless overridden.
+mins="$scratch/mins"
+for case in "300::1000x" "1:500x:500x" "1:20s:20s"; do
+	secs=${case%%:*}
+	want=${case##*:}
+	over=${case#*:}
+	over=${over%:*}
+	: >"$record"
+	FUZZ_ROOT="$fixture" FUZZ_GO="$stub" FUZZ_TMPDIR="$mins" FUZZ_MINIMIZE_TIME="$over" "$fuzz" "$secs" Redirect >/dev/null 2>&1
+	check "a ${secs}s run${over:+ with FUZZ_MINIMIZE_TIME=$over} minimises for $want" 'grep -q "^args=.* -fuzzminimizetime $want -parallel 2 " "$record"'
+done
+out=$(FUZZ_ROOT="$fixture" FUZZ_GO="$stub" FUZZ_TMPDIR="$mins" FUZZ_MINIMIZE_TIME='1s;x' "$fuzz" 1 Redirect 2>&1)
+status=$?
+check "a minimise time with other characters is refused" '[ "$status" -eq 2 ] && grep -q "FUZZ_MINIMIZE_TIME must be" <<<"$out"'
 
 # The scratch tree is moved aside, not deleted, like the script's own.
 mkdir -p "${TMPDIR:-/tmp}/delete-me"

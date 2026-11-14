@@ -94,7 +94,11 @@ the target ends; empty that directory yourself. The script never deletes, so
 it refuses to start, naming the directory, while `delete-me/` holds more than
 `FUZZ_DELETE_ME_MAX_KB` KiB (default 2 GiB). Put `FUZZ_TMPDIR` on a tmpfs
 if you can: the store-backed targets open SQLite per input and are slow on a
-syncing disk. `scripts/test-fuzz.sh` tests the script itself.
+syncing disk. The fuzzer also minimises every new corpus entry, for up to
+`-fuzzminimizetime`, and counts none of those executions until it is done;
+Go's 60s default could fill a short run with one minimisation, and a time
+bound ends each one by killing the worker, so the script bounds it by count
+instead, 1000 calls (`FUZZ_MINIMIZE_TIME` overrides it). `scripts/test-fuzz.sh` tests the script itself.
 
 The script sets `DEMIPLANE_FUZZ_TIMING=1`, which turns on the targets'
 wall-clock bounds. Plain `go test` leaves them off, because it replays the

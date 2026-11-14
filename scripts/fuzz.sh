@@ -31,6 +31,16 @@
 # tmpfs there keeps the store-backed targets fast. DEMIPLANE_FUZZ_TIMING=1 is set, which
 # turns on the targets' wall-clock bounds (plain `go test` leaves them off).
 #
+# The fuzzer minimises every new interesting input as well as a crasher, for
+# up to -fuzzminimizetime, and counts none of those calls in its execs until
+# a minimisation ends. Go's default of 60s let one minimisation of a slow
+# target fill a whole short run at "0/sec" (FuzzSiteArchive did). A time
+# bound is also enforced by killing the worker, which must then restart, so
+# minimisation is bounded by a count instead:
+#
+#   FUZZ_MINIMIZE_TIME   -fuzzminimizetime, a count such as 1000x (the
+#                        default) or a duration
+#
 # It prints one line per target:
 #
 #   <target> <package> execs=<n> new=<n> <PASS | FAIL path/to/crasher>
@@ -83,6 +93,13 @@ case "$keep_max_kb" in
 	;;
 esac
 keep="$tmpbase/delete-me"
+mintime="${FUZZ_MINIMIZE_TIME:-1000x}"
+case "$mintime" in
+'' | *[!0-9a-z.]*)
+	echo "FUZZ_MINIMIZE_TIME must be a duration or a count such as 500x" >&2
+	exit 2
+	;;
+esac
 
 # over_cap prints the KiB delete-me/ holds and succeeds when that is more
 # than the cap.
@@ -121,7 +138,7 @@ while IFS=$'\t' read -r name pkg; do
 	(
 		ulimit -v "$vmem_kb" || exit 2
 		export TMPDIR="$work" GOTMPDIR="$work"
-		exec "$gocmd" test -run '^$' -fuzz "^${name}\$" -fuzztime "${secs}s" -parallel 2 "$pkg"
+		exec "$gocmd" test -run '^$' -fuzz "^${name}\$" -fuzztime "${secs}s" -fuzzminimizetime "$mintime" -parallel 2 "$pkg"
 	) >"$log" 2>&1
 	status=$?
 	last=$(grep -E '^fuzz: elapsed:' "$log" | tail -n 1)
