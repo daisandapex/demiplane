@@ -563,9 +563,14 @@ Notes on the limits:
   hashing, and while it is refused every password it sends gets `429`, a
   remembered one or one already being checked included, since a guesser can
   share a viewer's client key (one NAT address, or a proxy not listed in
-  `--trusted-proxy`). A viewer with no recent failures is always verified, so other
-  clients' guesses cannot lock it out. Only completed failures count; a
-  client's own attempt still being checked does not. A client may have at
+  `--trusted-proxy`). The shared failure budgets (per artifact and for the
+  instance) refuse only clients with recent completed failures, so other
+  clients' guesses cannot use them to lock out a viewer with none; a
+  client's own attempt still being checked is not a completed failure. That
+  guarantee does not cover the client's own budgets: a check that is busy,
+  times out waiting for the KDF or is cancelled spends them as a wrong
+  password does (see above), so a client can reach `429` without a
+  completed failure. A client may have at
   most two checks (or publish-time password hashes) waiting for or running in
   the KDF at once, identical parallel checks sharing one; a third is answered
   `503` at once rather than queueing, so a few clients cannot fill the queue

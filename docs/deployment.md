@@ -269,9 +269,14 @@ Replies stored by 3.2.0 or earlier do not record whether their page had a
 password when they were written, so the first open of the reply store by a
 later release records every one of them as protected. On an instance with no
 token they stay hidden from the inbox, replies to pages that were always
-public included, until an operator lists them with the token: start `serve`
-with `--token-file` or `DEMIPLANE_TOKEN`, and `GET /replies` with that token
-lists, acks and deletes every reply.
+public included, until an operator handles them with the token: start
+`serve` with `--token-file` or `DEMIPLANE_TOKEN`, then list replies with
+`GET /replies` and that token. A page holds at most 100 replies and carries
+`next` while more remain, so follow `next` (`GET /replies?after=<next>`)
+until it is absent. Listing does not change a reply: acknowledge one with
+`POST /replies/{id}/ack`, delete one with `DELETE /replies/{id}`, or delete
+every reply to a slug with `DELETE /replies?slug=<slug>`, each its own
+request.
 
 The store directory holds `meta.db` (with its `-wal` and `-shm` files), `data/`
 (`blobs/` for artifact bytes, `sources/` for retained markdown, `sites/` for
