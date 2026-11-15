@@ -739,7 +739,15 @@ func TestCaptureHookDoesNotImportFromWorkingDirectory(t *testing.T) {
 			t.Skipf("skip: %s not on PATH", bin)
 		}
 	}
+	// The upload is recorded: an absent marker proves nothing unless the
+	// helper ran far enough to copy the page (the hook exits 0 either way).
+	uploads := make(chan string, 4)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		select {
+		case uploads <- string(body):
+		default:
+		}
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"url":"http://127.0.0.1/x"}`))
 	}))
@@ -767,5 +775,13 @@ func TestCaptureHookDoesNotImportFromWorkingDirectory(t *testing.T) {
 
 	if _, err := os.Stat(marker); err == nil {
 		t.Errorf("the hook imported re.py from its working directory and ran it\nhook output:\n%s", out)
+	}
+	select {
+	case body := <-uploads:
+		if !strings.Contains(body, "<!doctype html><html>note</html>") {
+			t.Errorf("the hook published %q, not the page\nhook output:\n%s", body, out)
+		}
+	default:
+		t.Errorf("the hook published nothing, so the helper never copied the page\nhook output:\n%s", out)
 	}
 }
