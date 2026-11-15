@@ -1182,6 +1182,12 @@ func (s *Store) Get(slug string) (Artifact, *File, error) {
 
 // lookup reads slug's metadata row.
 func (s *Store) lookup(slug string) (Artifact, error) {
+	return s.lookupContext(context.Background(), slug)
+}
+
+// lookupContext is lookup under ctx: the query stops, or does not start,
+// when ctx ends.
+func (s *Store) lookupContext(ctx context.Context, slug string) (Artifact, error) {
 	var (
 		a        Artifact
 		created  int64
@@ -1190,7 +1196,7 @@ func (s *Store) lookup(slug string) (Artifact, error) {
 		private  int
 		replies  int
 	)
-	err := s.db.QueryRow(
+	err := s.db.QueryRowContext(ctx,
 		`SELECT slug, filename, content_type, size, created_at, owner, private, password_hash, expires_at, series, render_spec, blob_gen, modified_at, replies, publish_id, pinned, writer_tag
 		   FROM artifacts WHERE slug = ?`,
 		slug,
@@ -1218,7 +1224,13 @@ func (s *Store) lookup(slug string) (Artifact, error) {
 // ErrNotFound. Like HasPublic, it never distinguishes a private or expired
 // artifact from a missing one.
 func (s *Store) LookupPublic(slug string) (Artifact, error) {
-	a, err := s.lookup(slug)
+	return s.LookupPublicContext(context.Background(), slug)
+}
+
+// LookupPublicContext is LookupPublic under ctx: the lookup does not run,
+// and returns ctx's error, once ctx has ended.
+func (s *Store) LookupPublicContext(ctx context.Context, slug string) (Artifact, error) {
+	a, err := s.lookupContext(ctx, slug)
 	if err != nil {
 		return Artifact{}, err
 	}

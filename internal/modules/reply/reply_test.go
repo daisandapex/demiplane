@@ -36,11 +36,19 @@ type fakeHost struct {
 	// stores counts Store calls: each is one use of the core store, such as
 	// an artifact lookup.
 	stores atomic.Int64
+	// onStore, when set, runs at each Store call.
+	onStore func()
 }
 
 const testToken = "secret"
 
-func (h *fakeHost) Store() *store.Store { h.stores.Add(1); return h.st }
+func (h *fakeHost) Store() *store.Store {
+	h.stores.Add(1)
+	if h.onStore != nil {
+		h.onStore()
+	}
+	return h.st
+}
 func (h *fakeHost) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.tokenless && r.Header.Get("Authorization") != "Bearer "+testToken {

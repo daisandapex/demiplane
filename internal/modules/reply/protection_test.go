@@ -316,7 +316,7 @@ func TestTokenlessListingWorkIsBounded(t *testing.T) {
 	before := h.stores.Load()
 	rec := httptest.NewRecorder()
 	ts.Config.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/replies?status=all", nil).WithContext(ctx))
-	if n := h.stores.Load() - before; n > 1 {
+	if n := h.stores.Load() - before; n != 0 {
 		t.Errorf("a cancelled listing took %d core lookups, want none", n)
 	}
 
@@ -419,5 +419,102 @@ INSERT INTO replies (slug, kind, body, created_at) VALUES ('review', 'comment', 
 	}
 	if p := getPage(t, ts.URL+"/replies?slug=report&status=all"); len(p.Replies) != 1 || p.Replies[0].Body != "public note" {
 		t.Errorf("legacy reply to a public page unchanged since = %v, want it listed", p.Replies)
+	}
+}
+
+// queryPlan returns the details of q's query plan, one per line.
+func queryPlan(t *testing.T, db *sql.DB, q string, args []any) string {
+	t.Helper()
+	rows, err := db.Query("EXPLAIN QUERY PLAN "+q, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var lines []string
+	for rows.Next() {
+		var (
+			id, parent, notused int
+			detail              string
+		)
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// TestTokenlessListingScansOnlyUnprotectedReplies: without a token, a
+// listing of every slug reads only replies written to an unprotected
+// artifact. That filter must be served by an index in the listing's order,
+// or each request walks every protected reply to find none: with N
+// protected replies and no others, GET /replies?status=all examined N rows
+// for an empty page. The plan of every query the listing runs must seek on
+// protected (and status, when filtered), with no scan and no sort, so a
+// query examines at most the rows it returns.
+func TestTokenlessListingScansOnlyUnprotectedReplies(t *testing.T) {
+	ts, m, _ := tokenlessSetup(t)
+	const n = 5000
+	at := int64(1_700_000_000)
+	tx, err := m.rs.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		if _, err := tx.Exec(`INSERT INTO replies (slug, kind, body, created_at, status, protected) VALUES ('page', 'comment', 'secret', ?, 'pending', 1)`, at+int64(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, status := range []string{"all", "pending", "read"} {
+		for _, after := range []*listCursor{nil, {created: at + n/2, id: n / 2}} {
+			q, args := unprotectedListQuery(status, after, listScanBatch)
+			plan := queryPlan(t, m.rs.db, q, args)
+			t.Logf("status %s, after %v: %s", status, after, plan)
+			want := "protected=?"
+			if status != "all" {
+				want = "protected=? AND status=?"
+			}
+			if !strings.Contains(plan, want) || strings.Contains(plan, "SCAN") || strings.Contains(plan, "TEMP B-TREE") {
+				t.Errorf("status %s, after %v: plan\n%s\nwant an index search on %s in page order, no scan or sort", status, after, plan, want)
+			}
+		}
+	}
+	if p := getPage(t, ts.URL+"/replies?status=all"); len(p.Replies) != 0 || p.Next != "" {
+		t.Errorf("tokenless listing of protected replies only = %d replies, next %q; want none", len(p.Replies), p.Next)
+	}
+}
+
+// TestCancelledTokenlessListingLooksNothingUp: the core lookups of a
+// tokenless listing run under the request's context. A lookup begun after
+// the client has gone must not run: here the request ends as its first
+// lookup starts, and the reply it would have shown must not be served.
+func TestCancelledTokenlessListingLooksNothingUp(t *testing.T) {
+	ts, m, st := tokenlessSetup(t)
+	h := m.host.(*fakeHost)
+	if _, err := st.Put(store.PutOptions{Slug: "pub", Replies: true}, strings.NewReader("<html>p</html>")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.rs.add("pub", "comment", "visible", time.Unix(1_700_000_000, 0)); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.onStore = cancel
+	before := h.stores.Load()
+	rec := httptest.NewRecorder()
+	ts.Config.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/replies?status=all", nil).WithContext(ctx))
+	h.onStore = nil
+	if n := h.stores.Load() - before; n > 1 {
+		t.Errorf("a listing cancelled at its first lookup took %d core lookups, want at most that one", n)
+	}
+	if strings.Contains(rec.Body.String(), "visible") {
+		t.Errorf("a lookup begun after the request ended ran and its reply was served: %d %s", rec.Code, rec.Body)
 	}
 }

@@ -113,6 +113,17 @@ CREATE INDEX IF NOT EXISTS idx_replies_page_slug_status ON replies(slug, status,
 			return fmt.Errorf("migrate replies schema: %w", err)
 		}
 	}
+	// Without a token, a listing of every slug reads only protected = 0
+	// replies, newest first: these indexes serve that filter (with the
+	// status, when one is asked for) in the listing's order, so a query
+	// examines only the rows it returns, however many replies are
+	// protected.
+	const protection = `
+CREATE INDEX IF NOT EXISTS idx_replies_page_protected        ON replies(protected, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_replies_page_protected_status ON replies(protected, status, created_at, id);`
+	if _, err := rs.db.Exec(protection); err != nil {
+		return fmt.Errorf("migrate replies schema: %w", err)
+	}
 	// Aggregate totals for the storage limits, kept in the database by
 	// triggers so they change in the same transaction as the rows they count.
 	// Created once, seeded from the rows already there.
@@ -349,7 +360,14 @@ func (rs *replyStore) list(slug, status string, after *listCursor, limit int) ([
 // listUnprotected is list over the replies written to an unprotected
 // artifact, to any slug; the query stops when ctx ends.
 func (rs *replyStore) listUnprotected(ctx context.Context, status string, after *listCursor, limit int) ([]Reply, *listCursor, error) {
-	return rs.listWhere(ctx, []string{"protected = 0"}, nil, status, after, limit)
+	q, args := unprotectedListQuery(status, after, limit)
+	return rs.listQuery(ctx, q, args, limit)
+}
+
+// unprotectedListQuery is the query listUnprotected runs, with its
+// arguments.
+func unprotectedListQuery(status string, after *listCursor, limit int) (string, []any) {
+	return listQuery([]string{"protected = 0"}, nil, status, after, limit)
 }
 
 // listOnly is list restricted, when only is not nil, to the replies a caller
@@ -380,6 +398,13 @@ func (rs *replyStore) listOnly(ctx context.Context, slug, status string, after *
 // listWhere is list for the replies matching conds (with args), by status
 // and after the cursor.
 func (rs *replyStore) listWhere(ctx context.Context, conds []string, args []any, status string, after *listCursor, limit int) ([]Reply, *listCursor, error) {
+	q, args := listQuery(conds, args, status, after, limit)
+	return rs.listQuery(ctx, q, args, limit)
+}
+
+// listQuery is the query for one page of the replies matching conds (with
+// args), by status and after the cursor: limit+1 rows, newest first.
+func listQuery(conds []string, args []any, status string, after *listCursor, limit int) (string, []any) {
 	q := `SELECT id, slug, kind, body, created_at, status FROM replies`
 	if status != "" && status != "all" {
 		conds = append(conds, "status = ?")
@@ -398,8 +423,13 @@ func (rs *replyStore) listWhere(ctx context.Context, conds []string, args []any,
 		q += c
 	}
 	q += " ORDER BY created_at DESC, id DESC LIMIT ?"
-	args = append(args, limit+1)
+	return q, append(args, limit+1)
+}
 
+// listQuery runs a query from listQuery and returns its page of at most
+// limit replies and the cursor of the next page, or nil when this is the
+// last.
+func (rs *replyStore) listQuery(ctx context.Context, q string, args []any, limit int) ([]Reply, *listCursor, error) {
 	rows, err := rs.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list replies: %w", err)

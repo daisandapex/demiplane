@@ -14,6 +14,7 @@
 package reply
 
 import (
+	"context"
 	"crypto/cipher"
 	"encoding/json"
 	"errors"
@@ -462,15 +463,16 @@ const errTokenNeeded = "configure a token to manage replies to a private or pass
 
 // publicNow reports whether slug names an artifact anyone may read: it
 // exists, is not private and has no password.
-func (m *Module) publicNow(slug string) bool {
-	art, err := m.host.Store().LookupPublic(slug)
+// The lookup runs under ctx and reports false once ctx has ended.
+func (m *Module) publicNow(ctx context.Context, slug string) bool {
+	art, err := m.host.Store().LookupPublicContext(ctx, slug)
 	return err == nil && !art.HasPassword()
 }
 
 // readableWithoutToken reports whether the inbox may show or change the
 // replies to slug for a caller that RequireAuth admitted.
-func (m *Module) readableWithoutToken(slug string) bool {
-	return m.host.AuthConfigured() || m.publicNow(slug)
+func (m *Module) readableWithoutToken(ctx context.Context, slug string) bool {
+	return m.host.AuthConfigured() || m.publicNow(ctx, slug)
 }
 
 // handleList returns replies as JSON (auth). Filters: ?slug=, ?status=.
@@ -479,7 +481,7 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	if slug := q.Get("slug"); slug != "" && !m.readableWithoutToken(slug) {
+	if slug := q.Get("slug"); slug != "" && !m.readableWithoutToken(r.Context(), slug) {
 		http.Error(w, errTokenNeeded, http.StatusForbidden)
 		return
 	}
@@ -584,7 +586,7 @@ func (m *Module) mayChangeReply(w http.ResponseWriter, r *http.Request, id int64
 	}
 	slug, protected, err := m.rs.slugOf(id)
 	switch {
-	case errors.Is(err, errNoReply), err == nil && (protected || !m.publicNow(slug)):
+	case errors.Is(err, errNoReply), err == nil && (protected || !m.publicNow(r.Context(), slug)):
 		http.NotFound(w, r)
 		return false
 	case err != nil:
@@ -631,7 +633,7 @@ func (m *Module) handleDeleteSlug(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "slug is required", http.StatusBadRequest)
 		return
 	}
-	if !m.readableWithoutToken(slug) {
+	if !m.readableWithoutToken(r.Context(), slug) {
 		http.Error(w, errTokenNeeded, http.StatusForbidden)
 		return
 	}

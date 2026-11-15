@@ -56,7 +56,10 @@ func (m *Module) listVisible(ctx context.Context, status string, after *listCurs
 				if err := ctx.Err(); err != nil {
 					return nil, nil, err
 				}
-				vis = m.publicNow(r.Slug)
+				vis = m.publicNow(ctx, r.Slug)
+				if err := ctx.Err(); err != nil {
+					return nil, nil, err // the lookup did not run
+				}
 				public[r.Slug] = vis
 			}
 			examined++
