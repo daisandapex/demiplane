@@ -65,14 +65,28 @@ func FuzzNextRedirect(f *testing.F) {
 	h := &fakeHost{st: st, dataDir: f.TempDir()}
 	m := &Module{}
 	m.setLimits(openLimits())
+	// The wait endpoint is on the content origin (ContentRoutes).
 	mux := http.NewServeMux()
-	m.Routes(mux, h)
+	m.ContentRoutes(mux, h)
 	f.Cleanup(func() { m.rs.close() })
-	f.Fuzz(func(t *testing.T, to string) {
+	next := func(to string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodGet, "http://demi.example/answer/report/next", nil)
 		r.URL.RawQuery = url.Values{"to": {to}}.Encode()
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, r)
+		return w
+	}
+	// The handler is reached: an existing destination redirects and a
+	// missing one gets the wait page.
+	if w := next("lesson-02"); w.Code != http.StatusFound || w.Header().Get("Location") != "/lesson-02" {
+		f.Fatalf("?to=lesson-02 answered %d, Location %q; want 302 to /lesson-02", w.Code, w.Header().Get("Location"))
+	}
+	if w := next("lesson-03"); w.Code != http.StatusOK {
+		f.Fatalf("?to=lesson-03 answered %d; want the wait page", w.Code)
+	}
+	f.Fuzz(func(t *testing.T, to string) {
+		w := next(to)
+		// The page "report" exists, so the endpoint never answers 404.
 		switch w.Code {
 		case http.StatusFound:
 			loc := w.Header().Get("Location")
@@ -84,7 +98,7 @@ func FuzzNextRedirect(f *testing.F) {
 			for _, m := range linkAttrRe.FindAllStringSubmatch(w.Body.String(), -1) {
 				sameOriginPath(t, "link", strings.ReplaceAll(m[1], "&amp;", "&"))
 			}
-		case http.StatusBadRequest, http.StatusNotFound:
+		case http.StatusBadRequest:
 		default:
 			t.Fatalf("?to=%q answered %d", to, w.Code)
 		}
