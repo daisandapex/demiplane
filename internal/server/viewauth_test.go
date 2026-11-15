@@ -914,13 +914,25 @@ func saturateKDF(t *testing.T, g *viewGate, hash string, slots int) (release fun
 	t.Helper()
 	unblock := make(chan struct{})
 	prev := verifyPassword
+	var wg sync.WaitGroup
+	var once sync.Once
+	// release is registered before verifyPassword is replaced and any worker
+	// starts, so a setup failure below still unblocks the workers and puts
+	// verifyPassword back for the tests that follow.
+	release = func() {
+		once.Do(func() {
+			close(unblock)
+			wg.Wait()
+			verifyPassword = prev
+		})
+	}
+	t.Cleanup(release)
 	verifyPassword = func(hash, pw string) bool {
 		if strings.HasPrefix(pw, "pending-") {
 			<-unblock
 		}
 		return prev(hash, pw)
 	}
-	var wg sync.WaitGroup
 	for i := 0; i < slots; i++ {
 		wg.Add(1)
 		go func(i int) {
@@ -935,15 +947,6 @@ func saturateKDF(t *testing.T, g *viewGate, hash string, slots int) (release fun
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	var once sync.Once
-	release = func() {
-		once.Do(func() {
-			close(unblock)
-			wg.Wait()
-			verifyPassword = prev
-		})
-	}
-	t.Cleanup(release)
 	return release
 }
 
