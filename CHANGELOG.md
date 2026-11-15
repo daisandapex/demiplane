@@ -6,6 +6,18 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A quota recount that can read a deleted or replaced site's leftover tree
+  only in part keeps the usage and site-entry counts it has and logs an
+  error, as it already did for a live site. When a site delete or replace
+  cannot remove the old tree, what is left stays charged under a temporary
+  name until the scavenger removes it; a recount that then read it only in part (a client
+  holding enough idle connections can exhaust descriptors partway down)
+  installed the smaller figure and freed quota for content still on disk.
+  A leftover tree the store holds no charge record for, such as one from
+  another process, is still counted for the part a recount can read.
+
 ## [3.3.0] - 2026-11-15
 
 A security release. An audit and a fuzzing pass over everything demiplane

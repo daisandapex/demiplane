@@ -68,7 +68,7 @@ func (s *Store) measureSiteEntries() error {
 		return fmt.Errorf("count site entries: %w", err)
 	}
 	s.quota.mu.Lock()
-	s.quota.entries, s.quota.partial = n, partial
+	s.quota.entries, s.quota.partial, s.quota.whole = n, partial, nil
 	s.quota.mu.Unlock()
 	return nil
 }
