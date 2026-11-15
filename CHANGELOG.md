@@ -66,6 +66,13 @@ All notable changes to demiplane are documented here. The format follows
   published through a short relative `--store` and reopened through a
   longer absolute one no longer fails to open, and a live site that cannot
   be measured is logged and quarantined instead of stopping the store.
+- A quota recount that can read a live site only in part keeps the usage
+  and site-entry counts it has and logs an error, instead of installing the
+  part it read. A recount runs every `--sweep-interval`, and a client could
+  make one fail partway down a deep site by holding enough idle connections
+  to exhaust the process's descriptors; the smaller figure then freed quota
+  for content still on disk, so a later publish could take the store past
+  `--store-quota`. Opening the store still quarantines such a site.
 - With no `--allowed-hosts`, a request that arrives on a loopback address
   is served only for `localhost`, a loopback IP literal or a base URL host;
   any other `Host` gets `421`. A loopback instance answered any `Host`, so a

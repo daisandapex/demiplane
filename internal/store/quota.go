@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -153,6 +154,11 @@ func (s *Store) RecountUsage() error {
 		}
 		q.mu.Lock()
 		applied := q.limit > 0 && q.active == 0 && q.gen == start
+		lost := ""
+		if applied {
+			lost = lostSiteCharge(q.partial, partial)
+			applied = lost == ""
+		}
 		if applied {
 			q.committed, q.entries, q.partial, q.counted = used, entries, partial, l
 		}
@@ -160,8 +166,36 @@ func (s *Store) RecountUsage() error {
 		if applied {
 			return nil
 		}
+		if lost != "" {
+			return fmt.Errorf("recount read site %q only in part; usage left as it was", lost)
+		}
 	}
 	return nil
+}
+
+// lostSiteCharge names a live site that a recount measured (into partial)
+// for less than it is charged now (was), or "" when there is none: a site
+// charged in full (not in was) that the recount could measure only in part,
+// or a quarantined one it measured for less than its quarantined charge.
+// Such a recount is incomplete, not a measurement of less content: the
+// failure may be transient (descriptors exhausted partway down a deep tree,
+// which a client can arrange with idle connections), and the part it missed
+// is still on disk. Installing it would free quota and entries for more
+// content, so RecountUsage keeps the counts it has. Opening the store
+// installs a partial measurement (SetQuota, measureSiteEntries): there is no
+// earlier charge to keep. Leftover staging trees are not sites and are left
+// out: they are only ever removed.
+func lostSiteCharge(was, partial map[string]siteCharge) string {
+	for name, c := range partial {
+		if strings.HasPrefix(name, tempPrefix) {
+			continue
+		}
+		old, ok := was[name]
+		if !ok || c.size < old.size || c.entries < old.entries {
+			return name
+		}
+	}
+	return ""
 }
 
 // beginTransition marks the start of a change to the live files (a rename into

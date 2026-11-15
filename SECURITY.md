@@ -375,7 +375,11 @@ inherits the posture above and was reviewed adversarially before release.
   `--store`, reopened through a longer absolute path) nor a tree's depth
   decides whether it can be; a leftover tree that cannot be measured is
   logged and skipped, and a live site that cannot be is logged and
-  quarantined (counted in part), rather than stopping the store from opening;
+  quarantined (counted in part), rather than stopping the store from opening.
+  Only opening the store installs such a partial count: a live recount that
+  reads a site for less than it is charged (a transient failure, such as
+  descriptors exhausted partway down a deep tree) keeps the counts it has and
+  logs the site, so it never frees quota for content still on disk;
   symlink and other non-regular entries are skipped, never materialized. The
   serve path opens every component through an `os.Root` and refuses a symlink
   anywhere on the path (site directory, intermediate directory or file),
