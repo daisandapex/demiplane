@@ -6,16 +6,121 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-11-15
+
+A security release. An audit and a fuzzing pass over everything demiplane
+reads from outside found the issues fixed below, among them DNS rebinding of
+a loopback instance, reply inbox leaks on an instance with no token, and
+password guesses that got past the rate budget. Every parser of outside input
+now has a native Go fuzz target; CI runs their seeds and the crashers kept
+from fuzzing with every test run, and `make fuzz` runs the fuzzer itself.
+
 Upgrade notes:
 
-- On an instance with no token, replies stored by an earlier release stay
-  hidden from the inbox, replies to pages that were always public included:
-  an earlier release did not record whether a reply's page had a password,
-  so each of those replies is recorded as protected. They stay hidden until
-  an operator lists them with the token: start `serve` with
-  `--token-file` or `DEMIPLANE_TOKEN`, and `GET /replies` with that token
-  lists, acks and deletes every reply. Replies written after the upgrade to
-  a public page are listed without a token as before.
+- Building from source needs Go 1.26.11 or newer, and a binary built with
+  1.26.10 should be rebuilt. `go install` on Go 1.21 or later fetches it
+  under the default `GOTOOLCHAIN=auto`; under `GOTOOLCHAIN=local` an older Go
+  stops with an error.
+- With no `--allowed-hosts`, a request that arrives on a loopback address (a
+  loopback bind, or a wildcard bind reached through loopback) is served only
+  for `localhost`, a loopback IP literal or a `--base-url` or
+  `--content-base-url` host; any other `Host` gets `421`. `localhost.`,
+  `0.0.0.0`, the machine's own hostname and a name a local reverse proxy
+  passes through now need `--allowed-hosts` or `--base-url`. A set
+  `--allowed-hosts` replaces the loopback names, so list `localhost` and
+  `127.0.0.1` in it too if they are still used.
+- An `--allowed-hosts` entry with brackets around anything but an IPv6
+  address (`[127.0.0.1]`) stops startup.
+- `DEMIPLANE_TOKEN` set but empty or blank stops `serve` and the client
+  commands with an error, unless `--token-file` is given. Unset it to run
+  without a token.
+- `serve` never reads its config file from a relative path. A relative
+  `XDG_CONFIG_HOME` is ignored for `$HOME/.config`, and with no absolute
+  `HOME` either no config file is read. Set an absolute `XDG_CONFIG_HOME` or
+  `HOME`.
+- A markdown heading whose id would be `dp-reply-h` or `ftree` gets a suffix
+  (`dp-reply-h-1`, `ftree-1`), as `dp-main` already did. Links to those
+  anchors need the new id.
+- With the `reply` module and no token, the inbox lists, acks and deletes
+  only replies written to a page that was public then and is public now.
+  Every reply stored before the upgrade is recorded as protected, since an
+  earlier release did not record whether its page had a password, and so is
+  every reply to a private or password-protected page: these are hidden from
+  a request without the token for good, and ack and delete of one answer
+  `404`. To read them, start `serve` with `--token-file` or
+  `DEMIPLANE_TOKEN` and list them with the token.
+- Without a token, `GET /replies` with no `?slug=` can answer fewer than 100
+  replies, or none, with a `next` cursor. A client paging the inbox follows
+  `next` until there is none, rather than stopping at a short page.
+- A view-password client (one IPv4 address or IPv6 /64, or the address a
+  proxy in `--trusted-proxy` forwards) whose failure budget is spent gets
+  `429` for every password, one it already verified included, until the
+  budget refills. A viewer sharing an address with a locked-out guesser is
+  locked out with it; list a reverse proxy in `--trusted-proxy` so each
+  viewer has an address of its own.
+- A view-password check that ends in `503`, because the client already has
+  two checks running, its wait for a KDF slot timed out or it disconnected
+  while waiting, spends the client's failure budget like a wrong guess.
+- A publish with an empty or blank `X-Demiplane-Password` header is refused
+  with `400`. It published the artifact public; omit the header to publish
+  without a password.
+
+### Fixed
+
+- A markdown heading can no longer take an id the page chrome writes
+  (`dp-reply-h`, `ftree`, as `dp-main` already could not); it gets a suffix
+  instead. `## dp reply h` took the reply box heading's id earlier in the
+  page, so the answer form's accessible name became the document's own text.
+- A `*` or `_` inside a markdown link destination no longer pairs with one
+  outside it: `[a](/x*y) *z` put `<em>` inside the `href`, so the link went
+  somewhere other than the address the link check allowed, and
+  `*a [b](/c*d) e` put `</em>` there, leaving the emphasis open over the rest
+  of the page, the reply box and colophon included.
+- A reply or answer whose text holds a NUL byte is refused with 400 on every
+  submit path. It used to be stored, and the exec hook then never ran for it,
+  because an environment variable cannot hold a NUL.
+- `demiplane publish` checks the URL the server returns before printing,
+  copying or opening it: only visible characters (no control, format, bidi,
+  line separator, zero-width or space characters, no invalid UTF-8), http or
+  https, a host and no userinfo. Any other value is refused: the error
+  quotes at most its first 200 bytes and says how many more there were,
+  nothing is copied or opened, and the command exits non-zero. Under
+  `--watch` every republish is checked the same way; a refused URL is
+  reported in that form on stderr instead of the `republished` line, and
+  watching goes on.
+- These client outputs now escape C0 and C1 controls, DEL, Unicode format
+  characters (bidi overrides among them), U+2028, U+2029 and invalid UTF-8
+  instead of writing them raw:
+  - `publish`: the first line of an error body from the server, and the text
+    of a transport or TLS error (a certificate's names, for one, which Go
+    quotes when they do not match the host), both in the one-shot error and
+    in each `--watch` `republish failed` line;
+  - `list`: every string in the table;
+  - `delete`: the manifest (instance, kind, id, revision), the host in the
+    interactive confirm prompt, and the report (kind, id, reason);
+  - `list --json`, `ttl`, `pin` and `unpin`: the JSON they print, which stays
+    valid JSON with the same values. `ttl`, `pin` and `unpin` now print it on
+    one line, without the tabs, carriage returns and newlines the server may
+    put between tokens.
+
+  `list`, `delete`, `ttl`, `pin`, `unpin` and `delete-site --url` already
+  reported a failed request or an error status with fixed text that quotes
+  nothing from the server or the connection.
+- `demiplane mcp` passes server text, error bodies and transport error text
+  included, to its JSON-RPC peer without this escaping: that peer is a
+  program, not a terminal. Its own stderr carries no server text.
+- The text escaping these outputs share with the server's log lines for
+  outside values now escapes U+2028 and U+2029 as well, and writes a rune
+  above U+FFFF as `\U` and eight hex digits (`\U000e0001`) rather than a
+  four-digit form that dropped its high bits. The JSON outputs use a `\u`
+  surrogate pair for such a rune.
+- A browser reply or answer refused for a missing or wrong form token no
+  longer spends the per-client, per-artifact or global reply rate budget, so
+  junk posts cannot lock real repliers out with 429. The budget is charged
+  after the token check.
+- `docs/tls.md` says how CLI and MCP clients trust a self-signed instance.
+  `SSL_CERT_FILE` adds the certificate to the system roots on Debian and
+  Ubuntu; `SSL_CERT_DIR` set to an empty or missing directory drops them.
 
 ### Security
 
@@ -163,63 +268,6 @@ Upgrade notes:
   (`[127.0.0.1]`) is refused at startup. A scoped address keeps working:
   with `--base-url http://[fe80::1%25eth0]:8080`, the `Host`
   `[fe80::1%eth0]`, with or without a port, is still accepted.
-
-### Fixed
-
-- A markdown heading can no longer take an id the page chrome writes
-  (`dp-reply-h`, `ftree`, as `dp-main` already could not); it gets a suffix
-  instead. `## dp reply h` took the reply box heading's id earlier in the
-  page, so the answer form's accessible name became the document's own text.
-- A `*` or `_` inside a markdown link destination no longer pairs with one
-  outside it: `[a](/x*y) *z` put `<em>` inside the `href`, so the link went
-  somewhere other than the address the link check allowed, and
-  `*a [b](/c*d) e` put `</em>` there, leaving the emphasis open over the rest
-  of the page, the reply box and colophon included.
-- A reply or answer whose text holds a NUL byte is refused with 400 on every
-  submit path. It used to be stored, and the exec hook then never ran for it,
-  because an environment variable cannot hold a NUL.
-- `demiplane publish` checks the URL the server returns before printing,
-  copying or opening it: only visible characters (no control, format, bidi,
-  line separator, zero-width or space characters, no invalid UTF-8), http or
-  https, a host and no userinfo. Any other value is refused: the error
-  quotes at most its first 200 bytes and says how many more there were,
-  nothing is copied or opened, and the command exits non-zero. Under
-  `--watch` every republish is checked the same way; a refused URL is
-  reported in that form on stderr instead of the `republished` line, and
-  watching goes on.
-- These client outputs now escape C0 and C1 controls, DEL, Unicode format
-  characters (bidi overrides among them), U+2028, U+2029 and invalid UTF-8
-  instead of writing them raw:
-  - `publish`: the first line of an error body from the server, and the text
-    of a transport or TLS error (a certificate's names, for one, which Go
-    quotes when they do not match the host), both in the one-shot error and
-    in each `--watch` `republish failed` line;
-  - `list`: every string in the table;
-  - `delete`: the manifest (instance, kind, id, revision), the host in the
-    interactive confirm prompt, and the report (kind, id, reason);
-  - `list --json`, `ttl`, `pin` and `unpin`: the JSON they print, which stays
-    valid JSON with the same values. `ttl`, `pin` and `unpin` now print it on
-    one line, without the tabs, carriage returns and newlines the server may
-    put between tokens.
-
-  `list`, `delete`, `ttl`, `pin`, `unpin` and `delete-site --url` already
-  reported a failed request or an error status with fixed text that quotes
-  nothing from the server or the connection.
-- `demiplane mcp` passes server text, error bodies and transport error text
-  included, to its JSON-RPC peer without this escaping: that peer is a
-  program, not a terminal. Its own stderr carries no server text.
-- The text escaping these outputs share with the server's log lines for
-  outside values now escapes U+2028 and U+2029 as well, and writes a rune
-  above U+FFFF as `\U` and eight hex digits (`\U000e0001`) rather than a
-  four-digit form that dropped its high bits. The JSON outputs use a `\u`
-  surrogate pair for such a rune.
-- A browser reply or answer refused for a missing or wrong form token no
-  longer spends the per-client, per-artifact or global reply rate budget, so
-  junk posts cannot lock real repliers out with 429. The budget is charged
-  after the token check.
-- `docs/tls.md` says how CLI and MCP clients trust a self-signed instance.
-  `SSL_CERT_FILE` adds the certificate to the system roots on Debian and
-  Ubuntu; `SSL_CERT_DIR` set to an empty or missing directory drops them.
 
 ## [3.2.0] - 2026-11-08
 
