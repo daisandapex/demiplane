@@ -98,17 +98,20 @@ func TestConnectEmitsValidMCPConfig(t *testing.T) {
 		Args:  []string{"--allowed-hosts", "demiplane.internal,127.0.0.1"},
 	})
 
+	// listed marks the Hosts --allowed-hosts names: the server must answer
+	// those, so only an unlisted one may be refused with 421.
 	hosts := []struct {
-		name string
-		host string
+		name   string
+		host   string
+		listed bool
 	}{
-		{"default", ""},
-		{"plain hostname", "demiplane.internal:8891"},
-		{"quote injection", `evil"host:8080`},
-		{"json brace injection", `h","x":"y`},
-		{"angle brackets", `<script>alert(1)</script>`},
-		{"backslash", `back\slash:1`},
-		{"newline", "host\nX-Injected: 1"},
+		{"default", "", true},
+		{"plain hostname", "demiplane.internal:8891", true},
+		{"quote injection", `evil"host:8080`, false},
+		{"json brace injection", `h","x":"y`, false},
+		{"angle brackets", `<script>alert(1)</script>`, false},
+		{"backslash", `back\slash:1`, false},
+		{"newline", "host\nX-Injected: 1", false},
 	}
 
 	for _, hc := range hosts {
@@ -123,7 +126,8 @@ func TestConnectEmitsValidMCPConfig(t *testing.T) {
 					}
 				}()
 				// A Host outside the accepted list is refused before routing,
-				// which is as good as a client-side refusal.
+				// which is as good as a client-side refusal. A listed one
+				// must be answered.
 				if hc.host != "" {
 					req, err := http.NewRequest(http.MethodGet, srv.ControlURL+"/connect", nil)
 					if err != nil {
@@ -132,9 +136,14 @@ func TestConnectEmitsValidMCPConfig(t *testing.T) {
 					req.Host = hc.host
 					if resp, err := srv.client.Do(req); err == nil {
 						resp.Body.Close()
-						if resp.StatusCode == http.StatusMisdirectedRequest {
+						switch {
+						case hc.listed && resp.StatusCode != http.StatusOK:
+							t.Fatalf("listed Host %q answered %d, want 200", hc.host, resp.StatusCode)
+						case !hc.listed && resp.StatusCode == http.StatusMisdirectedRequest:
 							t.Skipf("server refused Host %q with 421", hc.host)
 						}
+					} else if hc.listed {
+						t.Fatalf("listed Host %q: %v", hc.host, err)
 					}
 				}
 				return fetchConnect(t, srv, hc.host)
