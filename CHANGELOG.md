@@ -73,6 +73,12 @@ All notable changes to demiplane are documented here. The format follows
   to exhaust the process's descriptors; the smaller figure then freed quota
   for content still on disk, so a later publish could take the store past
   `--store-quota`. Opening the store still quarantines such a site.
+- The owner inventory (`GET /list?all=1`) and conditional site deletion
+  (`POST /manage/delete`) measure a site by descriptor too. They walked it
+  by full path, so a store published through a short relative `--store` and
+  reopened through a longer absolute one answered `500` for a page listing a
+  site with an entry past the platform path limit, and could not delete that
+  site by revision.
 - With no `--allowed-hosts`, a request that arrives on a loopback address
   is served only for `localhost`, a loopback IP literal or a base URL host;
   any other `Host` gets `421`. A loopback instance answered any `Host`, so a

@@ -8,7 +8,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -145,20 +144,55 @@ func (s *Store) siteMetadataLocked(site string) (SiteInventory, error) {
 	// replacements. Hashing hides host filesystem details from the wire protocol.
 	out.Revision = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%v:%d", siteFileIdentity(fi), fi.ModTime().UnixNano()))))
 	out.CreatedAt = fi.ModTime().UTC()
-	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, e error) error {
-		if e != nil {
-			return e
-		}
-		if d.Type().IsRegular() {
-			info, e := d.Info()
-			if e != nil {
-				return e
-			}
-			out.Size += info.Size()
-		}
-		return nil
-	})
+	// By descriptor, like every other site walk (sitetree.go): a full path
+	// can pass PATH_MAX when the store is opened through a longer spelling
+	// of its root than the one the site was published under.
+	parent, name, err := openParent(dir)
+	if err != nil {
+		return out, err
+	}
+	defer parent.Close()
+	d, err := parent.OpenRoot(name)
+	if err != nil {
+		return out, err
+	}
+	defer d.Close()
+	out.Size, err = regularBytes(d)
 	return out, err
+}
+
+// regularBytes sums the regular files under the open directory d, one name
+// at a time relative to an open directory. Unlike dirStats it skips nothing
+// and fails on any error: SiteMetadata reports a site's content, not a
+// quota charge.
+func regularBytes(d *os.Root) (int64, error) {
+	names, err := readNames(d)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	for _, name := range names {
+		fi, err := d.Lstat(name)
+		if err != nil {
+			return n, err
+		}
+		switch {
+		case fi.Mode().IsRegular():
+			n += fi.Size()
+		case fi.IsDir():
+			sub, err := d.OpenRoot(name)
+			if err != nil {
+				return n, err
+			}
+			m, err := regularBytes(sub)
+			sub.Close()
+			n += m
+			if err != nil {
+				return n, err
+			}
+		}
+	}
+	return n, nil
 }
 func (s *Store) DeleteSiteRevision(site, revision string) error {
 	if err := ValidateNamedSlug(site); err != nil {

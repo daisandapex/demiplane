@@ -260,3 +260,68 @@ func TestOpenQuarantinesAnUnmeasurableLiveSite(t *testing.T) {
 		t.Fatalf("quarantined sites after the tree measures again = %q, want none", q)
 	}
 }
+
+// TestSiteMetadataSurvivesALongerRootSpelling: the owner inventory
+// (SiteMetadata, GET /list?all=1) and conditional deletion
+// (DeleteSiteRevision, POST /manage/delete) measure a site too, and must not
+// depend on how the store root is spelled either. A store opened as a short
+// relative path, holding an entry that is past PATH_MAX from a long absolute
+// spelling of the same root, reports the site's size and revision through the
+// long spelling and deletes it by the revision saved before.
+func TestSiteMetadataSurvivesALongerRootSpelling(t *testing.T) {
+	const pathMax = 4095
+	base := filepath.Join(t.TempDir(), strings.Repeat("d", 200))
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(base)
+	s, err := Open("s")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	rel := deepPath(s.maxSiteRelPath("site"))
+	sw, err := s.NewSiteWriter("site")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sw.AddFile(rel, strings.NewReader("xyz")); err != nil {
+		sw.Abort()
+		t.Fatalf("AddFile(%d-byte path): %v", len(rel), err)
+	}
+	if _, err := sw.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.SiteMetadata("site")
+	if err != nil {
+		t.Fatalf("SiteMetadata through the short spelling: %v", shortenErr(err))
+	}
+	if before.Size != 3 {
+		t.Fatalf("site size = %d, want 3", before.Size)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	long := filepath.Join(base, "s")
+	if n := len(filepath.Join(long, contentDirName, "sites", "site", rel)); n <= pathMax {
+		t.Fatalf("setup: the long spelling is only %d bytes", n)
+	}
+	again, err := Open(long)
+	if err != nil {
+		t.Fatalf("the store does not open through a longer spelling: %v", shortenErr(err))
+	}
+	defer again.Close()
+	meta, err := again.SiteMetadata("site")
+	if err != nil {
+		t.Fatalf("SiteMetadata through the longer spelling: %v", shortenErr(err))
+	}
+	if meta != before {
+		t.Errorf("SiteMetadata through the longer spelling = %+v, want %+v", meta, before)
+	}
+	if err := again.DeleteSiteRevision("site", before.Revision); err != nil {
+		t.Fatalf("DeleteSiteRevision through the longer spelling: %v", shortenErr(err))
+	}
+	if _, err := again.SiteMetadata("site"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SiteMetadata after the delete = %v, want ErrNotFound", err)
+	}
+}
