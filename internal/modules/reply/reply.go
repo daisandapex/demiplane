@@ -142,18 +142,6 @@ func (m *Module) ensureStore(host module.Host) {
 	// A deletion that fails is logged and not retried: those replies stay
 	// until DELETE /replies?slug= removes them.
 	rs := m.rs
-	// Replies stored before their artifact's protection was recorded count
-	// as unprotected only when written to the artifact as it is now, and
-	// that is public (backfillProtected).
-	if err := rs.backfillProtected(func(slug string) (int64, bool) {
-		art, err := m.host.Store().LookupPublic(slug)
-		if err != nil || art.HasPassword() {
-			return 0, false
-		}
-		return art.CreatedAt.Unix(), true
-	}); err != nil {
-		log.Printf("reply: %s; those replies stay hidden from an inbox without a token", logsafe.Err(err))
-	}
 	host.Store().OnRemove(func(slug string) {
 		if _, err := rs.deleteSlug(slug); err != nil {
 			log.Printf("reply: could not remove a deleted artifact's replies (DELETE /replies?slug= removes them): %s", logsafe.Err(err))

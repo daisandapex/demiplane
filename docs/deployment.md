@@ -265,6 +265,14 @@ Rolling back is therefore a restore: back up the store directory before
 upgrading, and to return to an older release, stop demiplane and restore that
 backup. Publishes made after the upgrade are not in it.
 
+Replies stored by 3.2.0 or earlier do not record whether their page had a
+password when they were written, so the first open of the reply store by a
+later release records every one of them as protected. On an instance with no
+token they stay hidden from the inbox, replies to pages that were always
+public included, until an operator lists them with the token: start `serve`
+with `--token-file` or `DEMIPLANE_TOKEN`, and `GET /replies` with that token
+lists, acks and deletes every reply.
+
 The store directory holds `meta.db` (with its `-wal` and `-shm` files), `data/`
 (`blobs/` for artifact bytes, `sources/` for retained markdown, `sites/` for
 site trees), `modules/` (module storage, such as replies), the lock files

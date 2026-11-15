@@ -100,9 +100,8 @@ CREATE INDEX IF NOT EXISTS idx_replies_page_slug_status ON replies(slug, status,
 		return fmt.Errorf("migrate replies schema: %w", err)
 	}
 	// protected records whether the reply's artifact was private or
-	// password-protected when the reply was written: 1 or 0, NULL for a
-	// reply stored before the column existed (backfillProtected). A reply
-	// keeps it whatever the artifact later becomes, since replies survive a
+	// password-protected when the reply was written: 1 or 0. A reply keeps
+	// it whatever the artifact later becomes, since replies survive a
 	// republish.
 	var hasProtected int
 	if err := rs.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('replies') WHERE name = 'protected'`).Scan(&hasProtected); err != nil {
@@ -113,12 +112,22 @@ CREATE INDEX IF NOT EXISTS idx_replies_page_slug_status ON replies(slug, status,
 			return fmt.Errorf("migrate replies schema: %w", err)
 		}
 	}
+	// A reply stored before protection was recorded (NULL) is recorded as
+	// protected. Nothing shows what its artifact was when it was written:
+	// replies survive a republish, which can drop a password, and a
+	// publish takes its created_at before it commits, so neither the
+	// artifact as it is now nor a reply being later than its publish shows
+	// which publish the reply answered. A token holder still sees it. A
+	// reply written by an older binary sharing the database is recorded at
+	// the next open; until then a NULL counts as protected too.
+	//
 	// Without a token, a listing of every slug reads only protected = 0
 	// replies, newest first: these indexes serve that filter (with the
 	// status, when one is asked for) in the listing's order, so a query
 	// examines only the rows it returns, however many replies are
 	// protected.
 	const protection = `
+UPDATE replies SET protected = 1 WHERE protected IS NULL;
 CREATE INDEX IF NOT EXISTS idx_replies_page_protected        ON replies(protected, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_replies_page_protected_status ON replies(protected, status, created_at, id);`
 	if _, err := rs.db.Exec(protection); err != nil {
@@ -479,50 +488,6 @@ func (rs *replyStore) deleteSlugUnprotected(slug string) (int64, error) {
 	return res.RowsAffected()
 }
 
-// backfillProtected records protection for the replies stored before it was
-// recorded. Being public now does not show a reply was written to a public
-// page: replies survive a republish, which can drop a password. So a reply
-// counts as unprotected only when its artifact is public now (public) and
-// was last published before the reply was written (published, unix seconds,
-// strictly earlier): every publish sets the artifact's created_at and
-// nothing changes its protection in place, so that artifact is the one the
-// reply answered. Every other reply counts as protected, the fail-closed
-// reading of unknown history; a token holder still sees it. Until this has
-// run they all count as protected.
-func (rs *replyStore) backfillProtected(publishedPublic func(slug string) (published int64, public bool)) error {
-	rows, err := rs.db.Query(`SELECT DISTINCT slug FROM replies WHERE protected IS NULL`)
-	if err != nil {
-		return fmt.Errorf("backfill reply protection: %w", err)
-	}
-	var slugs []string
-	for rows.Next() {
-		var slug string
-		if err := rows.Scan(&slug); err != nil {
-			rows.Close()
-			return fmt.Errorf("backfill reply protection: %w", err)
-		}
-		slugs = append(slugs, slug)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return fmt.Errorf("backfill reply protection: %w", err)
-	}
-	for _, slug := range slugs {
-		published, public := publishedPublic(slug)
-		var err error
-		if public {
-			_, err = rs.db.Exec(`UPDATE replies SET protected = CASE WHEN created_at > ? THEN 0 ELSE 1 END WHERE slug = ? AND protected IS NULL`, published, slug)
-		} else {
-			_, err = rs.db.Exec(`UPDATE replies SET protected = 1 WHERE slug = ? AND protected IS NULL`, slug)
-		}
-		if err != nil {
-			return fmt.Errorf("backfill reply protection: %w", err)
-		}
-	}
-	return nil
-}
-
 // deleteID deletes one reply. Returns errNoReply if the id does not exist.
 func (rs *replyStore) deleteID(id int64) error {
 	res, err := rs.db.Exec(`DELETE FROM replies WHERE id = ?`, id)
@@ -540,7 +505,7 @@ func (rs *replyStore) deleteID(id int64) error {
 }
 
 // slugOf returns the slug reply id answers and whether its artifact was
-// protected when it was written (a reply not yet backfilled counts as
+// protected when it was written (a reply with protection unknown counts as
 // protected), or errNoReply.
 func (rs *replyStore) slugOf(id int64) (slug string, protected bool, err error) {
 	var p sql.NullBool

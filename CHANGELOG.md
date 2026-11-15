@@ -6,6 +6,17 @@ All notable changes to demiplane are documented here. The format follows
 
 ## [Unreleased]
 
+Upgrade notes:
+
+- On an instance with no token, replies stored by an earlier release stay
+  hidden from the inbox, replies to pages that were always public included:
+  an earlier release did not record whether a reply's page had a password,
+  so each of those replies is recorded as protected. They stay hidden until
+  an operator lists them with the token: start `serve` with
+  `--token-file` or `DEMIPLANE_TOKEN`, and `GET /replies` with that token
+  lists, acks and deletes every reply. Replies written after the upgrade to
+  a public page are listed without a token as before.
+
 ### Security
 
 - A site publish that fails on the store's filesystem (a full disk, an I/O
@@ -42,10 +53,13 @@ All notable changes to demiplane are documented here. The format follows
 - Without a token, a reply to a password-protected page stays out of the
   inbox after the page is republished without a password: each reply now
   records whether its artifact was protected when it was written. A reply
-  stored before that counts as unprotected only if its artifact is public
-  when the server starts and was last published before the reply: a page
-  republished since may have had a password when the reply was written, so
-  its replies stay hidden from an inbox without a token.
+  stored before that is recorded as protected, whatever its artifact is
+  now, and stays hidden from an inbox without a token (see the upgrade
+  notes). Neither the artifact being public at startup nor its publish time
+  shows which publish the reply answered: a publish takes its time before
+  it syncs and commits, so a reply to the protected page written during a
+  republish without the password is later than the public page it did not
+  answer.
   Hidden replies are filtered out before the inbox is paged, so a page is not
   emptied by them and no `next` cursor carries a hidden reply's time and id;
   ack and delete of a hidden reply answer `404`, as for an unknown id,

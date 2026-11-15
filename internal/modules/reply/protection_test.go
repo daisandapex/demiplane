@@ -213,8 +213,10 @@ func TestTokenHolderManagesRepliesOfAGoneArtifact(t *testing.T) {
 }
 
 // TestRepliesFromBeforeProtectionWasRecorded: a replies database from before
-// the protected column gains it on open; its replies count as protected
-// until backfilled from their artifact as it is then.
+// the protected column gains it on open, and every reply already there is
+// recorded as protected, whatever its artifact is now: nothing records what
+// it was when the reply was written. This used to read a public artifact's
+// replies as unprotected; see TestLegacyReplyToALaterRepublishedPageStaysProtected.
 func TestRepliesFromBeforeProtectionWasRecorded(t *testing.T) {
 	dir := t.TempDir()
 	db, err := sql.Open("sqlite", filepath.Join(dir, "replies.db"))
@@ -238,24 +240,21 @@ INSERT INTO replies (slug, kind, body, created_at) VALUES ('report', 'comment', 
 		t.Fatal(err)
 	}
 	defer rs.close()
+	var unknown int
+	if err := rs.db.QueryRow(`SELECT COUNT(*) FROM replies WHERE protected IS NULL`).Scan(&unknown); err != nil || unknown != 0 {
+		t.Errorf("replies with protection unknown after open = %d, %v; want none", unknown, err)
+	}
 	for id := int64(1); id <= 2; id++ {
 		if _, protected, err := rs.slugOf(id); err != nil || !protected {
-			t.Fatalf("reply %d before the backfill: protected %v, %v; want protected", id, protected, err)
-		}
-	}
-	// "report" is public and was published before its reply (created_at 1);
-	// "page" is protected now.
-	if err := rs.backfillProtected(func(slug string) (int64, bool) { return 0, slug == "report" }); err != nil {
-		t.Fatal(err)
-	}
-	for id, want := range map[int64]bool{1: false, 2: true} {
-		if _, protected, _ := rs.slugOf(id); protected != want {
-			t.Errorf("reply %d after the backfill: protected %v, want %v", id, protected, want)
+			t.Errorf("reply %d: protected %v, %v; want protected", id, protected, err)
 		}
 	}
 	got, _, err := rs.listOnly(context.Background(), "", "all", nil, 10, &[]string{"report", "page"})
-	if err != nil || len(got) != 1 || got[0].Body != "old public" {
-		t.Errorf("unprotected listing = %v, %v; want only the public reply", got, err)
+	if err != nil || len(got) != 0 {
+		t.Errorf("unprotected listing = %v, %v; want none", got, err)
+	}
+	if got, _, err := rs.list("", "all", nil, 10); err != nil || len(got) != 2 {
+		t.Errorf("full listing = %v, %v; want both replies", got, err)
 	}
 }
 
@@ -352,14 +351,85 @@ func TestTokenlessListingWorkIsBounded(t *testing.T) {
 	}
 }
 
+// legacyReply is a row of a replies database from before protection was
+// recorded.
+type legacyReply struct {
+	slug, body string
+	created    int64
+}
+
+// legacyInbox writes replies to a replies database from before protection
+// was recorded and opens it as a tokenless instance over st does at start.
+func legacyInbox(t *testing.T, st *store.Store, replies ...legacyReply) (*httptest.Server, *Module) {
+	t.Helper()
+	dataDir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dataDir, "replies.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE replies (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug       TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    body       TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'pending'
+)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range replies {
+		if _, err := db.Exec(`INSERT INTO replies (slug, kind, body, created_at) VALUES (?, 'comment', ?, ?)`, r.slug, r.body, r.created); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	h := &fakeHost{st: st, dataDir: dataDir, tokenless: true}
+	m := &Module{}
+	m.setLimits(openLimits())
+	mux := http.NewServeMux()
+	m.Routes(mux, h)
+	if m.rs == nil {
+		t.Fatal("reply store did not open")
+	}
+	t.Cleanup(func() { m.rs.close() })
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	return ts, m
+}
+
+// assertLegacyHidden checks that a tokenless inbox lists none of the
+// replies with body, by slug or in all, and that a token holder still does.
+func assertLegacyHidden(t *testing.T, ts *httptest.Server, m *Module, slug, body string) {
+	t.Helper()
+	for _, u := range []string{"/replies?slug=" + slug + "&status=all", "/replies?status=all"} {
+		code, b := do(t, http.MethodGet, ts.URL+u, "", "", false)
+		if code == http.StatusOK && strings.Contains(string(b), body) {
+			t.Errorf("GET %s without a token lists the legacy reply %q", u, body)
+		}
+	}
+	all, _, err := m.rs.list("", "all", nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, r := range all {
+		found = found || r.Body == body
+	}
+	if !found {
+		t.Errorf("a token holder's listing lacks the legacy reply %q", body)
+	}
+}
+
 // TestLegacyReplyToALaterRepublishedPageStaysProtected: a reply stored before
 // protection was recorded does not say whether its page had a password when
 // it was written. The page being public now does not settle it: replies
 // survive a republish, so a confidential reply to a password-protected page
 // later republished without the password would be handed to anyone on an
-// instance with no token. Only a page last published before the reply was
-// the page it answered (every publish sets created_at; protection never
-// changes in place), so only then does its being public now count.
+// instance with no token. Neither does the page's publish time: a legacy
+// reply is recorded as protected even to a page that has always been public
+// (an intended change: such replies were listed until this release, and a
+// token holder still sees them).
 func TestLegacyReplyToALaterRepublishedPageStaysProtected(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {
@@ -377,49 +447,35 @@ func TestLegacyReplyToALaterRepublishedPageStaysProtected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := reviewPublished.CreatedAt.Add(-time.Hour).Unix()
-	after := reviewPublished.CreatedAt.Add(time.Hour).Unix()
+	ts, m := legacyInbox(t, st,
+		legacyReply{"review", "confidential", reviewPublished.CreatedAt.Add(-time.Hour).Unix()},
+		legacyReply{"report", "public note", reviewPublished.CreatedAt.Add(time.Hour).Unix()})
 
-	dataDir := t.TempDir()
-	db, err := sql.Open("sqlite", filepath.Join(dataDir, "replies.db"))
+	assertLegacyHidden(t, ts, m, "review", "confidential")
+	assertLegacyHidden(t, ts, m, "report", "public note")
+}
+
+// TestLegacyReplyTimedAfterAPublicRepublishStaysProtected: a reply's time
+// does not show which publish it answered. A publish takes its created_at
+// before it syncs and commits, a reply when it is written, so a reply to a
+// password-protected page written while a republish without the password
+// was committing is later than the public page it did not answer. On an
+// upgrade without a token, that confidential reply must not be listed.
+func TestLegacyReplyTimedAfterAPublicRepublishStaysProtected(t *testing.T) {
+	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`CREATE TABLE replies (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    slug       TEXT NOT NULL,
-    kind       TEXT NOT NULL,
-    body       TEXT NOT NULL DEFAULT '',
-    created_at INTEGER NOT NULL,
-    status     TEXT NOT NULL DEFAULT 'pending'
-);
-INSERT INTO replies (slug, kind, body, created_at) VALUES ('review', 'comment', 'confidential', ?), ('report', 'comment', 'public note', ?);`, before, after); err != nil {
+	t.Cleanup(func() { st.Close() })
+	if _, err := st.Put(store.PutOptions{Slug: "review", Replies: true}, strings.NewReader("<html>now public</html>")); err != nil {
 		t.Fatal(err)
 	}
-	db.Close()
-
-	h := &fakeHost{st: st, dataDir: dataDir, tokenless: true}
-	m := &Module{}
-	m.setLimits(openLimits())
-	mux := http.NewServeMux()
-	m.Routes(mux, h)
-	if m.rs == nil {
-		t.Fatal("reply store did not open")
+	published, err := st.LookupPublic("review")
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Cleanup(func() { m.rs.close() })
-	ts := httptest.NewServer(mux)
-	t.Cleanup(ts.Close)
-
-	for _, u := range []string{"/replies?slug=review&status=all", "/replies?status=all"} {
-		for _, r := range getPage(t, ts.URL+u).Replies {
-			if r.Body == "confidential" {
-				t.Errorf("GET %s without a token lists the legacy reply to a page republished after it", u)
-			}
-		}
-	}
-	if p := getPage(t, ts.URL+"/replies?slug=report&status=all"); len(p.Replies) != 1 || p.Replies[0].Body != "public note" {
-		t.Errorf("legacy reply to a public page unchanged since = %v, want it listed", p.Replies)
-	}
+	ts, m := legacyInbox(t, st, legacyReply{"review", "confidential", published.CreatedAt.Unix() + 1})
+	assertLegacyHidden(t, ts, m, "review", "confidential")
 }
 
 // queryPlan returns the details of q's query plan, one per line.
