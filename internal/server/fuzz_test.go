@@ -426,10 +426,12 @@ func treeOf(t testing.TB, dir string) map[string]fs.FileMode {
 
 // checkSiteTree fails when an extraction left anything outside sitesRoot
 // that was not under parent before (a new path or a changed file type,
-// anywhere in parent), or left under sitesRoot a symlink, a special file,
-// more bytes than the budget or more files than the entry cap. It holds
-// after every extraction, a refused one included: a refusal may come after
-// partial writes.
+// anywhere in parent), or left under sitesRoot a symlink or a special file,
+// or added there more bytes than the budget or more files than the entry
+// cap. The budget and the cap apply to one archive, so only the files the
+// extraction added count, not the sites already there. It holds after every
+// extraction, a refused one included: a refusal may come after partial
+// writes.
 func checkSiteTree(t *testing.T, parent, sitesRoot string, before map[string]fs.FileMode) {
 	t.Helper()
 	inSites := func(p string) bool {
@@ -447,6 +449,9 @@ func checkSiteTree(t *testing.T, parent, sitesRoot string, before map[string]fs.
 		switch {
 		case typ.IsDir():
 		case typ.IsRegular():
+			if _, ok := before[p]; ok {
+				continue // not this extraction's
+			}
 			fi, err := os.Lstat(p)
 			if err != nil {
 				t.Fatal(err)
@@ -565,6 +570,10 @@ func FuzzSiteArchive(f *testing.F) {
 	overwrite := [][2]string{{"../other/index.html", "overwritten"}, {"../../sentinel", "overwritten"}}
 	f.Add(tarSeq(f, overwrite, false), false)
 	f.Add(zipOf(f, map[string]string{overwrite[0][0]: "overwritten", overwrite[1][0]: "overwritten"}), true)
+
+	// The largest archive the budget accepts (BudgetReader refuses once it
+	// is spent, so one byte under it), beside the fixture's own site.
+	f.Add(zipOf(f, map[string]string{"full.bin": strings.Repeat("x", fuzzSiteBudget-1)}), true)
 
 	prev := siteDecompressBudget
 	siteDecompressBudget = fuzzSiteBudget
