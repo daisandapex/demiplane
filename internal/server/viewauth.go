@@ -43,7 +43,10 @@ import (
 //     client with no recent failures is always verified, so nobody else's
 //     guesses can lock a legitimate viewer out. The cost is that guessing spread over many
 //     addresses, each new, is bounded by the KDF itself (3. below and the
-//     work factor), not by a rate.
+//     work factor), not by a rate. An attempt turned away because the
+//     client already has passwordClientInflight attempts in the KDF spends
+//     its reservation too, so that busy answers cannot be used to probe the
+//     remembered credentials (1.) past the budget.
 //  3. At most PasswordConcurrency KDF runs execute at once; the rest wait
 //     briefly and then get 503, so a flood cannot take every core from
 //     unrelated requests.
@@ -331,8 +334,14 @@ func (g *viewGate) verify(ctx context.Context, hash, pass string, ck [32]byte, c
 	if allowed, w := limit.AllowAll(own...); !allowed {
 		return module.ViewThrottled, w
 	}
+	// A client already at its in-flight cap is turned away without
+	// queueing, and the reservation is kept: the refusal is an answer (a
+	// remembered credential would have been 200), so it spends the budget
+	// like a wrong guess. Refunded, a guesser sharing a viewer's client key
+	// could hold two slow attempts in the KDF and probe the remembered
+	// credential with any number of candidates meanwhile. The cap is not
+	// reached by one browser re-sending one credential, which joins a flight.
 	if !g.enterKDF(client) {
-		limit.RefundAll(own...)
 		return module.ViewBusy, time.Second
 	}
 	if !g.kdf.Acquire(ctx, passwordKDFWait) {

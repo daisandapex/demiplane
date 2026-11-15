@@ -503,7 +503,7 @@ only in `-tags reply` builds.
 | Surface | Limit | Default | Knob |
 |---|---|---|---|
 | View password | KDF runs at once, password checks and publish-time hashing together; more wait up to 5s, then `503` | half the cores, 1 to 4 | `--password-concurrency` |
-| View password | one client's failed attempts on one artifact / on any artifact; past it `429` without hashing | 10 / 20 a minute (bursts 10, 10) | `--password-rate-client-target`, `--password-rate-client` |
+| View password | one client's failed attempts on one artifact / on any artifact (an attempt turned away because it already has two in the KDF counts as one); past it `429` without hashing | 10 / 20 a minute (bursts 10, 10) | `--password-rate-client-target`, `--password-rate-client` |
 | View password | all clients' failed attempts on one artifact / in all; once spent, clients that failed recently get `429` without hashing | 10 / 120 a minute (bursts 10, 30) | `--password-rate-target`, `--password-rate-global` |
 | Live reload | streams per client on one artifact / per client in all; past it `503` | 2 / 16 | `--live-max-per-client-slug`, `--live-max-per-client` |
 | Live reload | requests waiting for an ended stream's slot, in all / per client; they hold no request slot while waiting, wait at most 11s, and the excess gets `503` at once | 32 / 1 | `--live-max-pending`, `--live-max-pending-per-client` |

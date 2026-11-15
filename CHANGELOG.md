@@ -80,6 +80,12 @@ All notable changes to demiplane are documented here. The format follows
   before any budget, so once anyone had opened a protected page, a client
   that had spent its failure budget still got `200` for the right password
   (and `429` for a wrong one) at no rate limit and for one HMAC a guess.
+- A password check turned away because the client already has two checks
+  in the KDF now spends its failure budget like a wrong guess. The `503` was
+  refunded, so a guesser sharing a viewer's client key (one NAT address, or
+  a proxy not in `--trusted-proxy`) could keep two slow guesses running and
+  meanwhile try any number of candidates against the viewer's remembered
+  password, each answered `200` or `503`, without ever being throttled.
 - The capture hook runs its restricted-mode copy step with `python3 -I`.
   Python reading a script from stdin puts the working directory first on its
   module path, and the hook runs in the project directory, so a `re.py`

@@ -841,3 +841,69 @@ func TestLockoutHoldsForARequestJoiningAFlight(t *testing.T) {
 		t.Fatalf("the flight begun before the lockout = %v, want ViewOK", res)
 	}
 }
+
+// TestBusyRefusalsSpendTheClientsBudget: a client at its in-flight cap that
+// keeps sending guesses gets 503 for each one turned away. Those refusals
+// must spend its failure budget like a wrong guess: a guesser sharing a
+// viewer's client key could otherwise hold two slow attempts in the KDF and
+// send any number of candidates meanwhile, each answered 200 (the viewer's
+// remembered password) or 503 (anything else) without ever being throttled.
+func TestBusyRefusalsSpendTheClientsBudget(t *testing.T) {
+	g := newViewGate(PasswordLimits{}, []byte("k"))
+	hash, err := store.HashPassword("letmein")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const shared = "192.0.2.1:1"
+	if res, _ := g.check(context.Background(), basicReq("locked", "letmein", shared), hash); res != module.ViewOK {
+		t.Fatalf("viewer with the password = %v, want ViewOK", res)
+	}
+
+	release := make(chan struct{})
+	prev := verifyPassword
+	verifyPassword = func(hash, pw string) bool {
+		if strings.HasPrefix(pw, "pending-") {
+			<-release
+		}
+		return prev(hash, pw)
+	}
+	t.Cleanup(func() { verifyPassword = prev })
+
+	var wg sync.WaitGroup
+	for i := 0; i < passwordClientInflight; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			g.check(context.Background(), basicReq("locked", fmt.Sprintf("pending-%d", i), shared), hash)
+		}(i)
+	}
+	defer func() { close(release); wg.Wait() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for g.inflightFor("192.0.2.1") < passwordClientInflight {
+		if time.Now().After(deadline) {
+			t.Fatal("setup: attempts never reached the KDF")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	busy, throttled := 0, false
+	for i := 0; i < 40 && !throttled; i++ {
+		switch res, _ := g.check(context.Background(), basicReq("locked", fmt.Sprintf("probe-%d", i), shared), hash); res {
+		case module.ViewBusy:
+			busy++
+		case module.ViewThrottled:
+			throttled = true
+		default:
+			t.Fatalf("probe %d = %v, want ViewBusy or ViewThrottled", i, res)
+		}
+	}
+	if !throttled {
+		t.Fatalf("%d busy refusals and the client was never throttled", busy)
+	}
+	if burst := defaultPasswordClientTargetRate.Burst; busy > burst {
+		t.Errorf("%d busy refusals before throttling, want at most the budget's burst of %d", busy, burst)
+	}
+	if res, _ := g.check(context.Background(), basicReq("locked", "letmein", shared), hash); res != module.ViewThrottled {
+		t.Errorf("remembered password after the probes = %v, want ViewThrottled", res)
+	}
+}
