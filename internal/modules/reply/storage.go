@@ -450,9 +450,16 @@ func (rs *replyStore) deleteSlugUnprotected(slug string) (int64, error) {
 }
 
 // backfillProtected records protection for the replies stored before it was
-// recorded, from their artifact as it is now (protectedNow), the best that
-// is still known. Until it has run they count as protected.
-func (rs *replyStore) backfillProtected(protectedNow func(slug string) bool) error {
+// recorded. Being public now does not show a reply was written to a public
+// page: replies survive a republish, which can drop a password. So a reply
+// counts as unprotected only when its artifact is public now (public) and
+// was last published before the reply was written (published, unix seconds,
+// strictly earlier): every publish sets the artifact's created_at and
+// nothing changes its protection in place, so that artifact is the one the
+// reply answered. Every other reply counts as protected, the fail-closed
+// reading of unknown history; a token holder still sees it. Until this has
+// run they all count as protected.
+func (rs *replyStore) backfillProtected(publishedPublic func(slug string) (published int64, public bool)) error {
 	rows, err := rs.db.Query(`SELECT DISTINCT slug FROM replies WHERE protected IS NULL`)
 	if err != nil {
 		return fmt.Errorf("backfill reply protection: %w", err)
@@ -472,7 +479,14 @@ func (rs *replyStore) backfillProtected(protectedNow func(slug string) bool) err
 		return fmt.Errorf("backfill reply protection: %w", err)
 	}
 	for _, slug := range slugs {
-		if _, err := rs.db.Exec(`UPDATE replies SET protected = ? WHERE slug = ? AND protected IS NULL`, protectedNow(slug), slug); err != nil {
+		published, public := publishedPublic(slug)
+		var err error
+		if public {
+			_, err = rs.db.Exec(`UPDATE replies SET protected = CASE WHEN created_at > ? THEN 0 ELSE 1 END WHERE slug = ? AND protected IS NULL`, published, slug)
+		} else {
+			_, err = rs.db.Exec(`UPDATE replies SET protected = 1 WHERE slug = ? AND protected IS NULL`, slug)
+		}
+		if err != nil {
 			return fmt.Errorf("backfill reply protection: %w", err)
 		}
 	}

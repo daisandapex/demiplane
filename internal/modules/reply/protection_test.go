@@ -243,7 +243,9 @@ INSERT INTO replies (slug, kind, body, created_at) VALUES ('report', 'comment', 
 			t.Fatalf("reply %d before the backfill: protected %v, %v; want protected", id, protected, err)
 		}
 	}
-	if err := rs.backfillProtected(func(slug string) bool { return slug == "page" }); err != nil {
+	// "report" is public and was published before its reply (created_at 1);
+	// "page" is protected now.
+	if err := rs.backfillProtected(func(slug string) (int64, bool) { return 0, slug == "report" }); err != nil {
 		t.Fatal(err)
 	}
 	for id, want := range map[int64]bool{1: false, 2: true} {
@@ -347,5 +349,75 @@ func TestTokenlessListingWorkIsBounded(t *testing.T) {
 		if !got[id] {
 			t.Errorf("visible reply %d never listed", id)
 		}
+	}
+}
+
+// TestLegacyReplyToALaterRepublishedPageStaysProtected: a reply stored before
+// protection was recorded does not say whether its page had a password when
+// it was written. The page being public now does not settle it: replies
+// survive a republish, so a confidential reply to a password-protected page
+// later republished without the password would be handed to anyone on an
+// instance with no token. Only a page last published before the reply was
+// the page it answered (every publish sets created_at; protection never
+// changes in place), so only then does its being public now count.
+func TestLegacyReplyToALaterRepublishedPageStaysProtected(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	// "review": republished without its password after the reply.
+	// "report": public, and unchanged since the reply.
+	for _, slug := range []string{"review", "report"} {
+		if _, err := st.Put(store.PutOptions{Slug: slug, Replies: true}, strings.NewReader("<html>now public</html>")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reviewPublished, err := st.LookupPublic("review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := reviewPublished.CreatedAt.Add(-time.Hour).Unix()
+	after := reviewPublished.CreatedAt.Add(time.Hour).Unix()
+
+	dataDir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dataDir, "replies.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE replies (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug       TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    body       TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'pending'
+);
+INSERT INTO replies (slug, kind, body, created_at) VALUES ('review', 'comment', 'confidential', ?), ('report', 'comment', 'public note', ?);`, before, after); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	h := &fakeHost{st: st, dataDir: dataDir, tokenless: true}
+	m := &Module{}
+	m.setLimits(openLimits())
+	mux := http.NewServeMux()
+	m.Routes(mux, h)
+	if m.rs == nil {
+		t.Fatal("reply store did not open")
+	}
+	t.Cleanup(func() { m.rs.close() })
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	for _, u := range []string{"/replies?slug=review&status=all", "/replies?status=all"} {
+		for _, r := range getPage(t, ts.URL+u).Replies {
+			if r.Body == "confidential" {
+				t.Errorf("GET %s without a token lists the legacy reply to a page republished after it", u)
+			}
+		}
+	}
+	if p := getPage(t, ts.URL+"/replies?slug=report&status=all"); len(p.Replies) != 1 || p.Replies[0].Body != "public note" {
+		t.Errorf("legacy reply to a public page unchanged since = %v, want it listed", p.Replies)
 	}
 }

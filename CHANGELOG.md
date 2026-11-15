@@ -41,8 +41,11 @@ All notable changes to demiplane are documented here. The format follows
   a new `module.Host` method, `AuthConfigured`.
 - Without a token, a reply to a password-protected page stays out of the
   inbox after the page is republished without a password: each reply now
-  records whether its artifact was protected when it was written (replies
-  stored earlier take it from their artifact when the server starts).
+  records whether its artifact was protected when it was written. A reply
+  stored before that counts as unprotected only if its artifact is public
+  when the server starts and was last published before the reply: a page
+  republished since may have had a password when the reply was written, so
+  its replies stay hidden from an inbox without a token.
   Hidden replies are filtered out before the inbox is paged, so a page is not
   emptied by them and no `next` cursor carries a hidden reply's time and id;
   ack and delete of a hidden reply answer `404`, as for an unknown id,
