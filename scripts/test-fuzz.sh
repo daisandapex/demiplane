@@ -144,6 +144,28 @@ out=$(FUZZ_ROOT="$fixture" FUZZ_GO="$stub" FUZZ_TMPDIR="$mins" FUZZ_MINIMIZE_TIM
 status=$?
 check "a minimise time with other characters is refused" '[ "$status" -eq 2 ] && grep -q "FUZZ_MINIMIZE_TIME must be" <<<"$out"'
 
+# A relative FUZZ_TMPDIR names a directory under the caller's working
+# directory, and what reaches go is absolute: go test runs the test binary
+# in the package directory, where a relative GOTMPDIR would not exist (and
+# t.TempDir would fail before fuzzing started). This stub does the same.
+pkgstub="$scratch/go-pkgdir"
+cat >"$pkgstub" <<'GO'
+#!/usr/bin/env bash
+cd "${!#}" || exit 3
+if [ ! -d "$GOTMPDIR" ] || [ ! -d "$TMPDIR" ]; then
+	echo "GOTMPDIR=$GOTMPDIR TMPDIR=$TMPDIR not found from $PWD"
+	exit 4
+fi
+touch "$GOTMPDIR/used"
+echo "fuzz: elapsed: 1s, execs: 1 (1/sec), new interesting: 0 (total: 0)"
+GO
+chmod +x "$pkgstub"
+mkdir -p "$scratch/caller"
+out=$(cd "$scratch/caller" && FUZZ_ROOT="$fixture" FUZZ_GO="$pkgstub" FUZZ_TMPDIR=./rel-tmp "$fuzz" 1 Redirect 2>&1)
+status=$?
+check "a relative FUZZ_TMPDIR reaches go as a directory that exists from the package" '[ "$status" -eq 0 ] && grep -q "FuzzNextRedirect.*PASS" <<<"$out"'
+check "and resolves against the caller's directory" 'ls "$scratch"/caller/rel-tmp/delete-me/fuzz-FuzzNextRedirect.*/used >/dev/null 2>&1'
+
 # The scratch tree is moved aside, not deleted, like the script's own.
 mkdir -p "${TMPDIR:-/tmp}/delete-me"
 mv "$scratch" "${TMPDIR:-/tmp}/delete-me/"

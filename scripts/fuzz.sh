@@ -19,7 +19,8 @@
 #
 # Each target gets its own TMPDIR (and GOTMPDIR, which Go uses for
 # t.TempDir), a fresh directory under FUZZ_TMPDIR (default $TMPDIR, else
-# /tmp). Afterwards the script moves it into FUZZ_TMPDIR/delete-me/ rather
+# /tmp; a relative path is taken from the directory the script is run in).
+# Afterwards the script moves it into FUZZ_TMPDIR/delete-me/ rather
 # than deleting it; empty that directory when convenient. The script never
 # deletes anything, so delete-me/ is capped instead:
 #
@@ -70,6 +71,15 @@ case "$secs" in
 	;;
 esac
 
+# A relative FUZZ_TMPDIR (or TMPDIR) is read from the caller's directory and
+# made absolute before the cd below: go test runs each test binary in its
+# package directory, where a relative GOTMPDIR would not exist.
+tmpbase="${FUZZ_TMPDIR:-${TMPDIR:-/tmp}}"
+case "$tmpbase" in
+/*) ;;
+*) tmpbase="$PWD/$tmpbase" ;;
+esac
+
 here=$(cd "$(dirname "$0")" && pwd)
 root="${FUZZ_ROOT:-$here/..}"
 cd "$root" || exit 2
@@ -84,7 +94,6 @@ case "$vmem_kb" in
 	exit 2
 	;;
 esac
-tmpbase="${FUZZ_TMPDIR:-${TMPDIR:-/tmp}}"
 keep_max_kb="${FUZZ_DELETE_ME_MAX_KB:-2097152}"
 case "$keep_max_kb" in
 '' | *[!0-9]*)
