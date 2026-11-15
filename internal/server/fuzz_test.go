@@ -795,26 +795,37 @@ func jsonReadBack(t *testing.T, v string) string {
 // encoding/json reads them back, the publish time to the nanosecond), a
 // publish time outside RFC 3339's years is not stored at all, and a spec
 // read back from a damaged or foreign record either fails to decode (the
-// rebake then uses the defaults) or decodes to a spec whose stored form is
-// a fixed point: re-encoding it and reading it again gives the same bytes.
+// rebake then uses the defaults), decodes to a spec whose stored form is a
+// fixed point (re-encoding it and reading it again gives the same bytes),
+// or holds a time encoding/json reads but will not write, which is stored
+// as no spec.
 func FuzzRenderSpec(f *testing.F) {
 	f.Add("doc", "series", "doc", "doc-2", int64(1_700_000_000), int64(5), []byte(`{"named_slug":"a","published":"2026-01-02T03:04:05Z"}`))
 	f.Add("", "", "", "", int64(0), int64(0), []byte(`{"published":"not a time"}`))
 	f.Add("a", "", "", "", int64(-62135596800), int64(0), []byte(`[]`))
 	f.Add("\xff", "", "", "", int64(1<<39), int64(0), []byte(`{"published":"2026-01-02T03:04:05+05:30","series":"\ud800"}`))
+	// time.Parse takes a +24:00 offset that MarshalJSON refuses.
+	f.Add("", "", "", "", int64(0), int64(0), []byte(`{"published":"2026-01-02T03:04:05+24:00"}`))
 	f.Fuzz(func(t *testing.T, named, series, reply, next string, sec, nsec int64, stored []byte) {
 		var junk renderSpec
 		if json.Unmarshal(stored, &junk) == nil {
 			enc := marshalRenderSpec(junk)
 			if enc == "" {
-				t.Fatalf("decoded spec %+v from %q does not encode again", junk, stored)
-			}
-			var again renderSpec
-			if err := json.Unmarshal([]byte(enc), &again); err != nil {
-				t.Fatalf("re-encoded spec %q does not decode: %v", enc, err)
-			}
-			if enc2 := marshalRenderSpec(again); enc2 != enc {
-				t.Fatalf("stored spec is not a fixed point: %q -> %q -> %q", stored, enc, enc2)
+				// The one decodable spec that cannot encode again is one
+				// whose time the parser takes and the marshaller refuses (a
+				// +24:00 offset); it is stored without a spec, the
+				// documented fallback.
+				if _, err := junk.Published.MarshalJSON(); err == nil {
+					t.Fatalf("decoded spec %+v from %q does not encode again", junk, stored)
+				}
+			} else {
+				var again renderSpec
+				if err := json.Unmarshal([]byte(enc), &again); err != nil {
+					t.Fatalf("re-encoded spec %q does not decode: %v", enc, err)
+				}
+				if enc2 := marshalRenderSpec(again); enc2 != enc {
+					t.Fatalf("stored spec is not a fixed point: %q -> %q -> %q", stored, enc, enc2)
+				}
 			}
 		}
 
