@@ -130,9 +130,12 @@ func checkLinkTarget(t testing.TB, raw string) {
 	if strings.HasPrefix(u, "//") {
 		t.Fatalf("link %q is protocol-relative", raw)
 	}
+	// A scheme is a letter then letters, digits, "+", "-" or "." before
+	// the first ':'. Anything else there ("\u00a0https") is no scheme, and
+	// the value is a relative path.
 	scheme := ""
 	if i := strings.IndexByte(u, ':'); i >= 0 {
-		if j := strings.IndexAny(u, "/?#"); j < 0 || i < j {
+		if j := strings.IndexAny(u, "/?#"); (j < 0 || i < j) && schemeRe.MatchString(u[:i]) {
 			scheme = u[:i]
 		}
 	}
@@ -259,6 +262,7 @@ func FuzzRender(f *testing.F) {
 // allowlist starts refusing ordinary links.
 var (
 	plainRelRe = regexp.MustCompile(`^(/[A-Za-z0-9._~-]*)+$`)
+	schemeRe   = regexp.MustCompile(`^[a-z][a-z0-9+.-]*$`)
 	plainAbsRe = regexp.MustCompile(`^https?://[a-z0-9]([a-z0-9.-]*[a-z0-9])?(/[A-Za-z0-9._~-]*)*$`)
 )
 
@@ -280,6 +284,9 @@ func FuzzSafeURL(f *testing.F) {
 		"&#106;avascript:x", "https://a&#34;@b", "&#x2F;/evil", "/&#92;evil",
 		"java&#x09;script:x", "&Tab;//evil", "%2F%2Fevil", "/a&#0;b", "/a\x00b",
 		"/a\u0085b", "/a\x0bb", "https://ok.example/a/b", "/a/b/c", "data:image/svg+xml;base64,AA",
+		// Not a scheme: a browser trims only ASCII spaces and controls, so
+		// a leading no-break space makes a relative path.
+		"\u00a0https://ok.example", "\u3000javascript:alert(1)",
 	} {
 		f.Add(html.EscapeString(s))
 		f.Add(s)
