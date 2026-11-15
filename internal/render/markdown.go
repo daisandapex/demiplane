@@ -1254,8 +1254,12 @@ func inline(s string) string {
 const linkSentinel = codeSentinel + "L"
 
 // restoreLinks puts each lifted link opening tag back in place of its
-// placeholder. Source text holds no NUL (inline replaced it), so every
-// placeholder is one inline wrote.
+// placeholder. Source text holds no NUL (inline replaced it), so every NUL
+// is a frame delimiter inline wrote, and the frames ("\x00<n>\x00" for a
+// code span, "\x00L<n>\x00" for a link) are read whole, left to right. A
+// frame's closing NUL is never taken as the opening of another: between two
+// code-span frames, "L0" is text, not a link placeholder. Code-span frames
+// are copied through for restoreSpans.
 func restoreLinks(s string, links []string) string {
 	if len(links) == 0 {
 		return s
@@ -1263,22 +1267,27 @@ func restoreLinks(s string, links []string) string {
 	var b strings.Builder
 	b.Grow(len(s) + 40*len(links))
 	for {
-		j := strings.Index(s, linkSentinel)
+		j := strings.IndexByte(s, codeSentinel[0])
 		if j < 0 {
 			b.WriteString(s)
 			return b.String()
 		}
-		b.WriteString(s[:j])
-		rest := s[j+len(linkSentinel):]
+		rest := s[j+1:]
 		k := strings.IndexByte(rest, codeSentinel[0])
-		idx, err := strconv.Atoi(rest[:max(k, 0)])
-		if k < 0 || err != nil || idx < 0 || idx >= len(links) {
-			// Not one of ours: keep it as it is.
-			b.WriteString(linkSentinel)
-			s = rest
-			continue
+		if k < 0 {
+			b.WriteString(s)
+			return b.String()
 		}
-		b.WriteString(links[idx])
+		if num, ok := strings.CutPrefix(rest[:k], linkSentinel[1:]); ok {
+			if idx, err := strconv.Atoi(num); err == nil && idx >= 0 && idx < len(links) {
+				b.WriteString(s[:j])
+				b.WriteString(links[idx])
+				s = rest[k+1:]
+				continue
+			}
+		}
+		// A code-span frame, or not one of ours: copy it whole.
+		b.WriteString(s[:j+1+k+1])
 		s = rest[k+1:]
 	}
 }

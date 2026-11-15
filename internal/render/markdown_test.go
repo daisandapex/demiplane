@@ -1128,3 +1128,24 @@ func TestEmphasisDoesNotRewriteLinkDestinations(t *testing.T) {
 		}
 	}
 }
+
+// TestLinkPlaceholdersDoNotCrossCodeSpans: link and code-span placeholders
+// are NUL-framed, and code spans with "L<n>" between them line up as the
+// closing NUL of one frame, "L<n>", and the opening NUL of the next. Link
+// restoration must read whole frames left to right, so that text stays
+// literal and both code spans come back, rather than taking the two frames'
+// delimiters as a link placeholder and inserting a stray anchor tag.
+func TestLinkPlaceholdersDoNotCrossCodeSpans(t *testing.T) {
+	a := `<a href="/b" rel="noopener noreferrer">a</a>`
+	code := func(s string) string { return CodeOpen(s) + s + "</code>" }
+	for src, want := range map[string]string{
+		"[a](/b) `x`L0`y`":          a + " " + code("x") + "L0" + code("y"),
+		"[a](/b) `x`L0`y`L0`z`":     a + " " + code("x") + "L0" + code("y") + "L0" + code("z"),
+		"`x`L0`y` [a](/b)":          code("x") + "L0" + code("y") + " " + a,
+		"[a](/b) `x`L00`y` [c](/d)": a + " " + code("x") + "L00" + code("y") + ` <a href="/d" rel="noopener noreferrer">c</a>`,
+	} {
+		if got := inline(src); got != want {
+			t.Errorf("inline(%q)\n got %q\nwant %q", src, got, want)
+		}
+	}
+}

@@ -43,7 +43,10 @@ func regexInline(s string) string {
 	s = reBold.ReplaceAllString(s, "<strong>$1</strong>")
 	s = reItalic.ReplaceAllString(s, "<em>$1</em>")
 	s = reItalicU.ReplaceAllString(s, "<em>$1</em>")
-	s = reLinkHole.ReplaceAllStringFunc(s, func(m string) string {
+	s = reFrame.ReplaceAllStringFunc(s, func(m string) string {
+		if !reLinkHole.MatchString(m) {
+			return m // a code-span frame
+		}
 		i, _ := strconv.Atoi(m[2 : len(m)-1])
 		return links[i]
 	})
@@ -76,15 +79,19 @@ func regexInline(s string) string {
 	}
 }
 
-// reLinkHole matches the oracle's link placeholders.
-var reLinkHole = regexp.MustCompile("\x00L[0-9]+\x00")
+// reFrame matches one NUL-framed placeholder, so frames are read whole, left
+// to right, and reLinkHole tells a link's from a code span's.
+var (
+	reFrame    = regexp.MustCompile("\x00[^\x00]*\x00")
+	reLinkHole = regexp.MustCompile("^\x00L[0-9]+\x00$")
+)
 
 // TestInlineMatchesRegexOracle: the index-based code-span and link passes
 // produce exactly what the regexp passes did, over random text built from
 // the characters those passes care about, and inlineUpper bounds every result.
 func TestInlineMatchesRegexOracle(t *testing.T) {
 	r := rand.New(rand.NewSource(7))
-	alphabet := []string{"`", "`", "a", " ", "*", "_", "[", "]", "(", ")", "b", "<", "&", "\x00", "0", "/", "https://x", ":"}
+	alphabet := []string{"`", "`", "a", " ", "*", "_", "[", "]", "(", ")", "b", "<", "&", "\x00", "0", "/", "https://x", ":", "L"}
 	for n := 0; n < 200000; n++ {
 		var b strings.Builder
 		for k := r.Intn(24); k > 0; k-- {
