@@ -246,13 +246,20 @@ func (s *Store) movePartial(from, to string) {
 // was never counted, and releasing it would take it out of other trees'
 // charges. Survivors keep the charge not yet released, under survivor, the
 // name they now sit under: what is left of a partial charge, or, for a tree
-// charged in full, a record that they are (quotaState.whole), so a recount
-// that reads them only in part does not lower usage for data still on disk.
+// known to be charged in full, a record that they are (quotaState.whole), so
+// a recount that reads them only in part does not lower usage for data still
+// on disk. full says key names a live site this process measured and renamed
+// for delete or replace, so charged in full unless partial records less. A
+// leftover tree is known to be only if a failed removal recorded it: one
+// with no record may have appeared after the last measurement (another
+// process's) and never been charged, and recording its survivors would make
+// every later recount that reads them in part refuse to raise usage.
 // Call it inside the removal's transition.
-func (s *Store) removalChange(key, survivor string, r treeRemoval, err error) change {
+func (s *Store) removalChange(key, survivor string, full bool, r treeRemoval, err error) change {
 	q := &s.quota
 	q.mu.Lock()
 	c, ok := q.partial[key]
+	_, recorded := q.whole[key]
 	delete(q.partial, key)
 	delete(q.whole, key)
 	rel := c
@@ -263,7 +270,7 @@ func (s *Store) removalChange(key, survivor string, r treeRemoval, err error) ch
 		}
 		q.partial[survivor] = siteCharge{size: c.size - rel.size, entries: c.entries - rel.entries}
 	}
-	if !ok && err != nil && strings.HasPrefix(survivor, tempPrefix) {
+	if !ok && err != nil && (full || recorded) && strings.HasPrefix(survivor, tempPrefix) {
 		if q.whole == nil {
 			q.whole = make(map[string]struct{})
 		}

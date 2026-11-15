@@ -83,7 +83,8 @@ type quotaState struct {
 	partial map[string]siteCharge
 	// whole holds, by name under sites/, the leftover trees (delete
 	// tombstones, replaced trees) whose removal failed while they were
-	// charged in full: their survivors stay charged in full, so a recount
+	// known to be charged in full (a measured live site this process
+	// renamed, removalChange): their survivors stay charged, so a recount
 	// that reads one only in part has not measured all of that charge
 	// (lostSiteCharge). A removal that finishes drops the name.
 	whole map[string]struct{}
@@ -499,7 +500,7 @@ func (s *Store) removeLiveTree(dir string) error {
 	s.beginTransition()
 	r, err := s.removeTreeCounted(dir)
 	name := filepath.Base(dir)
-	s.endChange(s.removalChange(name, name, r, err))
+	s.endChange(s.removalChange(name, name, false, r, err))
 	return err
 }
 

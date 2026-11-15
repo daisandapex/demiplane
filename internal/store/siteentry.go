@@ -250,7 +250,7 @@ func (s *Store) reclaimStagingTrees(now time.Time) (int, error) {
 		}
 		r, err := s.removeTreeCounted(filepath.Join(root, name))
 		s.unregisterStaging(name)
-		s.endChange(s.removalChange(name, name, r, err))
+		s.endChange(s.removalChange(name, name, false, r, err))
 		removed += int(r.entries)
 		if err != nil {
 			log.Printf("store: could not remove an abandoned site staging tree, will retry: %s", logsafe.Err(err))

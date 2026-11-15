@@ -477,7 +477,7 @@ func (w *SiteWriter) Commit() (int, error) {
 		if err != nil {
 			log.Printf("store: could not remove a replaced site tree, will retry: %s", logsafe.Err(err))
 		}
-		rc := s.removalChange(filepath.Base(backup), filepath.Base(backup), r, err)
+		rc := s.removalChange(filepath.Base(backup), filepath.Base(backup), true, r, err)
 		c.removed, c.removedEntries, c.restored = rc.removed, rc.removedEntries, rc.restored
 	}
 	if backup != "" {
@@ -618,7 +618,7 @@ func (s *Store) deleteSiteLocked(site string) error {
 	// the tombstone name, for the scavenger.
 	r, err := s.removeTreeCounted(tomb)
 	s.unregisterStaging(name)
-	s.endChange(s.removalChange(site, name, r, err))
+	s.endChange(s.removalChange(site, name, true, r, err))
 	if err != nil {
 		log.Printf("store: could not remove a deleted site's tree, will retry: %s", logsafe.Err(err))
 	}
