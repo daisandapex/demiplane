@@ -245,12 +245,16 @@ func (s *Store) movePartial(from, to string) {
 // measured) releases no more than its charge: the rest of what was removed
 // was never counted, and releasing it would take it out of other trees'
 // charges. Survivors keep the charge not yet released, under survivor, the
-// name they now sit under. Call it inside the removal's transition.
+// name they now sit under: what is left of a partial charge, or, for a tree
+// charged in full, a record that they are (quotaState.whole), so a recount
+// that reads them only in part does not lower usage for data still on disk.
+// Call it inside the removal's transition.
 func (s *Store) removalChange(key, survivor string, r treeRemoval, err error) change {
 	q := &s.quota
 	q.mu.Lock()
 	c, ok := q.partial[key]
 	delete(q.partial, key)
+	delete(q.whole, key)
 	rel := c
 	if ok && err != nil {
 		rel = siteCharge{size: min(r.bytes+r.retired, c.size), entries: min(r.entries, c.entries)}
@@ -258,6 +262,12 @@ func (s *Store) removalChange(key, survivor string, r treeRemoval, err error) ch
 			q.partial = make(map[string]siteCharge)
 		}
 		q.partial[survivor] = siteCharge{size: c.size - rel.size, entries: c.entries - rel.entries}
+	}
+	if !ok && err != nil && strings.HasPrefix(survivor, tempPrefix) {
+		if q.whole == nil {
+			q.whole = make(map[string]struct{})
+		}
+		q.whole[survivor] = struct{}{}
 	}
 	q.mu.Unlock()
 	if !ok {

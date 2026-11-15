@@ -81,6 +81,12 @@ type quotaState struct {
 	// logged once, and leftover trees. It is installed with the entry count
 	// it was measured with, and a removal of such a tree releases no more.
 	partial map[string]siteCharge
+	// whole holds, by name under sites/, the leftover trees (delete
+	// tombstones, replaced trees) whose removal failed while they were
+	// charged in full: their survivors stay charged in full, so a recount
+	// that reads one only in part has not measured all of that charge
+	// (lostSiteCharge). A removal that finishes drops the name.
+	whole map[string]struct{}
 	// counted is what committed includes of the blob and source files, the
 	// artifact rows and the pending deletion records (ledger.go).
 	counted ledger
@@ -93,7 +99,7 @@ func (s *Store) SetQuota(limit int64) error {
 	if limit <= 0 {
 		s.quota.mu.Lock()
 		s.quota.limit, s.quota.committed, s.quota.inflight, s.quota.retired = 0, 0, 0, 0
-		s.quota.counted = ledger{}
+		s.quota.counted, s.quota.whole = ledger{}, nil
 		s.quota.mu.Unlock()
 		return nil
 	}
@@ -104,6 +110,7 @@ func (s *Store) SetQuota(limit int64) error {
 	s.quota.mu.Lock()
 	s.quota.limit, s.quota.committed, s.quota.inflight = limit, used, 0
 	s.quota.entries, s.quota.partial, s.quota.counted = entries, partial, l
+	s.quota.whole = nil
 	s.quota.mu.Unlock()
 	return nil
 }
@@ -156,7 +163,7 @@ func (s *Store) RecountUsage() error {
 		applied := q.limit > 0 && q.active == 0 && q.gen == start
 		lost := ""
 		if applied {
-			lost = lostSiteCharge(q.partial, partial)
+			lost = lostSiteCharge(q.partial, q.whole, partial)
 			applied = lost == ""
 		}
 		if applied {
@@ -173,25 +180,31 @@ func (s *Store) RecountUsage() error {
 	return nil
 }
 
-// lostSiteCharge names a live site that a recount measured (into partial)
-// for less than it is charged now (was), or "" when there is none: a site
-// charged in full (not in was) that the recount could measure only in part,
-// or a quarantined one it measured for less than its quarantined charge.
-// Such a recount is incomplete, not a measurement of less content: the
-// failure may be transient (descriptors exhausted partway down a deep tree,
-// which a client can arrange with idle connections), and the part it missed
-// is still on disk. Installing it would free quota and entries for more
+// lostSiteCharge names a tree under sites/ that a recount measured (into
+// partial) for less than it is charged now, or "" when there is none: a live
+// site charged in full (not in was) that the recount could measure only in
+// part, a tree measured for less than its partial charge (was: a quarantined
+// site, or the survivors of a removal of one), or a leftover tree whose
+// failed removal left it charged in full (whole) measured only in part. Such
+// a recount is incomplete, not a measurement of less content: the failure
+// may be transient (descriptors exhausted partway down a deep tree, which a
+// client can arrange with idle connections), and the part it missed is
+// still on disk. Installing it would free quota and entries for more
 // content, so RecountUsage keeps the counts it has. Opening the store
 // installs a partial measurement (SetQuota, measureSiteEntries): there is no
-// earlier charge to keep. Leftover staging trees are not sites and are left
-// out: they are only ever removed.
-func lostSiteCharge(was, partial map[string]siteCharge) string {
+// earlier charge to keep. A leftover tree with no record is counted for
+// what the recount read of it, as at Open: it may be another process's, and
+// refusing it would stall every recount until the scavenger removed it.
+func lostSiteCharge(was map[string]siteCharge, whole map[string]struct{}, partial map[string]siteCharge) string {
 	for name, c := range partial {
-		if strings.HasPrefix(name, tempPrefix) {
+		old, ok := was[name]
+		if !ok {
+			if _, full := whole[name]; full || !strings.HasPrefix(name, tempPrefix) {
+				return name
+			}
 			continue
 		}
-		old, ok := was[name]
-		if !ok || c.size < old.size || c.entries < old.entries {
+		if c.size < old.size || c.entries < old.entries {
 			return name
 		}
 	}

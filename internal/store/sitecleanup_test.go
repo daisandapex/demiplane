@@ -134,6 +134,121 @@ func TestDeleteSiteUnreadableSubdirKeepsCharge(t *testing.T) {
 	assertAccounted(t, s)
 }
 
+// TestRecountKeepsAFailedDeletesTombstoneCharged: a delete that cannot remove
+// a fully charged site keeps the survivors charged under the tombstone, for
+// the scavenger. A later recount that reads the tombstone only in part (a
+// directory it may not read stands in for descriptors exhausted partway
+// down) has not measured less content: installed, it would free quota and
+// entries for data still on disk. It keeps the counts and says so, and once
+// the tombstone reads in full a recount applies again.
+func TestRecountKeepsAFailedDeletesTombstoneCharged(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// atDelete is d's mode when the delete runs: unreadable, or readable
+		// but with entries that cannot be unlinked.
+		atDelete os.FileMode
+	}{
+		{"unreadable at delete", 0},
+		{"unremovable at delete", 0o500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			skipIfRoot(t)
+			s := newQuotaStore(t, 1<<20)
+			sw, err := s.NewSiteWriter("site")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range []string{"d/a.txt", "x.txt"} {
+				if err := sw.AddFile(f, strings.NewReader(strings.Repeat("x", 100))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := sw.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			locked := filepath.Join(s.siteRoot(), "site", "d")
+			if err := os.Chmod(locked, tc.atDelete); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(locked, 0o700) })
+			if err := s.DeleteSite("site"); err != nil {
+				t.Fatalf("DeleteSite of a partly unremovable tree: %v", err)
+			}
+			left, err := filepath.Glob(filepath.Join(s.siteRoot(), tempPrefix+"del-*", "d"))
+			if err != nil || len(left) != 1 {
+				t.Fatalf("tombstoned survivors = %v, %v; want one", left, err)
+			}
+			locked = left[0]
+			if err := os.Chmod(locked, 0); err != nil {
+				t.Fatal(err)
+			}
+			// Survivors: the tombstone, d and a.txt.
+			want := int64(3*metaAllowance + 100)
+			if used, _ := s.Usage(); used != want {
+				t.Fatalf("usage after a partial delete = %d, want %d", used, want)
+			}
+			err = s.RecountUsage()
+			if used, _ := s.Usage(); used != want {
+				t.Errorf("usage after a recount that read the tombstone only in part = %d, want %d (recount error: %v)", used, want, err)
+			}
+			if n := liveEntries(s); n != 3 {
+				t.Errorf("site entries after a recount that read the tombstone only in part = %d, want 3", n)
+			}
+			if err == nil {
+				t.Error("a recount that read a charged tombstone only in part reported no error")
+			}
+			if err := os.Chmod(locked, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.RecountUsage(); err != nil {
+				t.Fatalf("recount once the tombstone reads again: %v", err)
+			}
+			if used, _ := s.Usage(); used != want {
+				t.Errorf("usage after a full recount = %d, want %d", used, want)
+			}
+			if _, err := s.Reconcile(time.Now().Add(2 * orphanGrace)); err != nil {
+				t.Fatal(err)
+			}
+			if used, _ := s.Usage(); used != 0 {
+				t.Fatalf("usage after the scavenger removed the rest = %d, want 0", used)
+			}
+			assertAccounted(t, s)
+		})
+	}
+}
+
+// TestRecountReadsAnUnrecordedTombstoneInPart: a tombstone the store holds no
+// charge record for (another process's, or one measured in full before it
+// became unreadable) is counted for what a recount can read of it, as at
+// Open. A recount must not refuse it, or every recount would fail until the
+// scavenger removed it.
+func TestRecountReadsAnUnrecordedTombstoneInPart(t *testing.T) {
+	skipIfRoot(t)
+	s := newQuotaStore(t, 1<<20)
+	tomb := filepath.Join(s.siteRoot(), tempPrefix+"del-0123456789abcdef")
+	locked := filepath.Join(tomb, "d")
+	if err := os.MkdirAll(locked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "a.txt"), []byte(strings.Repeat("x", 100)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o700) })
+	if err := s.RecountUsage(); err != nil {
+		t.Fatalf("recount of an unrecorded tombstone read in part: %v", err)
+	}
+	// What it could read: the tombstone and d.
+	if used, _ := s.Usage(); used != 2*metaAllowance {
+		t.Errorf("usage after the recount = %d, want %d", used, 2*metaAllowance)
+	}
+	if err := s.RecountUsage(); err != nil {
+		t.Fatalf("second recount of the same tombstone: %v", err)
+	}
+}
+
 // TestAbandonedStagingTreesReclaimed: staging trees a crash left under sites/
 // are counted while they exist and removed once past the grace, at Open and
 // by Reconcile.
