@@ -382,16 +382,21 @@ func (c *Client) resolveInRoot(p string) (rel string, fi os.FileInfo, dirOnly, e
 	}
 	slashed := filepath.ToSlash(raw)
 	dirOnly = strings.HasSuffix(slashed, "/") || strings.HasSuffix(slashed, "/.")
-	comps := split(raw)
-	var pending []string
-	for _, root := range []string{c.publishRootPath, c.publishRootAbs} {
-		rc := split(root)
-		if root == "" || len(comps) < len(rc) || !slices.Equal(comps[:len(rc)], rc) {
-			continue
+	// inRoot returns the components of comps after the root's, if they start
+	// with either spelling of the root. Only the root's own components are
+	// compared; the rest are left for the walk, which resolves a symlink
+	// before a ".." after it, as the kernel does.
+	inRoot := func(comps []string) ([]string, bool) {
+		for _, root := range []string{c.publishRootPath, c.publishRootAbs} {
+			rc := split(root)
+			if root != "" && len(comps) >= len(rc) && slices.Equal(comps[:len(rc)], rc) {
+				return comps[len(rc):], true
+			}
 		}
-		pending = comps[len(rc):]
-		break
+		return nil, false
 	}
+	comps := split(raw)
+	pending, _ := inRoot(comps)
 	if pending == nil {
 		if !slices.Equal(comps, split(c.publishRootPath)) && !slices.Equal(comps, split(c.publishRootAbs)) {
 			return "", nil, false, true, nil
@@ -429,23 +434,17 @@ func (c *Client) resolveInRoot(p string) (rel string, fi os.FileInfo, dirOnly, e
 		if err != nil {
 			return "", nil, false, false, err
 		}
+		tc := split(target)
 		if filepath.IsAbs(target) {
-			t := filepath.Clean(target)
-			var in string
-			switch {
-			case underDir(c.publishRootPath, t):
-				in, err = filepath.Rel(c.publishRootPath, t)
-			case underDir(c.publishRootAbs, t):
-				in, err = filepath.Rel(c.publishRootAbs, t)
-			default:
+			// Not cleaned first: "<root>/alias/../docs" goes through
+			// alias before its "..".
+			in, ok := inRoot(tc)
+			if !ok {
 				return "", nil, false, true, nil
 			}
-			if err != nil {
-				return "", nil, false, true, nil
-			}
-			cur, target = nil, in
+			cur, tc = nil, in
 		}
-		pending = append(split(target), pending...)
+		pending = append(tc[:len(tc):len(tc)], pending...)
 	}
 	if len(cur) == 0 {
 		info, err := c.publishRoot.Lstat(".")

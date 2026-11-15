@@ -388,3 +388,40 @@ func TestPublishPathThroughSymlinkOutOfRootAnswersUniformly(t *testing.T) {
 		}
 	}
 }
+
+// TestPublishPathAbsoluteLinkResolvesSymlinksBeforeDotDot: an absolute
+// symlink target is walked like any other path, symlinks before "..", as
+// the kernel does. With <root>/alias -> real/deep and <root>/jump ->
+// <root>/alias/../docs, <root>/jump/page.html is <root>/real/docs/page.html;
+// cleaning the target's text first dropped "alias/.." and published
+// <root>/docs/page.html instead.
+func TestPublishPathAbsoluteLinkResolvesSymlinksBeforeDotDot(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for dir, body := range map[string]string{"real/deep": "", "real/docs": "REAL DOCS", "docs": "LEXICAL DOCS"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if body != "" {
+			if err := os.WriteFile(filepath.Join(root, dir, "page.html"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.Symlink(filepath.Join("real", "deep"), filepath.Join(root, "alias")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	if err := os.Symlink(root+"/alias/../docs", filepath.Join(root, "jump")); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(root, "jump", "page.html")); err != nil || string(b) != "REAL DOCS" {
+		t.Fatalf("the kernel reads %q, %v through the link; the fixture is wrong", b, err)
+	}
+	c, f := newGuardClient(t, "")
+	setPublishRoot(t, c, root)
+	if rerr, body := publishPathCall(t, c, f, filepath.Join(root, "jump", "page.html")); rerr != nil || body != "REAL DOCS" {
+		t.Errorf("published err=%+v body=%q, want %q (the file the path names)", rerr, body, "REAL DOCS")
+	}
+}
