@@ -678,7 +678,7 @@ func FuzzPublish(f *testing.F) {
 		"ttl=1h", "ttl=-1d", "ttl=" + strings.Repeat("9", 70), "render=md", "render=md&slug=doc",
 		"filename=x.html", "filename=a.txt&slug=b", "series=s&slug=s-1", "reply=form&slug=r",
 		"reply=question&next=r2&slug=r", "next=//evil", "site=s", "password=", "fmt=zip&site=s",
-		"slug=a#b", "slug=a\tb", "slug= a ",
+		"slug=a#b", "slug=a\tb", "slug= a ", "ttl=1s&slug=a",
 	} {
 		f.Add(q, "text/plain", []byte("hello <script>x</script>"), true)
 	}
@@ -758,6 +758,15 @@ func FuzzPublish(f *testing.F) {
 		}
 		gw := httptest.NewRecorder()
 		h.ServeHTTP(gw, g)
+		// A short TTL can lapse before the readback: the expiry is stored
+		// in whole seconds, at least floor(start+ttl), so "ttl=1s" may
+		// expire a millisecond after it is published. A 404 is right once
+		// that second has come.
+		if gw.Code == http.StatusNotFound {
+			if d, err := store.ParseTTL(q.Get("ttl")); err == nil && d > 0 && time.Now().Unix() >= start.Add(d).Unix() {
+				return
+			}
+		}
 		if gw.Code != http.StatusOK {
 			t.Fatalf("artifact %q published with 201 reads back %d", loc, gw.Code)
 		}
