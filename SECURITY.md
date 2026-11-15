@@ -547,15 +547,23 @@ only in `-tags reply` builds.
 
 Notes on the limits:
 
-- **Password checks.** PBKDF2 keeps its 600,000-iteration work factor. Only
-  failures spend budget. A correct password is refunded and remembered for
+- **Password checks.** PBKDF2 keeps its 600,000-iteration work factor. A
+  check that needs the KDF reserves budget, and only a password verified
+  correct gets it back: a wrong password spends it, and so does a `503`,
+  whether the client already had two checks in the KDF, its wait for a slot
+  ran out, or it disconnected while waiting. A `503` refunded would let a
+  guesser sharing a viewer's client key try candidates against the viewer's
+  remembered password while the KDF is busy, each answered `200` or `503`
+  for free. The cost falls on a viewer whose first check meets a busy
+  server; once remembered, its password needs no KDF slot. A correct
+  password is refunded and remembered for
   the client that sent it (an HMAC of the client, the stored hash and the
   password under a per-process key) until it goes unused for 10 minutes, so
   one viewer's password does not answer another client's guesses. A client that keeps failing is refused before
   hashing, and while it is refused every password it sends gets `429`, a
   remembered one or one already being checked included, since a guesser can
   share a viewer's client key (one NAT address, or a proxy not listed in
-  `--trusted-proxy`). A viewer with no recent failures is always verified, so a viewer with no recent failures is always verified, so other
+  `--trusted-proxy`). A viewer with no recent failures is always verified, so other
   clients' guesses cannot lock it out. Only completed failures count; a
   client's own attempt still being checked does not. A client may have at
   most two checks (or publish-time password hashes) waiting for or running in

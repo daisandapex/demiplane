@@ -907,3 +907,153 @@ func TestBusyRefusalsSpendTheClientsBudget(t *testing.T) {
 		t.Errorf("remembered password after the probes = %v, want ViewThrottled", res)
 	}
 }
+
+// saturateKDF fills g's KDF slots with checks by another client that block
+// until the returned func is called, and waits until they hold them.
+func saturateKDF(t *testing.T, g *viewGate, hash string, slots int) (release func()) {
+	t.Helper()
+	unblock := make(chan struct{})
+	prev := verifyPassword
+	verifyPassword = func(hash, pw string) bool {
+		if strings.HasPrefix(pw, "pending-") {
+			<-unblock
+		}
+		return prev(hash, pw)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < slots; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			g.check(context.Background(), basicReq("locked", fmt.Sprintf("pending-%d", i), fmt.Sprintf("198.51.100.%d:1", 10+i)), hash)
+		}(i)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for g.kdf.InUse() < slots {
+		if time.Now().After(deadline) {
+			t.Fatal("setup: the other clients never filled the KDF")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			close(unblock)
+			wg.Wait()
+			verifyPassword = prev
+		})
+	}
+	t.Cleanup(release)
+	return release
+}
+
+// probeUntilThrottled sends candidates from client one after another
+// through probe until one is throttled, failing on any answer but busy, and
+// returns how many were answered busy.
+func probeUntilThrottled(t *testing.T, probe func(i int) module.ViewAccess) int {
+	t.Helper()
+	busy := 0
+	for i := 0; i < 40; i++ {
+		switch res := probe(i); res {
+		case module.ViewBusy:
+			busy++
+		case module.ViewThrottled:
+			return busy
+		default:
+			t.Fatalf("probe %d = %v, want ViewBusy or ViewThrottled", i, res)
+		}
+	}
+	t.Fatalf("%d busy answers and the client was never throttled", busy)
+	return busy
+}
+
+// TestCancelledQueuedChecksSpendTheClientsBudget: a check that the client
+// abandons while it waits for a KDF slot keeps its reservation. Refunded, a
+// guesser sharing a viewer's client key, with the KDF kept busy by other
+// clients, could send candidates one at a time and close each connection
+// shortly after an immediate answer would have come: the viewer's
+// remembered password answers 200 at once, any other candidate queues, is
+// cancelled and costs nothing, so the probes were never throttled.
+func TestCancelledQueuedChecksSpendTheClientsBudget(t *testing.T) {
+	g := newViewGate(PasswordLimits{Concurrency: 1}, []byte("k"))
+	hash, err := store.HashPassword("letmein")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const shared = "192.0.2.1:1"
+	if res, _ := g.check(context.Background(), basicReq("locked", "letmein", shared), hash); res != module.ViewOK {
+		t.Fatalf("viewer with the password = %v, want ViewOK", res)
+	}
+	saturateKDF(t, g, hash, 1)
+	// The viewer stays reachable while the KDF is full: a remembered
+	// password needs no slot.
+	if res, _ := g.check(context.Background(), basicReq("locked", "letmein", shared), hash); res != module.ViewOK {
+		t.Fatalf("remembered password with the KDF full = %v, want ViewOK", res)
+	}
+
+	busy := probeUntilThrottled(t, func(i int) module.ViewAccess {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan module.ViewAccess, 1)
+		go func() {
+			res, _ := g.check(ctx, basicReq("locked", fmt.Sprintf("probe-%d", i), shared), hash)
+			done <- res
+		}()
+		// Cancel once the check is queued for a slot, or as soon as it
+		// answers without queueing.
+		deadline := time.Now().Add(5 * time.Second)
+		for g.inflightFor("192.0.2.1") == 0 {
+			select {
+			case res := <-done:
+				return res
+			default:
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("probe %d never queued", i)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		cancel()
+		return <-done
+	})
+	if burst := defaultPasswordClientTargetRate.Burst; busy > burst {
+		t.Errorf("%d cancelled checks before throttling, want at most the budget's burst of %d", busy, burst)
+	}
+	if res, _ := g.check(context.Background(), basicReq("locked", "letmein", shared), hash); res != module.ViewThrottled {
+		t.Errorf("remembered password after the probes = %v, want ViewThrottled", res)
+	}
+}
+
+// TestTimedOutChecksSpendTheClientsBudget: a check that waits its whole
+// time for a KDF slot and is answered busy keeps its reservation. Refunded,
+// a guesser sharing a viewer's client key, with the KDF kept busy, got 200
+// for the remembered password and 503 for anything else at no cost: two
+// queue places refreshed every five seconds were 24 free candidates a
+// minute, past the budget of ten.
+func TestTimedOutChecksSpendTheClientsBudget(t *testing.T) {
+	g := newViewGate(PasswordLimits{Concurrency: 1}, []byte("k"))
+	g.kdfWait = 20 * time.Millisecond
+	hash, err := store.HashPassword("letmein")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const shared = "192.0.2.1:1"
+	if res, _ := g.check(context.Background(), basicReq("locked", "letmein", shared), hash); res != module.ViewOK {
+		t.Fatalf("viewer with the password = %v, want ViewOK", res)
+	}
+	saturateKDF(t, g, hash, 1)
+	if res, _ := g.check(context.Background(), basicReq("locked", "letmein", shared), hash); res != module.ViewOK {
+		t.Fatalf("remembered password with the KDF full = %v, want ViewOK", res)
+	}
+
+	busy := probeUntilThrottled(t, func(i int) module.ViewAccess {
+		res, _ := g.check(context.Background(), basicReq("locked", fmt.Sprintf("probe-%d", i), shared), hash)
+		return res
+	})
+	if burst := defaultPasswordClientTargetRate.Burst; busy > burst {
+		t.Errorf("%d timed-out checks before throttling, want at most the budget's burst of %d", busy, burst)
+	}
+	if res, _ := g.check(context.Background(), basicReq("locked", "letmein", shared), hash); res != module.ViewThrottled {
+		t.Errorf("remembered password after the probes = %v, want ViewThrottled", res)
+	}
+}

@@ -33,8 +33,8 @@ import (
 //     429 even for a remembered credential or one already being verified,
 //     so a guesser sharing a viewer's client key learns nothing either.
 //  2. Only failures spend rate budget. Each client has a budget of its own
-//     and one per artifact; a KDF run reserves a token from both, refunded
-//     when the password is correct, and a client whose budget is empty gets
+//     and one per artifact; a check that needs the KDF reserves a token from
+//     both, refunded only when the password is verified correct, and a client whose budget is empty gets
 //     429 without hashing. The artifact and the instance have failure
 //     budgets too, charged by every client's failures. When one is empty it
 //     refuses, without hashing, only clients that failed recently (on that
@@ -43,9 +43,11 @@ import (
 //     client with no recent failures is always verified, so nobody else's
 //     guesses can lock a legitimate viewer out. The cost is that guessing spread over many
 //     addresses, each new, is bounded by the KDF itself (3. below and the
-//     work factor), not by a rate. An attempt turned away because the
-//     client already has passwordClientInflight attempts in the KDF spends
-//     its reservation too, so that busy answers cannot be used to probe the
+//     work factor), not by a rate. An attempt that ends without a verified
+//     password spends its reservation too: one turned away because the
+//     client already has passwordClientInflight attempts in the KDF, one
+//     whose wait for a KDF slot times out, and one the client abandons
+//     while it waits. So busy answers cannot be used to probe the
 //     remembered credentials (1.) past the budget.
 //  3. At most PasswordConcurrency KDF runs execute at once; the rest wait
 //     briefly and then get 503, so a flood cannot take every core from
@@ -117,12 +119,14 @@ type viewGate struct {
 	// flights are the verifications in progress, by client and credential.
 	flights map[string]*kdfFlight
 	now     func() time.Time // time source; a field so tests can move it
+	// kdfWait is how long an attempt waits for a KDF slot (passwordKDFWait;
+	// a field so tests need not wait that long).
+	kdfWait time.Duration
 }
 
 // passwordClientInflight is how many password checks one client may have
-// queued for or running in the KDF at once. A queued attempt that times out
-// is refunded, so without this cap a few clients could keep the queue full
-// at no cost and every other viewer's first check would time out behind
+// queued for or running in the KDF at once, so a few clients cannot keep
+// the queue full and make every other viewer's first check time out behind
 // them; past it an attempt is answered busy without queueing.
 const passwordClientInflight = 2
 
@@ -184,6 +188,7 @@ func newViewGate(cfg PasswordLimits, key []byte) *viewGate {
 		key:                key,
 		ok:                 map[[32]byte]time.Time{},
 		now:                time.Now,
+		kdfWait:            passwordKDFWait,
 	}
 }
 
@@ -326,7 +331,8 @@ func (g *viewGate) verify(ctx context.Context, hash, pass string, ck [32]byte, c
 		return module.ViewThrottled, w
 	}
 	// The client's own budgets are reserved before hashing, so its concurrent
-	// attempts cannot overshoot them, and refunded if the password is right.
+	// attempts cannot overshoot them, and refunded only if the password is
+	// verified right.
 	own := []limit.Charge{
 		{L: g.client, Key: client},
 		{L: g.clientTarget, Key: clientTarget},
@@ -334,19 +340,22 @@ func (g *viewGate) verify(ctx context.Context, hash, pass string, ck [32]byte, c
 	if allowed, w := limit.AllowAll(own...); !allowed {
 		return module.ViewThrottled, w
 	}
-	// A client already at its in-flight cap is turned away without
-	// queueing, and the reservation is kept: the refusal is an answer (a
-	// remembered credential would have been 200), so it spends the budget
-	// like a wrong guess. Refunded, a guesser sharing a viewer's client key
-	// could hold two slow attempts in the KDF and probe the remembered
-	// credential with any number of candidates meanwhile. The cap is not
-	// reached by one browser re-sending one credential, which joins a flight.
+	// Only a verified-correct password is refunded. Every other end keeps
+	// the reservation and spends the budget like a wrong guess: a client
+	// already at its in-flight cap turned away without queueing, a wait for
+	// a KDF slot that times out, and a client that gives up (ctx ends) while
+	// it waits. Each is an answer (a remembered credential would have been
+	// 200 at once), so refunded, a guesser sharing a viewer's client key
+	// could probe the remembered credential with any number of candidates
+	// while the KDF is busy: hold two slow attempts, let queued ones time
+	// out, or close each connection once an immediate 200 has not come. The
+	// cap is not reached by one browser re-sending one credential, which
+	// joins a flight.
 	if !g.enterKDF(client) {
 		return module.ViewBusy, time.Second
 	}
-	if !g.kdf.Acquire(ctx, passwordKDFWait) {
+	if !g.kdf.Acquire(ctx, g.kdfWait) {
 		g.leaveKDF(client)
-		limit.RefundAll(own...)
 		return module.ViewBusy, time.Second
 	}
 	match := verifyPassword(hash, pass)
@@ -374,7 +383,7 @@ func (g *viewGate) hashNew(ctx context.Context, client, pw string) (hash string,
 		return "", false, nil
 	}
 	defer g.leaveKDF(client)
-	if !g.kdf.Acquire(ctx, passwordKDFWait) {
+	if !g.kdf.Acquire(ctx, g.kdfWait) {
 		return "", false, nil
 	}
 	defer g.kdf.Release()
