@@ -14,6 +14,7 @@
 package reply
 
 import (
+	"crypto/cipher"
 	"encoding/json"
 	"errors"
 	"html"
@@ -62,6 +63,10 @@ type Module struct {
 	pool     *hookPool
 	// adm holds the admission and storage limits (admission.go).
 	adm *admission
+	// cursorKey seals the cursors of tokenless listings (cursor.go).
+	cursorOnce sync.Once
+	cursorKey  cipher.AEAD
+	cursorErr  error
 }
 
 // Name identifies the module (and its data-dir key).
@@ -461,28 +466,6 @@ func (m *Module) readableWithoutToken(slug string) bool {
 	return m.host.AuthConfigured() || m.publicNow(slug)
 }
 
-// visibleSlugs returns, for a caller without a token, the slugs whose
-// unprotected replies it may see (listOnly); nil when a token is configured.
-func (m *Module) visibleSlugs(slug string) (*[]string, error) {
-	if m.host.AuthConfigured() {
-		return nil, nil
-	}
-	if slug != "" {
-		return &[]string{slug}, nil // checked readable by the caller
-	}
-	all, err := m.rs.unprotectedSlugs()
-	if err != nil {
-		return nil, err
-	}
-	only := []string{}
-	for _, s := range all {
-		if m.publicNow(s) {
-			only = append(only, s)
-		}
-	}
-	return &only, nil
-}
-
 // handleList returns replies as JSON (auth). Filters: ?slug=, ?status=.
 func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 	if !m.ready(w) {
@@ -505,25 +488,38 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	var after *listCursor
 	if v := q.Get("after"); v != "" {
-		c, err := parseListCursor(v)
+		c, err := m.parseCursor(v)
 		if err != nil {
 			http.Error(w, "after must be a cursor from a previous response's next", http.StatusBadRequest)
 			return
 		}
 		after = &c
 	}
-	only, err := m.visibleSlugs(q.Get("slug"))
-	if err != nil {
-		log.Printf("reply: list failed: %s", logsafe.Err(err))
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
 	// One page at a time: a response holds at most listPageSize replies (each
-	// at most the reply text cap), whatever the store holds. Without a token
-	// the replies the caller may not see are filtered out by the query, so
-	// they neither empty a page nor give a cursor.
-	replies, next, err := m.rs.listOnly(q.Get("slug"), status, after, listPageSize, only)
+	// at most the reply text cap), whatever the store holds. With a token, or
+	// a ?slug= checked readable above, the query alone filters the replies.
+	// Without a token and a slug, whether a reply's artifact is public now
+	// takes a lookup per slug, so listVisible bounds the work per request
+	// and seals its cursors (cursor.go).
+	var (
+		replies []Reply
+		next    *listCursor
+		err     error
+		sealed  bool
+	)
+	switch slug := q.Get("slug"); {
+	case m.host.AuthConfigured():
+		replies, next, err = m.rs.listOnly(r.Context(), slug, status, after, listPageSize, nil)
+	case slug != "":
+		replies, next, err = m.rs.listOnly(r.Context(), slug, status, after, listPageSize, &[]string{slug})
+	default:
+		replies, next, err = m.listVisible(r.Context(), status, after)
+		sealed = true
+	}
 	if err != nil {
+		if r.Context().Err() != nil {
+			return // the client is gone
+		}
 		log.Printf("reply: list failed: %s", logsafe.Err(err))
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -533,7 +529,15 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := map[string]any{"replies": replies, "count": len(replies)}
 	if next != nil {
-		resp["next"] = next.String()
+		c := next.String()
+		if sealed {
+			if c, err = m.sealCursor(*next); err != nil {
+				log.Printf("reply: list failed: %s", logsafe.Err(err))
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+		}
+		resp["next"] = c
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

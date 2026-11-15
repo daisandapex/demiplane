@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,11 +33,14 @@ type fakeHost struct {
 	// tokenless makes the host an instance with no token: RequireAuth lets
 	// every request through and AuthConfigured is false.
 	tokenless bool
+	// stores counts Store calls: each is one use of the core store, such as
+	// an artifact lookup.
+	stores atomic.Int64
 }
 
 const testToken = "secret"
 
-func (h *fakeHost) Store() *store.Store { return h.st }
+func (h *fakeHost) Store() *store.Store { h.stores.Add(1); return h.st }
 func (h *fakeHost) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.tokenless && r.Header.Get("Authorization") != "Bearer "+testToken {

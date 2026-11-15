@@ -4,6 +4,7 @@
 package reply
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -342,15 +343,21 @@ func parseListCursor(s string) (listCursor, error) {
 // most limit+1 rows along an index and returns the cursor of the next page,
 // or nil when this is the last.
 func (rs *replyStore) list(slug, status string, after *listCursor, limit int) ([]Reply, *listCursor, error) {
-	return rs.listOnly(slug, status, after, limit, nil)
+	return rs.listOnly(context.Background(), slug, status, after, limit, nil)
+}
+
+// listUnprotected is list over the replies written to an unprotected
+// artifact, to any slug; the query stops when ctx ends.
+func (rs *replyStore) listUnprotected(ctx context.Context, status string, after *listCursor, limit int) ([]Reply, *listCursor, error) {
+	return rs.listWhere(ctx, []string{"protected = 0"}, nil, status, after, limit)
 }
 
 // listOnly is list restricted, when only is not nil, to the replies a caller
 // without a token may see: written to an unprotected artifact and answering
 // one of the slugs in *only. The restriction is part of the query, so pages
-// and their cursors are taken from those replies alone.
-func (rs *replyStore) listOnly(slug, status string, after *listCursor, limit int, only *[]string) ([]Reply, *listCursor, error) {
-	q := `SELECT id, slug, kind, body, created_at, status FROM replies`
+// and their cursors are taken from those replies alone. The query stops when
+// ctx ends.
+func (rs *replyStore) listOnly(ctx context.Context, slug, status string, after *listCursor, limit int, only *[]string) ([]Reply, *listCursor, error) {
 	var (
 		conds []string
 		args  []any
@@ -367,6 +374,13 @@ func (rs *replyStore) listOnly(slug, status string, after *listCursor, limit int
 		conds = append(conds, "slug = ?")
 		args = append(args, slug)
 	}
+	return rs.listWhere(ctx, conds, args, status, after, limit)
+}
+
+// listWhere is list for the replies matching conds (with args), by status
+// and after the cursor.
+func (rs *replyStore) listWhere(ctx context.Context, conds []string, args []any, status string, after *listCursor, limit int) ([]Reply, *listCursor, error) {
+	q := `SELECT id, slug, kind, body, created_at, status FROM replies`
 	if status != "" && status != "all" {
 		conds = append(conds, "status = ?")
 		args = append(args, status)
@@ -386,7 +400,7 @@ func (rs *replyStore) listOnly(slug, status string, after *listCursor, limit int
 	q += " ORDER BY created_at DESC, id DESC LIMIT ?"
 	args = append(args, limit+1)
 
-	rows, err := rs.db.Query(q, args...)
+	rows, err := rs.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("list replies: %w", err)
 	}
@@ -433,28 +447,6 @@ func (rs *replyStore) deleteSlugUnprotected(slug string) (int64, error) {
 		return 0, fmt.Errorf("delete replies: %w", err)
 	}
 	return res.RowsAffected()
-}
-
-// unprotectedSlugs returns the slugs that have replies written while they
-// were unprotected.
-func (rs *replyStore) unprotectedSlugs() ([]string, error) {
-	rows, err := rs.db.Query(`SELECT DISTINCT slug FROM replies WHERE protected = 0`)
-	if err != nil {
-		return nil, fmt.Errorf("list reply slugs: %w", err)
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var slug string
-		if err := rows.Scan(&slug); err != nil {
-			return nil, fmt.Errorf("list reply slugs: %w", err)
-		}
-		out = append(out, slug)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list reply slugs: %w", err)
-	}
-	return out, nil
 }
 
 // backfillProtected records protection for the replies stored before it was

@@ -79,6 +79,14 @@ All notable changes to demiplane are documented here. The format follows
   reopened through a longer absolute one answered `500` for a page listing a
   site with an entry past the platform path limit, and could not delete that
   site by revision.
+- `GET /replies` on an instance with no token, with no `?slug=`, examines
+  at most 1,024 replies across 128 slugs a request and stops when the client
+  disconnects. It looked up every slug with an unprotected reply in the
+  core store before paging, so a request for an empty page
+  (`?status=all&after=0.0`) cost one lookup per such slug: with 100,000
+  slugs, a few concurrent requests ran millions of queries. A response can
+  now hold fewer than 100 replies, even none, with a `next` to follow; that
+  cursor is sealed, so it does not reveal a hidden reply's time or id.
 - With no `--allowed-hosts`, a request that arrives on a loopback address
   is served only for `localhost`, a loopback IP literal or a base URL host;
   any other `Host` gets `421`. A loopback instance answered any `Host`, so a

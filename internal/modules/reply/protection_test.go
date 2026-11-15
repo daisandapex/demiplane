@@ -4,6 +4,7 @@
 package reply
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -250,8 +251,101 @@ INSERT INTO replies (slug, kind, body, created_at) VALUES ('report', 'comment', 
 			t.Errorf("reply %d after the backfill: protected %v, want %v", id, protected, want)
 		}
 	}
-	got, _, err := rs.listOnly("", "all", nil, 10, &[]string{"report", "page"})
+	got, _, err := rs.listOnly(context.Background(), "", "all", nil, 10, &[]string{"report", "page"})
 	if err != nil || len(got) != 1 || got[0].Body != "old public" {
 		t.Errorf("unprotected listing = %v, %v; want only the public reply", got, err)
+	}
+}
+
+// TestTokenlessListingWorkIsBounded: without a token, a listing of every
+// slug looks up whether each reply's artifact is public now. That work must
+// be bounded per request, not one core lookup for every slug with a reply,
+// whatever the page holds (GET /replies?status=all&after=0.0 answers an
+// empty page), and must stop when the request is cancelled. Paging still
+// reaches every visible reply.
+func TestTokenlessListingWorkIsBounded(t *testing.T) {
+	ts, m, st := tokenlessSetup(t)
+	h := m.host.(*fakeHost)
+	at := time.Unix(1_700_000_000, 0)
+	const hiddenSlugs = 2000
+	// Replies written to public artifacts since removed or made private:
+	// unprotected, but not on a page anyone may read now. One transaction,
+	// as rs.add commits each.
+	tx, err := m.rs.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < hiddenSlugs; i++ {
+		if _, err := tx.Exec(`INSERT INTO replies (slug, kind, body, created_at, status, protected) VALUES (?, 'comment', 'x', ?, 'pending', 0)`,
+			"gone-"+strconv.Itoa(i), at.Add(time.Duration(i)*time.Second).Unix()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	var want []int64
+	for i, slug := range []string{"pub-a", "pub-b", "pub-c"} {
+		if _, err := st.Put(store.PutOptions{Slug: slug, Replies: true}, strings.NewReader("<html>p</html>")); err != nil {
+			t.Fatal(err)
+		}
+		r, err := m.rs.add(slug, "comment", "visible", at.Add(time.Duration(i*900)*time.Second+time.Millisecond))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, r.ID)
+	}
+	const bound = 2 * listPageSize // far below one lookup per slug
+	lookups := func(u string) int64 {
+		t.Helper()
+		before := h.stores.Load()
+		getPage(t, ts.URL+u)
+		return h.stores.Load() - before
+	}
+	if n := lookups("/replies?status=all&after=0.0"); n > bound {
+		t.Errorf("an empty page (after=0.0) took %d core lookups, want at most %d", n, bound)
+	}
+	if n := lookups("/replies?status=all"); n > bound {
+		t.Errorf("the first page took %d core lookups, want at most %d", n, bound)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	before := h.stores.Load()
+	rec := httptest.NewRecorder()
+	ts.Config.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/replies?status=all", nil).WithContext(ctx))
+	if n := h.stores.Load() - before; n > 1 {
+		t.Errorf("a cancelled listing took %d core lookups, want none", n)
+	}
+
+	got := map[int64]bool{}
+	after := ""
+	for pages := 0; ; pages++ {
+		if pages > hiddenSlugs {
+			t.Fatal("paging does not end")
+		}
+		u := ts.URL + "/replies?status=all"
+		if after != "" {
+			u += "&after=" + url.QueryEscape(after)
+		}
+		p := getPage(t, u)
+		for _, r := range p.Replies {
+			got[r.ID] = true
+		}
+		if p.Next == "" {
+			break
+		}
+		after = p.Next
+	}
+	if len(got) != len(want) {
+		t.Errorf("paged to %d replies, want the %d visible ones", len(got), len(want))
+	}
+	if code, _ := do(t, http.MethodGet, ts.URL+"/replies?status=all&after=sAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "", "", false); code != http.StatusBadRequest {
+		t.Errorf("a forged sealed cursor = %d, want 400", code)
+	}
+	for _, id := range want {
+		if !got[id] {
+			t.Errorf("visible reply %d never listed", id)
+		}
 	}
 }
