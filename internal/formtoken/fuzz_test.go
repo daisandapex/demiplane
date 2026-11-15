@@ -14,6 +14,7 @@ func FuzzCheck(f *testing.F) {
 	f.Add("report", "pid-1", good+"\n")
 	f.Add("report", "pid-1", good[:len(good)-1]+"B")
 	f.Add("report\x00pid", "1", Mint(key, "report\x00pid", "1"))
+	f.Add("report\x00", "pid-1", Mint(key, "report\x00", "pid-1"))
 	f.Add("report", "", good)
 	f.Add("", "pid-1", "")
 	f.Fuzz(func(t *testing.T, slug, publishID, tok string) {
@@ -30,9 +31,12 @@ func FuzzCheck(f *testing.F) {
 			if Check(nil, slug, publishID, tok) {
 				t.Fatal("Check accepted a token without a key")
 			}
-			// The fields are NUL-separated, so moving bytes between slug
-			// and publish id gives another token.
-			if len(slug) > 0 && Check(key, slug[:len(slug)-1], string(slug[len(slug)-1])+publishID, tok) {
+			// The fields are NUL-separated, so moving a byte between slug
+			// and publish id gives another token, unless that byte is the
+			// NUL itself: "report\x00"/"pid-1" and "report"/"\x00pid-1"
+			// sign the same bytes. Neither field ever holds a NUL (slugs are
+			// validated, publish ids are generated).
+			if len(slug) > 0 && slug[len(slug)-1] != 0 && Check(key, slug[:len(slug)-1], string(slug[len(slug)-1])+publishID, tok) {
 				t.Fatalf("token for %q/%q also verifies with the boundary moved", slug, publishID)
 			}
 		}
